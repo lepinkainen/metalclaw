@@ -1,3 +1,5 @@
+from datetime import datetime
+
 import httpx
 
 from registry import TOOLS
@@ -57,8 +59,9 @@ def chat(messages: list[dict]) -> str:
 def main():
     import tools  # noqa: F401 — triggers @tool registrations
 
+    now = datetime.now().strftime("%Y-%m-%d %H:%M")
     messages: list[dict] = [
-        {"role": "system", "content": "You are a helpful assistant. When a user request can be fulfilled by calling a tool, you MUST use the tool rather than simulating or writing code. Never generate fake results."},
+        {"role": "system", "content": f"You are Metalclaw, a helpful assistant. The current date and time is {now}. When a user request can be fulfilled by calling a tool, you MUST use the tool rather than simulating or writing code. Never generate fake results."},
     ]
 
     print(f"metalclaw bot ({MODEL}) — type 'quit' to exit")
