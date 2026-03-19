@@ -3,6 +3,8 @@ import random
 import httpx
 
 from registry import tool
+from commands import execute_chain, present, command_listing
+import commands  # noqa: F401 — triggers @command registrations
 
 
 @tool(
@@ -86,3 +88,29 @@ def weather(location: str) -> str:
         f"  Humidity: {humidity}%\n"
         f"  Wind: {wind} m/s (from {wind_dir}°)"
     )
+
+
+# --- CLI-style run tool ---
+
+_RUN_DESC_PREFIX = (
+    "Run a CLI-style command. Supports Unix pipes (|), chaining (&&, ||, ;). "
+    "Available commands:\n"
+)
+
+
+@tool(
+    description=_RUN_DESC_PREFIX + command_listing(),
+    parameters={
+        "type": "object",
+        "properties": {
+            "command": {
+                "type": "string",
+                "description": "The command string to execute (e.g. 'calc 2**10', 'cat file.txt | grep error | wc -l')",
+            },
+        },
+        "required": ["command"],
+    },
+)
+def run(command: str) -> str:
+    result = execute_chain(command)
+    return present(result)

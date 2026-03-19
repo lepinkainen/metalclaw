@@ -61,7 +61,14 @@ def main():
 
     now = datetime.now().strftime("%Y-%m-%d %H:%M")
     messages: list[dict] = [
-        {"role": "system", "content": f"You are Metalclaw, a helpful assistant. The current date and time is {now}. When a user request can be fulfilled by calling a tool, you MUST use the tool rather than simulating or writing code. Never generate fake results."},
+        {"role": "system", "content": (
+            f"You are Metalclaw, a helpful assistant. The current date and time is {now}. "
+            "When a user request can be fulfilled by calling a tool, you MUST use the tool rather than simulating or writing code. Never generate fake results. "
+            "You have two ways to use tools: (1) typed tools like 'weather' with structured parameters, "
+            "and (2) the 'run' tool which accepts CLI-style commands with Unix pipes and chaining. "
+            "Use whichever fits best. The 'run' tool supports: | (pipe), && (and), || (or), ; (sequence). "
+            "If unsure about a command, call it with no args or use 'help <command>' to discover usage."
+        )},
     ]
 
     print(f"metalclaw bot ({MODEL}) — type 'quit' to exit")
