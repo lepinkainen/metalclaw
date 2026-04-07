@@ -1,8 +1,27 @@
 from datetime import datetime
+from pathlib import Path
 
 import httpx
 
+import self_change
 from registry import TOOLS
+
+REPO_ROOT = Path(__file__).parent.resolve()
+
+_COMMANDS = {
+    "add-tool": "add a new tool — describe what it should do",
+    "self-edit": "make a general code change — describe what to change",
+    "help": "show this help",
+}
+
+
+def _parse_command(text: str) -> tuple[str, str] | None:
+    """Return (command, args) if text starts with /, else None."""
+    if not text.startswith("/"):
+        return None
+    parts = text[1:].split(None, 1)
+    return parts[0], parts[1] if len(parts) > 1 else ""
+
 
 OLLAMA_URL = "http://localhost:11434/api/chat"
 MODEL = "qwen3.5:9b"
@@ -75,6 +94,21 @@ def main():
             break
         if not user_input or user_input.lower() in ("quit", "exit"):
             break
+
+        parsed = _parse_command(user_input)
+        if parsed is not None:
+            cmd, args = parsed
+            if cmd in ("add-tool", "self-edit"):
+                request = f"Add a new tool: {args}" if cmd == "add-tool" else args
+                result = self_change.run_self_change(request, REPO_ROOT)
+                status = "approved" if result.approved else "rejected"
+                print(f"\n[self-change {status}]\n")
+            elif cmd == "help":
+                for name, desc in _COMMANDS.items():
+                    print(f"  /{name}  —  {desc}")
+            else:
+                print(f"unknown command: /{cmd}  (try /help)")
+            continue
 
         messages.append({"role": "user", "content": user_input})
         reply = chat(messages)
