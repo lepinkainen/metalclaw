@@ -1,0 +1,8 @@
+version: '3'
+tasks:
+  lint:
+    cmd: uv run ruff check .
+  build:
+    cmd: uv run python -c "import bot, tools, registry, self_change"
+  test:
+    cmd: uv run pytest -q
