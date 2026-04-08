@@ -6,3 +6,5 @@ tasks:
     cmd: uv run python -c "import bot, tools, registry, self_change"
   test:
     cmd: uv run pytest -q
+  telegram:
+    cmd: uv run python telegram_bot.py

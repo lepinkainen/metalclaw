@@ -6,6 +6,7 @@ requires-python = ">=3.14"
 dependencies = [
     "httpx>=0.28.1",
     "prompt_toolkit>=3.0",
+    "python-telegram-bot>=21.0",
     "rich>=13.0",
 ]
 

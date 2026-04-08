@@ -1,0 +1,9 @@
+services:
+  metalclaw:
+    build: .
+    restart: unless-stopped
+    environment:
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN}
+      OLLAMA_URL: ${OLLAMA_URL:-http://host.docker.internal:11434/api/chat}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
