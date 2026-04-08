@@ -24,12 +24,13 @@ def _parse_command(text: str) -> tuple[str, str] | None:
 
 
 OLLAMA_URL = "http://localhost:11434/api/chat"
-MODEL = "qwen3.5:9b"
+MODEL = "gemma4:latest"
 
 _CLIENT = httpx.Client(timeout=120.0)
 
 
 # --- Ollama client ---
+
 
 def chat(messages: list[dict]) -> str:
     """Send messages to Ollama, handle tool calls in a loop, return final text.
@@ -75,12 +76,16 @@ def chat(messages: list[dict]) -> str:
 
 # --- CLI ---
 
+
 def main():
     import tools  # noqa: F401 — triggers @tool registrations
 
     now = datetime.now().strftime("%Y-%m-%d %H:%M")
     messages: list[dict] = [
-        {"role": "system", "content": f"You are Metalclaw, a helpful assistant. The current date and time is {now}. When a user request can be fulfilled by calling a tool, you MUST use the tool rather than simulating or writing code. Never generate fake results."},
+        {
+            "role": "system",
+            "content": f"You are Metalclaw, a helpful assistant. The current date and time is {now}. When a user request can be fulfilled by calling a tool, you MUST use the tool rather than simulating or writing code. Never generate fake results.",
+        },
     ]
 
     print(f"metalclaw bot ({MODEL}) — type 'quit' to exit")
