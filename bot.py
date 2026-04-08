@@ -1,5 +1,6 @@
 import argparse
 import json
+import os
 import re
 import shlex
 from collections.abc import Callable
@@ -49,8 +50,19 @@ def _parse_command(text: str) -> tuple[str, str] | None:
     return parts[0], parts[1] if len(parts) > 1 else ""
 
 
-OLLAMA_URL = "http://localhost:11434/api/chat"
+OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://localhost:11434/api/chat")
 MODEL = "gemma4:latest"
+SYSTEM_PROMPT = (
+    "You are Metalclaw, a helpful assistant. "
+    "The current date and time is {now}. "
+    "When a user request can be fulfilled by calling a tool, you MUST use the tool "
+    "rather than simulating or writing code. Never generate fake results. "
+    "When a tool returns factual data, present it directly and naturally. "
+    "Do not add generic warnings, hedging, or suggestions to verify elsewhere unless "
+    "the tool result itself indicates uncertainty, staleness, or an error. "
+    "If a tool returns source metadata, treat it as authoritative context for how to "
+    "describe the result."
+)
 
 _CLIENT = httpx.Client(timeout=120.0)
 
@@ -62,7 +74,10 @@ def _tool_result_json(result: object) -> str:
     return json.dumps(result, ensure_ascii=False)
 
 
-def chat(messages: list[dict]) -> str:
+def chat(
+    messages: list[dict],
+    on_tool_call: Callable[[str, dict, str], None] | None = None,
+) -> str:
     """Send messages to Ollama, handle tool calls in a loop, return final text.
 
     Note: mutates `messages` in place, appending tool-call/result entries
@@ -102,10 +117,10 @@ def chat(messages: list[dict]) -> str:
                 except Exception as e:
                     result = f"Error: {e}"
 
-            args_summary = ", ".join(f"{k}={v!r}" for k, v in args.items()) if args else ""
             result_json = _tool_result_json(result)
             short_result = result_json[:120]
-            console.print(f"  [dim][tool: {name}({args_summary})] → {short_result}[/dim]")
+            if on_tool_call:
+                on_tool_call(name, args, short_result)
 
             messages.append({"role": "tool", "content": result_json, "name": name})
 
@@ -278,6 +293,11 @@ _COMMAND_HANDLERS = {
 }
 
 
+def _cli_tool_log(name: str, args: dict, short_result: str) -> None:
+    args_summary = ", ".join(f"{k}={v!r}" for k, v in args.items()) if args else ""
+    console.print(f"  [dim][tool: {name}({args_summary})] → {short_result}[/dim]")
+
+
 def main():
     import tools  # noqa: F401 — triggers @tool registrations
 
@@ -289,7 +309,7 @@ def main():
     messages: list[dict] = [
         {
             "role": "system",
-            "content": f"You are Metalclaw, a helpful assistant. The current date and time is {now}. When a user request can be fulfilled by calling a tool, you MUST use the tool rather than simulating or writing code. Never generate fake results. When a tool returns factual data, present it directly and naturally. Do not add generic warnings, hedging, or suggestions to verify elsewhere unless the tool result itself indicates uncertainty, staleness, or an error. If a tool returns source metadata, treat it as authoritative context for how to describe the result.",
+            "content": SYSTEM_PROMPT.format(now=now),
         },
     ]
 
@@ -322,7 +342,7 @@ def main():
 
         try:
             with console.status("[dim]thinking…[/dim]", spinner="dots"):
-                reply = chat(messages)
+                reply = chat(messages, on_tool_call=_cli_tool_log)
         except Exception as e:
             console.print(f"\n[bold]bot>[/bold] Error: {e}\n")
             messages.pop()
