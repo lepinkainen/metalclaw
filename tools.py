@@ -1,5 +1,7 @@
+import os
 import random
 from datetime import datetime, timedelta, timezone
+from typing import Any
 
 import httpx
 
@@ -32,6 +34,10 @@ _HTTP = httpx.Client(
 _NOMINATIM = "https://nominatim.openstreetmap.org/search"
 _METNO = "https://api.met.no/weatherapi/locationforecast/2.0/compact"
 _DIGITRAFFIC = "https://rata.digitraffic.fi/api/v1"
+_FASTMAIL_SESSION_URL = "https://api.fastmail.com/jmap/session"
+
+_FM_SESSION: dict[str, str] | None = None
+_FM_MAILBOXES: dict[str, Any] | None = None
 
 
 def _geocode(location: str) -> tuple[float, float, str]:
@@ -45,7 +51,11 @@ def _geocode(location: str) -> tuple[float, float, str]:
     return round(float(hit["lat"]), 4), round(float(hit["lon"]), 4), hit["display_name"]
 
 
-def _day_summary(entries: list) -> str:
+def _normalise_condition(symbol: str) -> str:
+    return symbol.replace("_", " ").removesuffix(" day").removesuffix(" night")
+
+
+def _day_summary(entries: list[dict[str, Any]]) -> dict[str, Any]:
     """Summarise a list of timeseries entries for one day."""
     temps = [e["data"]["instant"]["details"]["air_temperature"] for e in entries]
     lo, hi = min(temps), max(temps)
@@ -66,8 +76,12 @@ def _day_summary(entries: list) -> str:
         if symbol != "unknown":
             break
 
-    condition = symbol.replace("_", " ").removesuffix(" day").removesuffix(" night")
-    return f"  {condition}, {lo}–{hi}°C"
+    return {
+        "condition": _normalise_condition(symbol),
+        "symbol_code": symbol,
+        "temperature_low_c": lo,
+        "temperature_high_c": hi,
+    }
 
 
 @tool(
@@ -83,7 +97,7 @@ def _day_summary(entries: list) -> str:
         "required": ["location"],
     },
 )
-def weather(location: str) -> str:
+def weather(location: str) -> dict[str, Any]:
     lat, lon, display_name = _geocode(location)
 
     resp = _HTTP.get(_METNO, params={"lat": lat, "lon": lon})
@@ -93,15 +107,13 @@ def weather(location: str) -> str:
     today = datetime.now(timezone.utc).date()
     tomorrow = today + timedelta(days=1)
 
-    by_day: dict[str, list] = {}
+    by_day: dict[str, list[dict[str, Any]]] = {}
     for entry in timeseries:
         d = entry["time"][:10]
         by_day.setdefault(d, []).append(entry)
 
     today_str = today.isoformat()
     tomorrow_str = tomorrow.isoformat()
-
-    lines = [f"Weather for {display_name}:"]
 
     # Current conditions
     now = timeseries[0]["data"]
@@ -113,15 +125,35 @@ def weather(location: str) -> str:
         if period in now and "summary" in now[period]:
             symbol = now[period]["summary"]["symbol_code"]
             break
-    condition = symbol.replace("_", " ").removesuffix(" day").removesuffix(" night")
-    lines.append(f"Now: {condition}, {temp}°C, wind {wind} m/s")
+
+    result: dict[str, Any] = {
+        "source": {
+            "name": "MET Norway Locationforecast + OpenStreetMap Nominatim",
+            "realtime": False,
+            "note": "Forecast and current conditions from the weather API, resolved via geocoding.",
+        },
+        "location": {
+            "query": location,
+            "display_name": display_name,
+            "latitude": lat,
+            "longitude": lon,
+        },
+        "current": {
+            "condition": _normalise_condition(symbol),
+            "symbol_code": symbol,
+            "temperature_c": temp,
+            "wind_m_s": wind,
+        },
+        "today": None,
+        "tomorrow": None,
+    }
 
     if today_str in by_day:
-        lines.append(f"Today:{_day_summary(by_day[today_str])}")
+        result["today"] = _day_summary(by_day[today_str])
     if tomorrow_str in by_day:
-        lines.append(f"Tomorrow:{_day_summary(by_day[tomorrow_str])}")
+        result["tomorrow"] = _day_summary(by_day[tomorrow_str])
 
-    return "\n".join(lines)
+    return result
 
 
 def _find_station_code(name: str) -> tuple[str, str]:
@@ -158,7 +190,7 @@ def _find_station_code(name: str) -> tuple[str, str]:
         "required": ["station"],
     },
 )
-def train_departures(station: str, count: int = 5, line: str | None = None) -> str:
+def train_departures(station: str, count: int = 5, line: str | None = None) -> dict[str, Any]:
     count = min(max(1, count), 20)
     code, full_name = _find_station_code(station)
     line = line.strip().upper() if line else None
@@ -182,19 +214,8 @@ def train_departures(station: str, count: int = 5, line: str | None = None) -> s
     if line:
         trains = [t for t in trains if (t.get("commuterLineID") or "").upper() == line]
 
-    if not trains:
-        if line:
-            return f"No upcoming {line} departures found for {full_name} ({code})."
-        return f"No upcoming departures found for {full_name} ({code})."
-
-    header = f"Departures from {full_name} ({code})"
-    if line:
-        header += f" for line {line}"
-    lines = [f"{header}:"]
-
-    shown = 0
+    departures: list[dict[str, Any]] = []
     for train in trains:
-        # Find the departure row for this station
         dep_row = next(
             (
                 r for r in train.get("timeTableRows", [])
@@ -207,40 +228,204 @@ def train_departures(station: str, count: int = 5, line: str | None = None) -> s
         if dep_row is None:
             continue
 
-        commuter_line = train.get("commuterLineID")
-        train_type = train.get("trainType", "")
-        train_number = train.get("trainNumber", "")
-        if commuter_line:
-            name = commuter_line
-            if not line:
-                name += f" ({train_type} {train_number})"
-        else:
-            name = f"{train_type} {train_number}".strip()
-
-        scheduled = dep_row["scheduledTime"][11:16]  # HH:MM from ISO string
-        estimate = dep_row.get("liveEstimateTime")
-        actual = dep_row.get("actualTime")
-        time_str = scheduled
-        if actual and actual != dep_row["scheduledTime"]:
-            time_str += f" (actual {actual[11:16]})"
-        elif estimate and estimate != dep_row["scheduledTime"]:
-            time_str += f" (est. {estimate[11:16]})"
-
-        track = dep_row.get("commercialTrack", "?")
-
-        # Find destination: last ARRIVAL row in the timetable
         arrival_rows = [r for r in train["timeTableRows"] if r["type"] == "ARRIVAL"]
         destination = arrival_rows[-1]["stationShortCode"] if arrival_rows else "?"
 
-        cancelled = " [CANCELLED]" if train.get("cancelled") or dep_row.get("cancelled") else ""
-        lines.append(f"  {time_str}  {name:<14}  track {track}  -> {destination}{cancelled}")
-        shown += 1
-        if shown >= count:
+        departures.append(
+            {
+                "line": train.get("commuterLineID"),
+                "train_type": train.get("trainType", ""),
+                "train_number": train.get("trainNumber", ""),
+                "scheduled_time": dep_row["scheduledTime"],
+                "estimated_time": dep_row.get("liveEstimateTime"),
+                "actual_time": dep_row.get("actualTime"),
+                "track": dep_row.get("commercialTrack", "?"),
+                "destination_code": destination,
+                "cancelled": bool(train.get("cancelled") or dep_row.get("cancelled")),
+                "delay_minutes": dep_row.get("differenceInMinutes"),
+            }
+        )
+        if len(departures) >= count:
             break
 
-    if shown == 0:
-        if line:
-            return f"No upcoming {line} departures found for {full_name} ({code})."
-        return f"No upcoming departures found for {full_name} ({code})."
+    return {
+        "source": {
+            "name": "Digitraffic Rail",
+            "realtime": True,
+            "note": "Live departure data from the Digitraffic rail API. This should match departure boards that use the same underlying data source.",
+        },
+        "station": {
+            "query": station,
+            "code": code,
+            "name": full_name,
+        },
+        "line_filter": line,
+        "count": count,
+        "departures": departures,
+    }
 
-    return "\n".join(lines)
+
+# --- Fastmail JMAP ---
+
+
+def _fm_session() -> dict[str, str]:
+    global _FM_SESSION
+    if _FM_SESSION is not None:
+        return _FM_SESSION
+    token = os.environ.get("FASTMAIL_API_TOKEN")
+    if not token:
+        raise ValueError("FASTMAIL_API_TOKEN environment variable not set")
+    resp = _HTTP.get(_FASTMAIL_SESSION_URL, headers={"Authorization": f"Bearer {token}"})
+    resp.raise_for_status()
+    data = resp.json()
+    _FM_SESSION = {
+        "api_url": data["apiUrl"],
+        "account_id": data["primaryAccounts"]["urn:ietf:params:jmap:mail"],
+        "token": token,
+    }
+    return _FM_SESSION
+
+
+def _fm_mailboxes() -> dict[str, Any]:
+    global _FM_MAILBOXES
+    if _FM_MAILBOXES is not None:
+        return _FM_MAILBOXES
+    session = _fm_session()
+    resp = _HTTP.post(
+        session["api_url"],
+        headers={"Authorization": f"Bearer {session['token']}"},
+        json={
+            "using": ["urn:ietf:params:jmap:core", "urn:ietf:params:jmap:mail"],
+            "methodCalls": [
+                ["Mailbox/get", {"accountId": session["account_id"], "ids": None}, "mb"],
+            ],
+        },
+    )
+    resp.raise_for_status()
+    mailboxes = resp.json()["methodResponses"][0][1]["list"]
+    by_role: dict[str, dict[str, Any]] = {}
+    by_name: dict[str, dict[str, Any]] = {}
+    for mb in mailboxes:
+        entry = {
+            "id": mb["id"],
+            "name": mb["name"],
+            "total": mb.get("totalEmails", 0),
+            "unread": mb.get("unreadEmails", 0),
+        }
+        if mb.get("role"):
+            by_role[mb["role"]] = entry
+        by_name[mb["name"].lower()] = entry
+    _FM_MAILBOXES = {"by_role": by_role, "by_name": by_name}
+    return _FM_MAILBOXES
+
+
+def _fm_lookup_mailbox(name: str) -> dict[str, Any]:
+    mbs = _fm_mailboxes()
+    key = name.lower()
+    if key in mbs["by_role"]:
+        return mbs["by_role"][key]
+    if key in mbs["by_name"]:
+        return mbs["by_name"][key]
+    raise ValueError(f"mailbox '{name}' not found — try a role like 'inbox' or an exact label name")
+
+
+@tool(
+    description="List and filter emails from a Fastmail mailbox. Use to answer questions like 'what's in my inbox?', 'how many unread emails do I have?', or 'is there an email from X?'.",
+    parameters={
+        "type": "object",
+        "properties": {
+            "mailbox": {
+                "type": "string",
+                "description": "Mailbox to search. Accepts role names (inbox, sent, trash, drafts, archive, junk) or custom label/folder names. Case-insensitive. Default: inbox",
+            },
+            "unread_only": {
+                "type": "boolean",
+                "description": "If true, return only unread (unseen) emails",
+            },
+            "from_search": {
+                "type": "string",
+                "description": "Filter by sender name or email address (case-insensitive substring match)",
+            },
+            "limit": {
+                "type": "integer",
+                "description": "Maximum number of emails to return (1–50, default 10)",
+            },
+        },
+        "required": [],
+    },
+)
+def list_emails(
+    mailbox: str = "inbox",
+    unread_only: bool = False,
+    from_search: str | None = None,
+    limit: int = 10,
+) -> dict[str, Any]:
+    limit = min(max(1, limit), 50)
+    session = _fm_session()
+    mb = _fm_lookup_mailbox(mailbox)
+
+    # Build filter
+    conditions: list[dict[str, Any]] = [{"inMailbox": mb["id"]}]
+    if unread_only:
+        conditions.append({"notKeyword": "$seen"})
+    if from_search:
+        conditions.append({"from": from_search})
+    filter_obj: dict[str, Any] = (
+        conditions[0] if len(conditions) == 1 else {"operator": "AND", "conditions": conditions}
+    )
+
+    resp = _HTTP.post(
+        session["api_url"],
+        headers={"Authorization": f"Bearer {session['token']}"},
+        json={
+            "using": ["urn:ietf:params:jmap:core", "urn:ietf:params:jmap:mail"],
+            "methodCalls": [
+                [
+                    "Email/query",
+                    {
+                        "accountId": session["account_id"],
+                        "filter": filter_obj,
+                        "sort": [{"property": "receivedAt", "isAscending": False}],
+                        "limit": limit,
+                    },
+                    "q",
+                ],
+                [
+                    "Email/get",
+                    {
+                        "accountId": session["account_id"],
+                        "#ids": {"resultOf": "q", "name": "Email/query", "path": "/ids"},
+                        "properties": ["id", "subject", "from", "receivedAt", "keywords", "preview"],
+                    },
+                    "g",
+                ],
+            ],
+        },
+    )
+    resp.raise_for_status()
+    responses = {r[2]: r[1] for r in resp.json()["methodResponses"]}
+    emails_raw = responses["g"]["list"]
+
+    emails = []
+    for e in emails_raw:
+        frm = e.get("from") or []
+        from_str = ", ".join(
+            f"{p.get('name', '')} <{p.get('email', '')}>" if p.get("name") else p.get("email", "")
+            for p in frm
+        ).strip()
+        emails.append(
+            {
+                "subject": e.get("subject", ""),
+                "from": from_str,
+                "received_at": e.get("receivedAt", ""),
+                "unread": "$seen" not in (e.get("keywords") or {}),
+                "preview": e.get("preview", ""),
+            }
+        )
+
+    return {
+        "mailbox": mb["name"],
+        "total_emails": mb["total"],
+        "unread_emails": mb["unread"],
+        "emails": emails,
+    }
