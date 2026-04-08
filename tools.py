@@ -364,7 +364,6 @@ def list_emails(
     session = _fm_session()
     mb = _fm_lookup_mailbox(mailbox)
 
-    # Build filter
     conditions: list[dict[str, Any]] = [{"inMailbox": mb["id"]}]
     if unread_only:
         conditions.append({"notKeyword": "$seen"})
