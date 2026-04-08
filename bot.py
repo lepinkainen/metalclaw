@@ -1,8 +1,11 @@
+import argparse
 import json
 import re
 import shlex
+from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
+from typing import NoReturn
 
 import httpx
 from prompt_toolkit import PromptSession
@@ -191,79 +194,28 @@ def _handle_think(_: str) -> None:
     console.print(f"[dim]thinking display {state}[/dim]")
 
 
-def _parse_train_args(args: str) -> dict[str, str | int | None]:
-    try:
-        parts = shlex.split(args)
-    except ValueError as e:
-        raise ValueError(f"invalid /train arguments: {e}") from e
-
-    if not parts:
-        raise ValueError("usage: /train <station> [--line R] [--count 5]")
-
-    station = parts[0]
-    line = None
-    count = 5
-
-    i = 1
-    while i < len(parts):
-        part = parts[i]
-        if part == "--line":
-            if i + 1 >= len(parts):
-                raise ValueError("missing value for --line")
-            line = parts[i + 1]
-            i += 2
-        elif part == "--count":
-            if i + 1 >= len(parts):
-                raise ValueError("missing value for --count")
-            try:
-                count = int(parts[i + 1])
-            except ValueError as e:
-                raise ValueError("--count must be an integer") from e
-            i += 2
-        else:
-            raise ValueError(f"unknown argument: {part}")
-
-    return {"station": station, "line": line, "count": count}
+class _ArgParser(argparse.ArgumentParser):
+    def error(self, message: str) -> NoReturn:
+        raise ValueError(message)
 
 
-def _handle_train(args: str) -> None:
-    params = _parse_train_args(args)
-    tool_obj = TOOLS.get("train_departures")
-    if tool_obj is None:
-        console.print("train tool is not available")
-        return
-    try:
-        result = tool_obj.func(**params)
-    except Exception as e:
-        console.print(f"\n[bold]bot>[/bold] Error: {e}\n")
-        return
-    console.print(f"\n[bold]bot>[/bold] {_format_train_result(result)}\n")
+def _parse_train_args(args: str) -> dict:
+    p = _ArgParser(prog="/train", add_help=False)
+    p.add_argument("station")
+    p.add_argument("--line", default=None)
+    p.add_argument("--count", type=int, default=5)
+    ns = p.parse_args(shlex.split(args))
+    return {"station": ns.station, "line": ns.line, "count": ns.count}
 
 
-def _parse_weather_args(args: str) -> dict[str, str]:
+def _parse_weather_args(args: str) -> dict:
     try:
         parts = shlex.split(args)
     except ValueError as e:
         raise ValueError(f"invalid /weather arguments: {e}") from e
-
     if not parts:
         raise ValueError("usage: /weather <location>")
-
     return {"location": " ".join(parts)}
-
-
-def _handle_weather(args: str) -> None:
-    params = _parse_weather_args(args)
-    tool_obj = TOOLS.get("weather")
-    if tool_obj is None:
-        console.print("weather tool is not available")
-        return
-    try:
-        result = tool_obj.func(**params)
-    except Exception as e:
-        console.print(f"\n[bold]bot>[/bold] Error: {e}\n")
-        return
-    console.print(f"\n[bold]bot>[/bold] {_format_weather_result(result)}\n")
 
 
 def _format_mail_result(result: dict) -> str:
@@ -286,58 +238,29 @@ def _format_mail_result(result: dict) -> str:
 
 
 def _parse_mail_args(args: str) -> dict:
-    try:
-        parts = shlex.split(args)
-    except ValueError as e:
-        raise ValueError(f"invalid /mail arguments: {e}") from e
-
-    mailbox = "inbox"
-    unread_only = False
-    from_search = None
-    count = 10
-
-    i = 0
-    while i < len(parts):
-        part = parts[i]
-        if part == "--mailbox":
-            if i + 1 >= len(parts):
-                raise ValueError("missing value for --mailbox")
-            mailbox = parts[i + 1]
-            i += 2
-        elif part == "--unread":
-            unread_only = True
-            i += 1
-        elif part == "--from":
-            if i + 1 >= len(parts):
-                raise ValueError("missing value for --from")
-            from_search = parts[i + 1]
-            i += 2
-        elif part == "--count":
-            if i + 1 >= len(parts):
-                raise ValueError("missing value for --count")
-            try:
-                count = int(parts[i + 1])
-            except ValueError as e:
-                raise ValueError("--count must be an integer") from e
-            i += 2
-        else:
-            raise ValueError(f"unknown argument: {part}")
-
-    return {"mailbox": mailbox, "unread_only": unread_only, "from_search": from_search, "limit": count}
+    p = _ArgParser(prog="/mail", add_help=False)
+    p.add_argument("--mailbox", default="inbox")
+    p.add_argument("--unread", action="store_true")
+    p.add_argument("--from", dest="from_search", default=None)
+    p.add_argument("--count", type=int, default=10)
+    ns = p.parse_args(shlex.split(args))
+    return {"mailbox": ns.mailbox, "unread_only": ns.unread, "from_search": ns.from_search, "limit": ns.count}
 
 
-def _handle_mail(args: str) -> None:
-    params = _parse_mail_args(args)
-    tool_obj = TOOLS.get("list_emails")
-    if tool_obj is None:
-        console.print("mail tool is not available")
-        return
-    try:
-        result = tool_obj.func(**params)
-    except Exception as e:
-        console.print(f"\n[bold]bot>[/bold] Error: {e}\n")
-        return
-    console.print(f"\n[bold]bot>[/bold] {_format_mail_result(result)}\n")
+def _make_tool_handler(tool_name: str, parser: Callable, formatter: Callable) -> Callable:
+    def handler(args: str) -> None:
+        params = parser(args)
+        tool_obj = TOOLS.get(tool_name)
+        if tool_obj is None:
+            console.print(f"{tool_name} tool is not available")
+            return
+        try:
+            result = tool_obj.func(**params)
+        except Exception as e:
+            console.print(f"\n[bold]bot>[/bold] Error: {e}\n")
+            return
+        console.print(f"\n[bold]bot>[/bold] {formatter(result)}\n")
+    return handler
 
 
 def _handle_help(_: str) -> None:
@@ -347,11 +270,11 @@ def _handle_help(_: str) -> None:
 _COMMAND_HANDLERS = {
     "add-tool": _handle_add_tool,
     "self-edit": _handle_self_edit,
-    "think": _handle_think,
-    "train": _handle_train,
-    "weather": _handle_weather,
-    "mail": _handle_mail,
-    "help": _handle_help,
+    "think":    _handle_think,
+    "train":    _make_tool_handler("train_departures", _parse_train_args,   _format_train_result),
+    "weather":  _make_tool_handler("weather",          _parse_weather_args, _format_weather_result),
+    "mail":     _make_tool_handler("list_emails",      _parse_mail_args,    _format_mail_result),
+    "help":     _handle_help,
 }
 
 
@@ -397,8 +320,13 @@ def main():
 
         messages.append({"role": "user", "content": user_input})
 
-        with console.status("[dim]thinking…[/dim]", spinner="dots"):
-            reply = chat(messages)
+        try:
+            with console.status("[dim]thinking…[/dim]", spinner="dots"):
+                reply = chat(messages)
+        except Exception as e:
+            console.print(f"\n[bold]bot>[/bold] Error: {e}\n")
+            messages.pop()
+            continue
 
         messages.append({"role": "assistant", "content": reply})
         hist.save_assistant(reply)
