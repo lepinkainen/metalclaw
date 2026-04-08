@@ -45,19 +45,6 @@ def _geocode(location: str) -> tuple[float, float, str]:
     return round(float(hit["lat"]), 4), round(float(hit["lon"]), 4), hit["display_name"]
 
 
-@tool(
-    description="Get the weather for a location: current conditions, today's forecast, and tomorrow's forecast. Accepts a city name or place.",
-    parameters={
-        "type": "object",
-        "properties": {
-            "location": {
-                "type": "string",
-                "description": "City or place name (e.g. 'Tokyo', 'Oslo', 'New York')",
-            },
-        },
-        "required": ["location"],
-    },
-)
 def _day_summary(entries: list) -> str:
     """Summarise a list of timeseries entries for one day."""
     temps = [e["data"]["instant"]["details"]["air_temperature"] for e in entries]
@@ -83,6 +70,19 @@ def _day_summary(entries: list) -> str:
     return f"  {condition}, {lo}–{hi}°C"
 
 
+@tool(
+    description="Get the weather for a location: current conditions, today's forecast, and tomorrow's forecast. Accepts a city name or place.",
+    parameters={
+        "type": "object",
+        "properties": {
+            "location": {
+                "type": "string",
+                "description": "City or place name (e.g. 'Tokyo', 'Oslo', 'New York')",
+            },
+        },
+        "required": ["location"],
+    },
+)
 def weather(location: str) -> str:
     lat, lon, display_name = _geocode(location)
 
@@ -138,13 +138,17 @@ def _find_station_code(name: str) -> tuple[str, str]:
 
 
 @tool(
-    description="Get the next departing trains from a Finnish railway station by name.",
+    description="Get the next departing trains from a Finnish railway station by name. Can optionally filter by commuter line letter such as R, I, K, or Z.",
     parameters={
         "type": "object",
         "properties": {
             "station": {
                 "type": "string",
                 "description": "Station name or short code (e.g. 'Helsinki', 'Tampere', 'HKI')",
+            },
+            "line": {
+                "type": "string",
+                "description": "Optional commuter line letter to filter by (e.g. 'R', 'I', 'K', 'Z')",
             },
             "count": {
                 "type": "integer",
@@ -154,46 +158,72 @@ def _find_station_code(name: str) -> tuple[str, str]:
         "required": ["station"],
     },
 )
-def train_departures(station: str, count: int = 5) -> str:
+def train_departures(station: str, count: int = 5, line: str | None = None) -> str:
     count = min(max(1, count), 20)
     code, full_name = _find_station_code(station)
+    line = line.strip().upper() if line else None
+
+    params = {
+        "departing_trains": max(count, 20) if line else count,
+        "departed_trains": 0,
+        "arriving_trains": 0,
+        "arrived_trains": 0,
+    }
+    if line:
+        params["train_categories"] = "Commuter"
 
     resp = _HTTP.get(
         f"{_DIGITRAFFIC}/live-trains/station/{code}",
-        params={
-            "departing_trains": count,
-            "departed_trains": 0,
-            "arriving_trains": 0,
-            "arrived_trains": 0,
-        },
+        params=params,
     )
     resp.raise_for_status()
     trains = resp.json()
 
+    if line:
+        trains = [t for t in trains if (t.get("commuterLineID") or "").upper() == line]
+
     if not trains:
+        if line:
+            return f"No upcoming {line} departures found for {full_name} ({code})."
         return f"No upcoming departures found for {full_name} ({code})."
 
-    lines = [f"Departures from {full_name} ({code}):"]
-    for train in trains:
-        train_type = train.get("trainType", "")
-        train_number = train.get("trainNumber", "")
-        name = f"{train_type} {train_number}".strip()
+    header = f"Departures from {full_name} ({code})"
+    if line:
+        header += f" for line {line}"
+    lines = [f"{header}:"]
 
+    shown = 0
+    for train in trains:
         # Find the departure row for this station
         dep_row = next(
             (
                 r for r in train.get("timeTableRows", [])
-                if r["stationShortCode"] == code and r["type"] == "DEPARTURE"
+                if r["stationShortCode"] == code
+                and r["type"] == "DEPARTURE"
+                and r.get("commercialStop", True)
             ),
             None,
         )
         if dep_row is None:
             continue
 
+        commuter_line = train.get("commuterLineID")
+        train_type = train.get("trainType", "")
+        train_number = train.get("trainNumber", "")
+        if commuter_line:
+            name = commuter_line
+            if not line:
+                name += f" ({train_type} {train_number})"
+        else:
+            name = f"{train_type} {train_number}".strip()
+
         scheduled = dep_row["scheduledTime"][11:16]  # HH:MM from ISO string
         estimate = dep_row.get("liveEstimateTime")
+        actual = dep_row.get("actualTime")
         time_str = scheduled
-        if estimate and estimate != dep_row["scheduledTime"]:
+        if actual and actual != dep_row["scheduledTime"]:
+            time_str += f" (actual {actual[11:16]})"
+        elif estimate and estimate != dep_row["scheduledTime"]:
             time_str += f" (est. {estimate[11:16]})"
 
         track = dep_row.get("commercialTrack", "?")
@@ -202,7 +232,15 @@ def train_departures(station: str, count: int = 5) -> str:
         arrival_rows = [r for r in train["timeTableRows"] if r["type"] == "ARRIVAL"]
         destination = arrival_rows[-1]["stationShortCode"] if arrival_rows else "?"
 
-        cancelled = " [CANCELLED]" if train.get("cancelled") else ""
-        lines.append(f"  {time_str}  {name:<10}  track {track}  -> {destination}{cancelled}")
+        cancelled = " [CANCELLED]" if train.get("cancelled") or dep_row.get("cancelled") else ""
+        lines.append(f"  {time_str}  {name:<14}  track {track}  -> {destination}{cancelled}")
+        shown += 1
+        if shown >= count:
+            break
+
+    if shown == 0:
+        if line:
+            return f"No upcoming {line} departures found for {full_name} ({code})."
+        return f"No upcoming departures found for {full_name} ({code})."
 
     return "\n".join(lines)
