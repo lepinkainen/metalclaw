@@ -11,6 +11,7 @@ from typing import NoReturn
 import httpx
 from prompt_toolkit import PromptSession
 from rich.console import Console
+from rich.markdown import Markdown
 
 import self_change
 from history import SQLiteHistory
@@ -262,6 +263,14 @@ def _parse_mail_args(args: str) -> dict:
     return {"mailbox": ns.mailbox, "unread_only": ns.unread, "from_search": ns.from_search, "limit": ns.count}
 
 
+def _print_bot_markdown(text: str) -> None:
+    console.print()
+    console.print("[bold]bot>[/bold]")
+    console.print(Markdown(text))
+    console.print()
+
+
+
 def _make_tool_handler(tool_name: str, parser: Callable, formatter: Callable) -> Callable:
     def handler(args: str) -> None:
         params = parser(args)
@@ -274,7 +283,7 @@ def _make_tool_handler(tool_name: str, parser: Callable, formatter: Callable) ->
         except Exception as e:
             console.print(f"\n[bold]bot>[/bold] Error: {e}\n")
             return
-        console.print(f"\n[bold]bot>[/bold] {formatter(result)}\n")
+        _print_bot_markdown(formatter(result))
     return handler
 
 
@@ -294,6 +303,8 @@ _COMMAND_HANDLERS = {
 
 
 def _cli_tool_log(name: str, args: dict, short_result: str) -> None:
+    if not _show_thinking:
+        return
     args_summary = ", ".join(f"{k}={v!r}" for k, v in args.items()) if args else ""
     console.print(f"  [dim][tool: {name}({args_summary})] → {short_result}[/dim]")
 
@@ -354,7 +365,7 @@ def main():
         thinking, clean_reply = _split_thinking(reply)
         if thinking and _show_thinking:
             console.print(f"\n[dim]{thinking}[/dim]")
-        console.print(f"\n[bold]bot>[/bold] {clean_reply}\n")
+        _print_bot_markdown(clean_reply)
 
 
 if __name__ == "__main__":
