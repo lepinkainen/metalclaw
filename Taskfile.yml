@@ -1,10 +1,30 @@
 version: '3'
 tasks:
   lint:
-    cmd: uv run ruff check .
+    silent: true
+    cmds:
+      - uv run ruff check . --quiet
+      - |
+        if command -v gitleaks >/dev/null 2>&1; then
+          gitleaks dir . --config .gitleaks.toml --no-banner --log-level error
+        else
+          echo "gitleaks not installed; skipping secret scan"
+        fi
+      - echo "Lint OK"
   build:
     cmd: uv run python -c "import bot, tools, registry, self_change"
   test:
-    cmd: uv run pytest -q
+    silent: true
+    cmds:
+      - |
+        out=$(mktemp)
+        if uv run pytest -q >"$out" 2>&1; then
+          rm -f "$out"
+          echo "Tests OK"
+        else
+          cat "$out"
+          rm -f "$out"
+          exit 1
+        fi
   telegram:
     cmd: uv run python telegram_bot.py
