@@ -141,6 +141,7 @@ source = { virtual = "." }
 dependencies = [
     { name = "beautifulsoup4" },
     { name = "httpx" },
+    { name = "markdown-it-py" },
     { name = "markdownify" },
     { name = "prompt-toolkit" },
     { name = "python-telegram-bot" },
@@ -158,6 +159,7 @@ dev = [
 requires-dist = [
     { name = "beautifulsoup4", specifier = ">=4.12" },
     { name = "httpx", specifier = ">=0.28.1" },
+    { name = "markdown-it-py", specifier = ">=3.0" },
     { name = "markdownify", specifier = ">=0.13" },
     { name = "prompt-toolkit", specifier = ">=3.0" },
     { name = "python-telegram-bot", specifier = ">=21.0" },

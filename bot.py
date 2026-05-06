@@ -1,9 +1,12 @@
 import argparse
 import asyncio
 import json
+import logging
+import os
 import re
 import shlex
 from collections.abc import Callable, Iterable
+from contextlib import asynccontextmanager
 from datetime import datetime
 from pathlib import Path
 from typing import NoReturn
@@ -14,11 +17,15 @@ from prompt_toolkit.application import run_in_terminal
 from prompt_toolkit.patch_stdout import patch_stdout
 from rich.console import Console
 from rich.markdown import Markdown
+from telegram import BotCommand, Update
+from telegram.constants import ChatAction
+from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters
 
 import channels
 import heartbeat
 import memory
 import self_change
+import telegram_format
 from config import get_config
 from history import SQLiteHistory
 from registry import TOOLS
@@ -82,7 +89,9 @@ _SYSTEM_PROMPT_BASE = (
     "describe the result. "
     "You have long-term memory across sessions: call set_user_preference, "
     "add_user_fact, or forget_user_memory to record durable information about the "
-    "user; call get_user_memory to read the full file."
+    "user; call get_user_memory to read the full file. "
+    "If a request needs more info, check memory first before asking the user. "
+    "When the user gives information, store it in memory if relevant."
 )
 
 
@@ -92,6 +101,16 @@ def build_system_prompt(scope: str, now: str) -> str:
     if summary:
         base += f"\n\nKnown about user (scope={scope}):\n{summary}"
     return base
+
+
+def _refresh_system_prompt(messages: list[dict], scope: str) -> None:
+    """Rewrite messages[0] with current memory summary so mid-session writes are visible."""
+    now = datetime.now().strftime("%Y-%m-%d %H:%M")
+    prompt = build_system_prompt(scope, now)
+    if messages and messages[0].get("role") == "system":
+        messages[0] = {"role": "system", "content": prompt}
+    else:
+        messages.insert(0, {"role": "system", "content": prompt})
 
 _CLIENT = httpx.Client(timeout=120.0)
 
@@ -487,9 +506,356 @@ class _CLIChannel:
         return ("cli",)
 
 
-async def _async_main() -> None:
-    import tools  # noqa: F401 — triggers @tool registrations
+# --- Telegram ---
 
+
+_telegram_sessions: dict[int, list[dict]] = {}
+_telegram_onboarding: dict[int, int] = {}
+_known_chats: set[int] = set()
+
+
+def _telegram_chats_path() -> Path:
+    xdg = os.environ.get("XDG_DATA_HOME") or (Path.home() / ".local" / "share")
+    p = Path(xdg) / "metalclaw" / "telegram_chats.json"
+    p.parent.mkdir(parents=True, exist_ok=True)
+    return p
+
+
+def _load_known_chats() -> set[int]:
+    path = _telegram_chats_path()
+    if not path.exists():
+        return set()
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return set()
+    return {int(x) for x in data} if isinstance(data, list) else set()
+
+
+def _save_known_chats(chats: set[int]) -> None:
+    _telegram_chats_path().write_text(json.dumps(sorted(chats)), encoding="utf-8")
+
+
+def _remember_chat(chat_id: int) -> None:
+    if chat_id in _known_chats:
+        return
+    _known_chats.add(chat_id)
+    _save_known_chats(_known_chats)
+
+
+def _telegram_scope_for(chat_id: int) -> str:
+    return f"telegram-{chat_id}"
+
+
+async def _tg_reply(update: Update, text: str) -> None:
+    """Send a Telegram reply, rendering CommonMark as Telegram HTML."""
+    html_text = telegram_format.to_html(text)
+    reply = update.message.reply_text
+    try:
+        await reply(html_text, parse_mode="HTML")
+    except Exception:
+        await reply(text)
+
+
+@asynccontextmanager
+async def _typing(chat_id: int, bot):
+    """Show 'typing…' in the chat until the context exits.
+
+    Telegram chat actions expire after ~5 seconds, so we refresh on a 4-second
+    cadence. Errors are swallowed — this is best-effort UX.
+    """
+    async def _pulse() -> None:
+        while True:
+            try:
+                await bot.send_chat_action(chat_id, ChatAction.TYPING)
+            except Exception:
+                pass
+            await asyncio.sleep(4)
+
+    task = asyncio.create_task(_pulse())
+    try:
+        yield
+    finally:
+        task.cancel()
+        try:
+            await task
+        except (asyncio.CancelledError, Exception):
+            pass
+
+
+class _TelegramChannel:
+    name = "telegram"
+
+    def __init__(self, app: Application) -> None:
+        self._app = app
+
+    async def notify(self, scope: str, text: str) -> None:
+        if not scope.startswith("telegram-"):
+            return
+        try:
+            chat_id = int(scope[len("telegram-") :])
+        except ValueError:
+            return
+        html_text = telegram_format.to_html(text)
+        try:
+            await self._app.bot.send_message(chat_id=chat_id, text=html_text, parse_mode="HTML")
+        except Exception:
+            await self._app.bot.send_message(chat_id=chat_id, text=text)
+
+    def active_scopes(self) -> Iterable[str]:
+        return tuple(f"telegram-{cid}" for cid in _known_chats)
+
+
+def _get_telegram_session(chat_id: int) -> list[dict]:
+    if chat_id not in _telegram_sessions:
+        scope = _telegram_scope_for(chat_id)
+        memory.current_scope.set(scope)
+        now = datetime.now().strftime("%Y-%m-%d %H:%M")
+        _telegram_sessions[chat_id] = [
+            {"role": "system", "content": build_system_prompt(scope, now)}
+        ]
+    return _telegram_sessions[chat_id]
+
+
+_TELEGRAM_TOOL_COMMANDS: dict[str, tuple] = {
+    "train":   ("train_departures", _parse_train_args,   _format_train_result),
+    "weather": ("weather",          _parse_weather_args, _format_weather_result),
+    "mail":    ("list_emails",      _parse_mail_args,    _format_mail_result),
+    "search":  ("search_vault",     _parse_search_args,  _format_search_result),
+}
+
+_TELEGRAM_BOT_COMMANDS: list[tuple[str, str]] = [
+    ("help",      "show available commands"),
+    ("train",     "train departures: <station> [--line R] [--count 5]"),
+    ("weather",   "weather for a location"),
+    ("mail",      "list emails [--mailbox] [--unread] [--from] [--count]"),
+    ("search",    "search the Obsidian vault"),
+    ("remember",  "save a preference: <key>=<value>"),
+    ("forget",    "remove a memory entry"),
+    ("memory",    "show stored long-term memory"),
+    ("onboard",   "seed memory by answering a few questions"),
+    ("heartbeat", "show heartbeat config (or 'run' to fire now)"),
+    ("new",       "reset this conversation"),
+]
+
+_TELEGRAM_HELP_TEXT = "\n".join([
+    "Available commands:",
+    "/train <station> [--line R] [--count 5]",
+    "/weather <location>",
+    "/mail [--mailbox inbox] [--unread] [--from name] [--count 10]",
+    "/search <query> [--max 20] [--context 1] — search the Obsidian vault",
+    "/remember <key>=<value> — save a preference",
+    "/forget <substring> — remove a memory entry",
+    "/memory — show stored memory",
+    "/onboard — answer a few questions to seed memory",
+    "/heartbeat — show heartbeat config; /heartbeat run to fire now",
+    "/new — reset this conversation",
+    "/help — this message",
+])
+
+
+async def _telegram_start_onboarding(update: Update, chat_id: int) -> None:
+    memory.current_scope.set(_telegram_scope_for(chat_id))
+    if memory.load().preferences:
+        await _tg_reply(update, 
+            "Already onboarded. Use /memory to inspect or /forget to remove entries."
+        )
+        return
+    _telegram_onboarding[chat_id] = 0
+    _, question = _ONBOARDING_STEPS[0]
+    await _tg_reply(update, 
+        f"Onboarding — answer briefly, send '-' to skip.\n\n{question}"
+    )
+
+
+async def _telegram_handle_onboarding_answer(update: Update, chat_id: int, text: str) -> None:
+    memory.current_scope.set(_telegram_scope_for(chat_id))
+    step = _telegram_onboarding[chat_id]
+    key, _ = _ONBOARDING_STEPS[step]
+    if text != "-" and text.strip():
+        value = _format_interests(text) if key == "interests" else text.strip()
+        memory.set_preference(key, value)
+
+    next_step = step + 1
+    if next_step >= len(_ONBOARDING_STEPS):
+        del _telegram_onboarding[chat_id]
+        _telegram_sessions.pop(chat_id, None)
+        await _tg_reply(update, 
+            "Onboarding done. Memory will enter the system prompt on next message."
+        )
+        return
+
+    _telegram_onboarding[chat_id] = next_step
+    _, question = _ONBOARDING_STEPS[next_step]
+    await _tg_reply(update, question)
+
+
+async def _telegram_heartbeat_cmd(update: Update, sub: str, chat_id: int) -> None:
+    scope = _telegram_scope_for(chat_id)
+    path = heartbeat.heartbeat_path_for(scope)
+    if sub == "run":
+        asyncio.create_task(heartbeat.run_tick())
+        await _tg_reply(update, "heartbeat tick fired")
+        return
+    cfg = get_config()
+    lines = [
+        f"heartbeat enabled={cfg.heartbeat_enabled} interval={cfg.heartbeat_interval_seconds}s",
+        f"checklist: {path}",
+    ]
+    if path.exists():
+        try:
+            hb = heartbeat.parse_heartbeat_file(path.read_text(encoding="utf-8"))
+        except ValueError as e:
+            lines.append(f"parse error: {e}")
+        else:
+            if hb.tasks:
+                for t in hb.tasks:
+                    lines.append(f"  • {t.name}  every {t.interval_seconds}s")
+            else:
+                lines.append("(free-form body only, no tasks)")
+    else:
+        lines.append("no checklist — copy heartbeat.example.md (in repo root) to the path above")
+    await _tg_reply(update, "\n".join(lines))
+
+
+async def _telegram_dispatch_command(
+    update: Update, cmd: str, args: str, bot=None
+) -> None:
+    chat_id = update.effective_chat.id
+    if cmd == "help":
+        await _tg_reply(update, _TELEGRAM_HELP_TEXT)
+    elif cmd == "new":
+        _telegram_sessions.pop(chat_id, None)
+        _telegram_onboarding.pop(chat_id, None)
+        await _tg_reply(update, "Conversation reset.")
+    elif cmd == "remember":
+        if "=" not in args:
+            await _tg_reply(update, "usage: /remember <key>=<value>")
+            return
+        key, value = args.split("=", 1)
+        key, value = key.strip(), value.strip()
+        if not key or not value:
+            await _tg_reply(update, "usage: /remember <key>=<value>")
+            return
+        memory.set_preference(key, value)
+        await _tg_reply(update, f"saved {key}={value}")
+    elif cmd == "forget":
+        matcher = args.strip()
+        if not matcher:
+            await _tg_reply(update, "usage: /forget <substring>")
+            return
+        if memory.forget(matcher):
+            await _tg_reply(update, f"forgot entry matching '{matcher}'")
+        else:
+            await _tg_reply(update, f"no entry matched '{matcher}'")
+    elif cmd == "memory":
+        await _tg_reply(update, memory.render_full())
+    elif cmd == "onboard":
+        await _telegram_start_onboarding(update, chat_id)
+    elif cmd == "heartbeat":
+        await _telegram_heartbeat_cmd(update, args.strip(), chat_id)
+    elif cmd in _TELEGRAM_TOOL_COMMANDS:
+        tool_name, parser, formatter = _TELEGRAM_TOOL_COMMANDS[cmd]
+        try:
+            params = parser(args)
+        except ValueError as e:
+            await _tg_reply(update, str(e))
+            return
+        tool_obj = TOOLS.get(tool_name)
+        if tool_obj is None:
+            await _tg_reply(update, f"{tool_name} tool unavailable")
+            return
+        loop = asyncio.get_running_loop()
+        try:
+            if bot is not None:
+                async with _typing(chat_id, bot):
+                    result = await loop.run_in_executor(None, lambda: tool_obj.func(**params))
+            else:
+                result = await loop.run_in_executor(None, lambda: tool_obj.func(**params))
+        except Exception as e:
+            await _tg_reply(update, f"Error: {e}")
+            return
+        await _tg_reply(update, formatter(result))
+    else:
+        await _tg_reply(update, f"Unknown command: /{cmd}  (try /help)")
+
+
+async def _telegram_handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    text = update.message.text.strip()
+    chat_id = update.effective_chat.id
+    _remember_chat(chat_id)
+    memory.current_scope.set(_telegram_scope_for(chat_id))
+    messages = _get_telegram_session(chat_id)
+
+    parsed = _parse_command(text)
+    if parsed is not None:
+        cmd, args = parsed
+        await _telegram_dispatch_command(update, cmd, args, context.bot)
+        return
+
+    if chat_id in _telegram_onboarding:
+        await _telegram_handle_onboarding_answer(update, chat_id, text)
+        return
+
+    _refresh_system_prompt(messages, _telegram_scope_for(chat_id))
+    messages.append({"role": "user", "content": text})
+    loop = asyncio.get_running_loop()
+    try:
+        async with _typing(chat_id, context.bot):
+            reply = await loop.run_in_executor(None, lambda: chat(messages))
+    except Exception as e:
+        messages.pop()
+        await _tg_reply(update, f"Error: {e}")
+        return
+    messages.append({"role": "assistant", "content": reply})
+    _, clean_reply = _split_thinking(reply)
+    await _tg_reply(update, clean_reply)
+
+
+def _make_telegram_cmd_handler(cmd: str):
+    async def handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        chat_id = update.effective_chat.id
+        memory.current_scope.set(_telegram_scope_for(chat_id))
+        _get_telegram_session(chat_id)
+        await _telegram_dispatch_command(
+            update, cmd, " ".join(context.args or []), context.bot
+        )
+    return handler
+
+
+async def _start_telegram(token: str) -> Application:
+    global _known_chats
+    _known_chats = _load_known_chats()
+
+    app = Application.builder().token(token).build()
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, _telegram_handle_message))
+    for cmd, _desc in _TELEGRAM_BOT_COMMANDS:
+        app.add_handler(CommandHandler(cmd, _make_telegram_cmd_handler(cmd)))
+
+    channels.register(_TelegramChannel(app))
+
+    await app.initialize()
+    try:
+        await app.bot.set_my_commands(
+            [BotCommand(cmd, desc) for cmd, desc in _TELEGRAM_BOT_COMMANDS]
+        )
+    except Exception as e:
+        logging.warning("failed to register Telegram bot commands: %s", e)
+    await app.start()
+    await app.updater.start_polling(allowed_updates=Update.ALL_TYPES)
+    return app
+
+
+async def _stop_telegram(app: Application) -> None:
+    await app.updater.stop()
+    await app.stop()
+    await app.shutdown()
+
+
+# --- Entrypoint ---
+
+
+async def _run_cli_repl() -> None:
     global _prompt_session
     memory.current_scope.set("cli")
     channels.register(_CLIChannel())
@@ -509,73 +875,123 @@ async def _async_main() -> None:
     console.print(f"metalclaw bot ({get_config().model}) — type 'quit' to exit")
     console.print(f"  {len(TOOLS)} tool(s) loaded: {', '.join(TOOLS)}\n")
 
+    with patch_stdout(raw=True):
+        while True:
+            try:
+                user_input = (await _prompt_session.prompt_async("you> ")).strip()
+            except (EOFError, KeyboardInterrupt):
+                print()
+                break
+            if not user_input or user_input.lower() in ("quit", "exit"):
+                break
+
+            parsed = _parse_command(user_input)
+            if parsed is not None:
+                cmd, args = parsed
+                handler = _COMMAND_HANDLERS.get(cmd)
+                if handler is None:
+                    console.print(f"unknown command: /{cmd}  (try /help)")
+                    continue
+                try:
+                    handler(args)
+                except ValueError as e:
+                    console.print(str(e))
+                continue
+
+            if _pending_onboarding:
+                key, _question = _pending_onboarding.pop(0)
+                if user_input != "-":
+                    value = _format_interests(user_input) if key == "interests" else user_input
+                    memory.set_preference(key, value)
+                if _pending_onboarding:
+                    _, next_q = _pending_onboarding[0]
+                    console.print(f"[dim]{next_q}[/dim]")
+                else:
+                    console.print("[dim]done — restart for memory to enter the system prompt[/dim]")
+                continue
+
+            _refresh_system_prompt(messages, "cli")
+            messages.append({"role": "user", "content": user_input})
+
+            try:
+                with console.status("[dim]thinking…[/dim]", spinner="dots"):
+                    reply = await asyncio.get_running_loop().run_in_executor(
+                        None, lambda: chat(messages, on_tool_call=_cli_tool_log)
+                    )
+            except Exception as e:
+                console.print(f"\n[bold]bot>[/bold] Error: {e}\n")
+                messages.pop()
+                continue
+
+            messages.append({"role": "assistant", "content": reply})
+            hist.save_assistant(reply)
+
+            thinking, clean_reply = _split_thinking(reply)
+            if thinking and _show_thinking:
+                console.print(f"\n[dim]{thinking}[/dim]")
+            _print_bot_markdown(clean_reply)
+
+
+async def _async_main(*, daemon: bool, with_telegram: bool) -> None:
+    import tools  # noqa: F401 — triggers @tool registrations
+
+    cfg = get_config()
+    tg_app: Application | None = None
+    if with_telegram:
+        if not cfg.telegram_bot_token:
+            if daemon:
+                raise RuntimeError(
+                    "telegram_bot_token missing — set TELEGRAM_BOT_TOKEN env or "
+                    "telegram_bot_token in config.yaml"
+                )
+            console.print("[dim]no telegram_bot_token — telegram disabled[/dim]")
+        else:
+            tg_app = await _start_telegram(cfg.telegram_bot_token)
+            console.print(f"[dim]telegram polling started ({len(_known_chats)} known chat(s))[/dim]")
+
     stop = asyncio.Event()
     hb_task = asyncio.create_task(heartbeat.run(stop))
+
     try:
-        with patch_stdout(raw=True):
-            while True:
-                try:
-                    user_input = (await _prompt_session.prompt_async("you> ")).strip()
-                except (EOFError, KeyboardInterrupt):
-                    print()
-                    break
-                if not user_input or user_input.lower() in ("quit", "exit"):
-                    break
-
-                parsed = _parse_command(user_input)
-                if parsed is not None:
-                    cmd, args = parsed
-                    handler = _COMMAND_HANDLERS.get(cmd)
-                    if handler is None:
-                        console.print(f"unknown command: /{cmd}  (try /help)")
-                        continue
-                    try:
-                        handler(args)
-                    except ValueError as e:
-                        console.print(str(e))
-                    continue
-
-                if _pending_onboarding:
-                    key, _question = _pending_onboarding.pop(0)
-                    if user_input != "-":
-                        value = _format_interests(user_input) if key == "interests" else user_input
-                        memory.set_preference(key, value)
-                    if _pending_onboarding:
-                        _, next_q = _pending_onboarding[0]
-                        console.print(f"[dim]{next_q}[/dim]")
-                    else:
-                        console.print("[dim]done — restart for memory to enter the system prompt[/dim]")
-                    continue
-
-                messages.append({"role": "user", "content": user_input})
-
-                try:
-                    with console.status("[dim]thinking…[/dim]", spinner="dots"):
-                        reply = await asyncio.get_running_loop().run_in_executor(
-                            None, lambda: chat(messages, on_tool_call=_cli_tool_log)
-                        )
-                except Exception as e:
-                    console.print(f"\n[bold]bot>[/bold] Error: {e}\n")
-                    messages.pop()
-                    continue
-
-                messages.append({"role": "assistant", "content": reply})
-                hist.save_assistant(reply)
-
-                thinking, clean_reply = _split_thinking(reply)
-                if thinking and _show_thinking:
-                    console.print(f"\n[dim]{thinking}[/dim]")
-                _print_bot_markdown(clean_reply)
+        if daemon:
+            console.print("[dim]daemon mode — Ctrl-C to exit[/dim]")
+            try:
+                await asyncio.Event().wait()
+            except (KeyboardInterrupt, asyncio.CancelledError):
+                pass
+        else:
+            await _run_cli_repl()
     finally:
         stop.set()
         try:
             await asyncio.wait_for(hb_task, timeout=5)
         except (asyncio.TimeoutError, asyncio.CancelledError):
             hb_task.cancel()
+        if tg_app is not None:
+            await _stop_telegram(tg_app)
 
 
 def main() -> None:
-    asyncio.run(_async_main())
+    parser = argparse.ArgumentParser(prog="metalclaw")
+    parser.add_argument(
+        "--daemon", action="store_true",
+        help="run without CLI REPL (Telegram + heartbeat only)",
+    )
+    parser.add_argument(
+        "--no-telegram", action="store_true",
+        help="skip starting the Telegram frontend",
+    )
+    args = parser.parse_args()
+
+    logging.basicConfig(level=logging.INFO if args.daemon else logging.WARNING)
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+    logging.getLogger("telegram").setLevel(logging.WARNING)
+    logging.getLogger("telegram.ext").setLevel(logging.WARNING)
+
+    try:
+        asyncio.run(_async_main(daemon=args.daemon, with_telegram=not args.no_telegram))
+    except KeyboardInterrupt:
+        pass
 
 
 if __name__ == "__main__":
