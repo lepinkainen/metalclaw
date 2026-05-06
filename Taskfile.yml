@@ -26,5 +26,6 @@ tasks:
           rm -f "$out"
           exit 1
         fi
-  telegram:
-    cmd: uv run python telegram_bot.py
+  daemon:
+    desc: Run headless (Telegram + heartbeat only, no CLI REPL)
+    cmd: uv run python bot.py --daemon
