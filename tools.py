@@ -460,6 +460,7 @@ def list_emails(
         folders = [by_id[fid]["name"] for fid in folder_ids if fid in by_id]
         emails.append(
             {
+                "id": e.get("id", ""),
                 "subject": e.get("subject", ""),
                 "from": from_str,
                 "received_at": e.get("receivedAt", ""),
@@ -474,6 +475,154 @@ def list_emails(
         "total_emails": mb_meta["total"],
         "unread_emails": mb_meta["unread"],
         "emails": emails,
+    }
+
+
+_BODY_CHAR_LIMIT = 20000
+
+
+def _html_to_text(html: str) -> str:
+    from bs4 import BeautifulSoup
+    from markdownify import markdownify
+
+    soup = BeautifulSoup(html, "html.parser")
+    for node in soup(["script", "style", "head", "title", "meta", "link"]):
+        node.decompose()
+    md = markdownify(str(soup), heading_style="ATX")
+    lines = [ln.rstrip() for ln in md.splitlines()]
+    out: list[str] = []
+    blank = 0
+    for ln in lines:
+        if ln.strip():
+            out.append(ln)
+            blank = 0
+        else:
+            blank += 1
+            if blank <= 1:
+                out.append("")
+    return "\n".join(out).strip()
+
+
+@tool(
+    description=(
+        "Read the full body of a single email by id. Use after list_emails when "
+        "you need the actual content (not just the preview snippet). Returns the "
+        "plain-text body when available, otherwise HTML converted to markdown. Long "
+        f"bodies are truncated at {_BODY_CHAR_LIMIT} characters. Also returns "
+        "attachment metadata, with image attachments listed separately under 'images' "
+        "(name, type, size, blob_id, cid). Image bytes are not fetched."
+    ),
+    parameters={
+        "type": "object",
+        "properties": {
+            "email_id": {
+                "type": "string",
+                "description": "JMAP email id, as returned in the 'id' field of list_emails results.",
+            },
+        },
+        "required": ["email_id"],
+    },
+)
+def read_email(email_id: str) -> dict[str, Any]:
+    session = _fm_session()
+    resp = _HTTP.post(
+        session["api_url"],
+        headers={"Authorization": f"Bearer {session['token']}"},
+        json={
+            "using": ["urn:ietf:params:jmap:core", "urn:ietf:params:jmap:mail"],
+            "methodCalls": [
+                [
+                    "Email/get",
+                    {
+                        "accountId": session["account_id"],
+                        "ids": [email_id],
+                        "properties": [
+                            "id",
+                            "subject",
+                            "from",
+                            "to",
+                            "cc",
+                            "receivedAt",
+                            "textBody",
+                            "htmlBody",
+                            "bodyValues",
+                            "attachments",
+                        ],
+                        "fetchTextBodyValues": True,
+                        "fetchHTMLBodyValues": True,
+                    },
+                    "g",
+                ],
+            ],
+        },
+    )
+    resp.raise_for_status()
+    items = resp.json()["methodResponses"][0][1]["list"]
+    if not items:
+        raise ValueError(f"email '{email_id}' not found")
+    e = items[0]
+
+    def _addrs(parts: list[dict[str, Any]] | None) -> str:
+        return ", ".join(
+            f"{p.get('name', '')} <{p.get('email', '')}>" if p.get("name") else p.get("email", "")
+            for p in (parts or [])
+        ).strip()
+
+    body_values = e.get("bodyValues") or {}
+    text_parts = e.get("textBody") or []
+    html_parts = e.get("htmlBody") or []
+
+    body = ""
+    body_format = "none"
+    for part in text_parts:
+        bv = body_values.get(part.get("partId"))
+        if bv and bv.get("value"):
+            body = bv["value"]
+            body_format = "text"
+            break
+    if not body:
+        for part in html_parts:
+            bv = body_values.get(part.get("partId"))
+            if bv and bv.get("value"):
+                body = _html_to_text(bv["value"])
+                body_format = "html-stripped"
+                break
+
+    truncated = False
+    if len(body) > _BODY_CHAR_LIMIT:
+        body = body[:_BODY_CHAR_LIMIT]
+        truncated = True
+
+    attachments = []
+    images = []
+    for a in e.get("attachments") or []:
+        mime = a.get("type", "") or ""
+        is_image = mime.startswith("image/")
+        entry = {
+            "name": a.get("name", ""),
+            "type": mime,
+            "size": a.get("size", 0),
+            "blob_id": a.get("blobId", ""),
+            "cid": a.get("cid"),
+            "disposition": a.get("disposition"),
+            "is_image": is_image,
+        }
+        attachments.append(entry)
+        if is_image:
+            images.append(entry)
+
+    return {
+        "id": e.get("id", ""),
+        "subject": e.get("subject", ""),
+        "from": _addrs(e.get("from")),
+        "to": _addrs(e.get("to")),
+        "cc": _addrs(e.get("cc")),
+        "received_at": e.get("receivedAt", ""),
+        "body": body,
+        "body_format": body_format,
+        "truncated": truncated,
+        "attachments": attachments,
+        "images": images,
     }
 
 
