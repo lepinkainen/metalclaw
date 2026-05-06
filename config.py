@@ -23,8 +23,12 @@ class Config:
     vault_path: Path
     memory_subdir: str
     fastmail_api_token: str | None
+    telegram_bot_token: str | None
     ollama_url: str
     model: str
+    heartbeat_enabled: bool
+    heartbeat_interval_seconds: int
+    heartbeat_active_hours: tuple[int, int] | None
 
     @property
     def memory_dir(self) -> Path:
@@ -35,6 +39,9 @@ _DEFAULTS = {
     "memory_subdir": "Metalclaw/Memory",
     "ollama_url": "http://localhost:11434/api/chat",
     "model": "gemma4:latest",
+    "heartbeat_enabled": True,
+    "heartbeat_interval_seconds": 1800,
+    "heartbeat_active_hours": None,
 }
 
 
@@ -61,14 +68,33 @@ def get_config() -> Config:
         )
 
     fastmail_token = os.environ.get("FASTMAIL_API_TOKEN") or raw.get("fastmail_api_token")
+    telegram_token = os.environ.get("TELEGRAM_BOT_TOKEN") or raw.get("telegram_bot_token")
     ollama_url = os.environ.get("OLLAMA_URL") or raw.get("ollama_url") or _DEFAULTS["ollama_url"]
+
+    active_hours_raw = raw.get("heartbeat_active_hours", _DEFAULTS["heartbeat_active_hours"])
+    active_hours: tuple[int, int] | None
+    if active_hours_raw is None:
+        active_hours = None
+    else:
+        if not (isinstance(active_hours_raw, (list, tuple)) and len(active_hours_raw) == 2):
+            raise ValueError("heartbeat_active_hours must be a [start_hour, end_hour] pair or null")
+        active_hours = (int(active_hours_raw[0]), int(active_hours_raw[1]))
+
+    heartbeat_enabled = raw.get("heartbeat_enabled", _DEFAULTS["heartbeat_enabled"])
+    heartbeat_interval = int(
+        raw.get("heartbeat_interval_seconds", _DEFAULTS["heartbeat_interval_seconds"])
+    )
 
     return Config(
         vault_path=Path(vault_path_str).expanduser(),
         memory_subdir=raw.get("memory_subdir") or _DEFAULTS["memory_subdir"],
         fastmail_api_token=fastmail_token,
+        telegram_bot_token=telegram_token,
         ollama_url=ollama_url,
         model=raw.get("model") or _DEFAULTS["model"],
+        heartbeat_enabled=bool(heartbeat_enabled),
+        heartbeat_interval_seconds=heartbeat_interval,
+        heartbeat_active_hours=active_hours,
     )
 
 

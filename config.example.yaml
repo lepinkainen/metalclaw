@@ -13,8 +13,18 @@ memory_subdir: Metalclaw/Memory
 # Fastmail JMAP API token. Env FASTMAIL_API_TOKEN takes precedence if set.
 fastmail_api_token: fmu1-xxxxxxxxxxxxxxxx
 
+# Telegram bot token from @BotFather. Env TELEGRAM_BOT_TOKEN takes precedence if set.
+telegram_bot_token: 123456:ABC-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+
 # Optional: override Ollama endpoint. Env OLLAMA_URL takes precedence.
 ollama_url: http://localhost:11434/api/chat
 
 # Optional: override model name.
 model: gemma4:latest
+
+# Heartbeat — proactive scheduled checks. Drop a heartbeat-<scope>.md file in
+# <vault_path>/<memory_subdir>/ to opt that scope in.
+heartbeat_enabled: true
+heartbeat_interval_seconds: 1800
+# Optional [start_hour, end_hour] (24h local time). Outside this window, ticks are skipped.
+# heartbeat_active_hours: [8, 22]
