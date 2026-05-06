@@ -1,6 +1,5 @@
 import argparse
 import json
-import os
 import re
 import shlex
 from collections.abc import Callable
@@ -13,7 +12,9 @@ from prompt_toolkit import PromptSession
 from rich.console import Console
 from rich.markdown import Markdown
 
+import memory
 import self_change
+from config import get_config
 from history import SQLiteHistory
 from registry import TOOLS
 
@@ -28,10 +29,21 @@ _COMMANDS = {
     "train": "show train departures: /train <station> [--line R] [--count 5]",
     "weather": "show weather: /weather <location>",
     "mail": "show emails: /mail [--mailbox inbox] [--unread] [--from name] [--count 10]",
+    "remember": "save a preference: /remember <key>=<value>",
+    "forget": "remove a memory entry: /forget <matcher>",
+    "memory": "show your stored long-term memory",
+    "onboard": "answer a few questions to seed long-term memory",
     "help": "show this help",
 }
 
 _show_thinking = False
+_prompt_session: PromptSession | None = None
+_ONBOARDING_STEPS: list[tuple[str, str]] = [
+    ("role", "What's your role / what do you work on?"),
+    ("interests", "What topics matter to you? (comma-separated)"),
+    ("tone", "Preferred tone? (e.g. terse, friendly, formal)"),
+    ("location", "Timezone or city?"),
+]
 
 _THINK_RE = re.compile(r"<think>(.*?)</think>", re.DOTALL)
 
@@ -51,9 +63,7 @@ def _parse_command(text: str) -> tuple[str, str] | None:
     return parts[0], parts[1] if len(parts) > 1 else ""
 
 
-OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://localhost:11434/api/chat")
-MODEL = "gemma4:latest"
-SYSTEM_PROMPT = (
+_SYSTEM_PROMPT_BASE = (
     "You are Metalclaw, a helpful assistant. "
     "The current date and time is {now}. "
     "When a user request can be fulfilled by calling a tool, you MUST use the tool "
@@ -62,8 +72,19 @@ SYSTEM_PROMPT = (
     "Do not add generic warnings, hedging, or suggestions to verify elsewhere unless "
     "the tool result itself indicates uncertainty, staleness, or an error. "
     "If a tool returns source metadata, treat it as authoritative context for how to "
-    "describe the result."
+    "describe the result. "
+    "You have long-term memory across sessions: call set_user_preference, "
+    "add_user_fact, or forget_user_memory to record durable information about the "
+    "user; call get_user_memory to read the full file."
 )
+
+
+def build_system_prompt(scope: str, now: str) -> str:
+    base = _SYSTEM_PROMPT_BASE.format(now=now)
+    summary = memory.summary(scope)
+    if summary:
+        base += f"\n\nKnown about user (scope={scope}):\n{summary}"
+    return base
 
 _CLIENT = httpx.Client(timeout=120.0)
 
@@ -86,11 +107,12 @@ def chat(
     """
     tool_schemas = [t.schema for t in TOOLS.values()]
 
+    cfg = get_config()
     while True:
         response = _CLIENT.post(
-            OLLAMA_URL,
+            cfg.ollama_url,
             json={
-                "model": MODEL,
+                "model": cfg.model,
                 "messages": messages,
                 "tools": tool_schemas or None,
                 "stream": False,
@@ -291,14 +313,75 @@ def _handle_help(_: str) -> None:
     _print_help()
 
 
+def _handle_remember(args: str) -> None:
+    if "=" not in args:
+        console.print("usage: /remember <key>=<value>")
+        return
+    key, value = args.split("=", 1)
+    key, value = key.strip(), value.strip()
+    if not key or not value:
+        console.print("usage: /remember <key>=<value>")
+        return
+    memory.set_preference(key, value)
+    console.print(f"[dim]saved {key}={value}[/dim]")
+
+
+def _handle_forget(args: str) -> None:
+    matcher = args.strip()
+    if not matcher:
+        console.print("usage: /forget <substring>")
+        return
+    if memory.forget(matcher):
+        console.print(f"[dim]forgot entry matching '{matcher}'[/dim]")
+    else:
+        console.print(f"no entry matched '{matcher}'")
+
+
+def _handle_memory(_: str) -> None:
+    _print_bot_markdown(memory.render_full())
+
+
+def _format_interests(raw: str) -> str:
+    items = [s.strip() for s in raw.split(",") if s.strip()]
+    return ", ".join(f"[[{i}]]" for i in items) if items else raw
+
+
+def _handle_onboard(_: str) -> None:
+    mem = memory.load()
+    if mem.preferences:
+        console.print(
+            "[dim]already onboarded — use /memory to inspect, /forget to remove entries[/dim]"
+        )
+        return
+    if _prompt_session is None:
+        console.print("onboarding requires the interactive prompt")
+        return
+    console.print("[dim]onboarding — answer briefly, blank to skip[/dim]")
+    for key, question in _ONBOARDING_STEPS:
+        try:
+            answer = _prompt_session.prompt(f"{question}\n> ").strip()
+        except (EOFError, KeyboardInterrupt):
+            console.print("\n[dim]onboarding aborted[/dim]")
+            return
+        if not answer:
+            continue
+        value = _format_interests(answer) if key == "interests" else answer
+        memory.set_preference(key, value)
+    console.print("[dim]done — restart for memory to enter the system prompt[/dim]")
+
+
 _COMMAND_HANDLERS = {
-    "add-tool": _handle_add_tool,
+    "add-tool":  _handle_add_tool,
     "self-edit": _handle_self_edit,
-    "think":    _handle_think,
-    "train":    _make_tool_handler("train_departures", _parse_train_args,   _format_train_result),
-    "weather":  _make_tool_handler("weather",          _parse_weather_args, _format_weather_result),
-    "mail":     _make_tool_handler("list_emails",      _parse_mail_args,    _format_mail_result),
-    "help":     _handle_help,
+    "think":     _handle_think,
+    "train":     _make_tool_handler("train_departures", _parse_train_args,   _format_train_result),
+    "weather":   _make_tool_handler("weather",          _parse_weather_args, _format_weather_result),
+    "mail":      _make_tool_handler("list_emails",      _parse_mail_args,    _format_mail_result),
+    "remember":  _handle_remember,
+    "forget":    _handle_forget,
+    "memory":    _handle_memory,
+    "onboard":   _handle_onboard,
+    "help":      _handle_help,
 }
 
 
@@ -312,24 +395,27 @@ def _cli_tool_log(name: str, args: dict, short_result: str) -> None:
 def main():
     import tools  # noqa: F401 — triggers @tool registrations
 
+    global _prompt_session
+    memory.current_scope.set("cli")
+
     now = datetime.now().strftime("%Y-%m-%d %H:%M")
     session_id = datetime.now().strftime("%Y%m%dT%H%M%S")
     hist = SQLiteHistory(session_id)
-    prompt_session = PromptSession(history=hist)
+    _prompt_session = PromptSession(history=hist)
 
     messages: list[dict] = [
         {
             "role": "system",
-            "content": SYSTEM_PROMPT.format(now=now),
+            "content": build_system_prompt("cli", now),
         },
     ]
 
-    console.print(f"metalclaw bot ({MODEL}) — type 'quit' to exit")
+    console.print(f"metalclaw bot ({get_config().model}) — type 'quit' to exit")
     console.print(f"  {len(TOOLS)} tool(s) loaded: {', '.join(TOOLS)}\n")
 
     while True:
         try:
-            user_input = prompt_session.prompt("you> ").strip()
+            user_input = _prompt_session.prompt("you> ").strip()
         except (EOFError, KeyboardInterrupt):
             print()
             break

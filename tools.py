@@ -1,10 +1,11 @@
-import os
 import random
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import httpx
 
+import memory
+from config import get_config
 from registry import tool
 
 
@@ -272,9 +273,12 @@ def _fm_session() -> dict[str, str]:
     global _FM_SESSION
     if _FM_SESSION is not None:
         return _FM_SESSION
-    token = os.environ.get("FASTMAIL_API_TOKEN")
+    token = get_config().fastmail_api_token
     if not token:
-        raise ValueError("FASTMAIL_API_TOKEN environment variable not set")
+        raise ValueError(
+            "Fastmail API token not configured. Set fastmail_api_token in config.yaml "
+            "or FASTMAIL_API_TOKEN env var."
+        )
     resp = _HTTP.get(_FASTMAIL_SESSION_URL, headers={"Authorization": f"Bearer {token}"})
     resp.raise_for_status()
     data = resp.json()
@@ -428,3 +432,86 @@ def list_emails(
         "unread_emails": mb["unread"],
         "emails": emails,
     }
+
+
+# --- User memory ---
+
+
+@tool(
+    description=(
+        "Save a structured user preference (key/value) to long-term memory. "
+        "Use for stable facts about how the user wants to be addressed or what "
+        "they care about, e.g. role, tone, interests, timezone."
+    ),
+    parameters={
+        "type": "object",
+        "properties": {
+            "key": {
+                "type": "string",
+                "description": "Short identifier, e.g. 'role', 'tone', 'interests'",
+            },
+            "value": {
+                "type": "string",
+                "description": "Value for this preference. May contain Obsidian [[wikilinks]].",
+            },
+        },
+        "required": ["key", "value"],
+    },
+)
+def set_user_preference(key: str, value: str) -> dict[str, Any]:
+    memory.set_preference(key, value)
+    return {"status": "saved", "key": key, "value": value}
+
+
+@tool(
+    description=(
+        "Append a free-form fact about the user to long-term memory. "
+        "Use for one-off facts that don't fit a key/value preference."
+    ),
+    parameters={
+        "type": "object",
+        "properties": {
+            "text": {
+                "type": "string",
+                "description": "The fact to remember. May contain Obsidian [[wikilinks]].",
+            },
+        },
+        "required": ["text"],
+    },
+)
+def add_user_fact(text: str) -> dict[str, Any]:
+    memory.add_fact(text)
+    return {"status": "saved", "text": text}
+
+
+@tool(
+    description=(
+        "Remove an entry from the user's long-term memory by substring match "
+        "against the key, value, or fact text (case-insensitive)."
+    ),
+    parameters={
+        "type": "object",
+        "properties": {
+            "matcher": {
+                "type": "string",
+                "description": "Substring to match against memory entries.",
+            },
+        },
+        "required": ["matcher"],
+    },
+)
+def forget_user_memory(matcher: str) -> dict[str, Any]:
+    removed = memory.forget(matcher)
+    return {"status": "removed" if removed else "not_found", "matcher": matcher}
+
+
+@tool(
+    description=(
+        "Read the full long-term memory file for this user. Returns the raw "
+        "Obsidian-flavoured markdown so you can reason about preferences, facts, "
+        "and instructions stored across sessions."
+    ),
+    parameters={"type": "object", "properties": {}, "required": []},
+)
+def get_user_memory() -> dict[str, Any]:
+    return {"scope": memory.current_scope.get(), "markdown": memory.render_full()}
