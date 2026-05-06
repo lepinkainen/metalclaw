@@ -1,17 +1,22 @@
 import argparse
+import asyncio
 import json
 import re
 import shlex
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from datetime import datetime
 from pathlib import Path
 from typing import NoReturn
 
 import httpx
 from prompt_toolkit import PromptSession
+from prompt_toolkit.application import run_in_terminal
+from prompt_toolkit.patch_stdout import patch_stdout
 from rich.console import Console
 from rich.markdown import Markdown
 
+import channels
+import heartbeat
 import memory
 import self_change
 from config import get_config
@@ -33,6 +38,7 @@ _COMMANDS = {
     "forget": "remove a memory entry: /forget <matcher>",
     "memory": "show your stored long-term memory",
     "onboard": "answer a few questions to seed long-term memory",
+    "heartbeat": "show heartbeat config / run a tick now (/heartbeat run)",
     "help": "show this help",
 }
 
@@ -351,6 +357,42 @@ def _format_interests(raw: str) -> str:
     return ", ".join(f"[[{i}]]" for i in items) if items else raw
 
 
+def _handle_heartbeat(args: str) -> None:
+    sub = args.strip()
+    path = heartbeat.heartbeat_path_for(memory.current_scope.get())
+    if sub == "run":
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            asyncio.run(heartbeat.run_tick())
+        else:
+            asyncio.create_task(heartbeat.run_tick())
+        console.print("[dim]heartbeat tick fired[/dim]")
+        return
+    cfg = get_config()
+    console.print(f"[dim]heartbeat enabled={cfg.heartbeat_enabled} interval={cfg.heartbeat_interval_seconds}s[/dim]")
+    console.print(f"[dim]checklist: {path}[/dim]")
+    if path.exists():
+        try:
+            hb = heartbeat.parse_heartbeat_file(path.read_text(encoding="utf-8"))
+        except ValueError as e:
+            console.print(f"[red]parse error: {e}[/red]")
+            return
+        if hb.tasks:
+            for t in hb.tasks:
+                console.print(f"  • {t.name}  every {t.interval_seconds}s")
+        else:
+            console.print("[dim]no tasks defined (free-form body only)[/dim]")
+    else:
+        template = REPO_ROOT / "heartbeat.example.md"
+        console.print(
+            f"[dim]no checklist — copy {template} to the path above to opt in[/dim]"
+        )
+
+
+_pending_onboarding: list[tuple[str, str]] = []
+
+
 def _handle_onboard(_: str) -> None:
     mem = memory.load()
     if mem.preferences:
@@ -358,21 +400,10 @@ def _handle_onboard(_: str) -> None:
             "[dim]already onboarded — use /memory to inspect, /forget to remove entries[/dim]"
         )
         return
-    if _prompt_session is None:
-        console.print("onboarding requires the interactive prompt")
-        return
-    console.print("[dim]onboarding — answer briefly, blank to skip[/dim]")
-    for key, question in _ONBOARDING_STEPS:
-        try:
-            answer = _prompt_session.prompt(f"{question}\n> ").strip()
-        except (EOFError, KeyboardInterrupt):
-            console.print("\n[dim]onboarding aborted[/dim]")
-            return
-        if not answer:
-            continue
-        value = _format_interests(answer) if key == "interests" else answer
-        memory.set_preference(key, value)
-    console.print("[dim]done — restart for memory to enter the system prompt[/dim]")
+    _pending_onboarding[:] = list(_ONBOARDING_STEPS)
+    key, question = _pending_onboarding[0]
+    console.print("[dim]onboarding — answer briefly at the prompt, '-' to skip a step[/dim]")
+    console.print(f"[dim]{question}[/dim]")
 
 
 _COMMAND_HANDLERS = {
@@ -386,6 +417,7 @@ _COMMAND_HANDLERS = {
     "forget":    _handle_forget,
     "memory":    _handle_memory,
     "onboard":   _handle_onboard,
+    "heartbeat": _handle_heartbeat,
     "help":      _handle_help,
 }
 
@@ -397,11 +429,28 @@ def _cli_tool_log(name: str, args: dict, short_result: str) -> None:
     console.print(f"  [dim][tool: {name}({args_summary})] → {short_result}[/dim]")
 
 
-def main():
+class _CLIChannel:
+    name = "cli"
+
+    async def notify(self, scope: str, text: str) -> None:
+        def _print() -> None:
+            console.print()
+            console.print("[bold cyan]heartbeat>[/bold cyan]")
+            console.print(Markdown(text))
+            console.print()
+
+        run_in_terminal(_print)
+
+    def active_scopes(self) -> Iterable[str]:
+        return ("cli",)
+
+
+async def _async_main() -> None:
     import tools  # noqa: F401 — triggers @tool registrations
 
     global _prompt_session
     memory.current_scope.set("cli")
+    channels.register(_CLIChannel())
 
     now = datetime.now().strftime("%Y-%m-%d %H:%M")
     session_id = datetime.now().strftime("%Y%m%dT%H%M%S")
@@ -418,45 +467,73 @@ def main():
     console.print(f"metalclaw bot ({get_config().model}) — type 'quit' to exit")
     console.print(f"  {len(TOOLS)} tool(s) loaded: {', '.join(TOOLS)}\n")
 
-    while True:
+    stop = asyncio.Event()
+    hb_task = asyncio.create_task(heartbeat.run(stop))
+    try:
+        with patch_stdout(raw=True):
+            while True:
+                try:
+                    user_input = (await _prompt_session.prompt_async("you> ")).strip()
+                except (EOFError, KeyboardInterrupt):
+                    print()
+                    break
+                if not user_input or user_input.lower() in ("quit", "exit"):
+                    break
+
+                parsed = _parse_command(user_input)
+                if parsed is not None:
+                    cmd, args = parsed
+                    handler = _COMMAND_HANDLERS.get(cmd)
+                    if handler is None:
+                        console.print(f"unknown command: /{cmd}  (try /help)")
+                        continue
+                    try:
+                        handler(args)
+                    except ValueError as e:
+                        console.print(str(e))
+                    continue
+
+                if _pending_onboarding:
+                    key, _question = _pending_onboarding.pop(0)
+                    if user_input != "-":
+                        value = _format_interests(user_input) if key == "interests" else user_input
+                        memory.set_preference(key, value)
+                    if _pending_onboarding:
+                        _, next_q = _pending_onboarding[0]
+                        console.print(f"[dim]{next_q}[/dim]")
+                    else:
+                        console.print("[dim]done — restart for memory to enter the system prompt[/dim]")
+                    continue
+
+                messages.append({"role": "user", "content": user_input})
+
+                try:
+                    with console.status("[dim]thinking…[/dim]", spinner="dots"):
+                        reply = await asyncio.get_running_loop().run_in_executor(
+                            None, lambda: chat(messages, on_tool_call=_cli_tool_log)
+                        )
+                except Exception as e:
+                    console.print(f"\n[bold]bot>[/bold] Error: {e}\n")
+                    messages.pop()
+                    continue
+
+                messages.append({"role": "assistant", "content": reply})
+                hist.save_assistant(reply)
+
+                thinking, clean_reply = _split_thinking(reply)
+                if thinking and _show_thinking:
+                    console.print(f"\n[dim]{thinking}[/dim]")
+                _print_bot_markdown(clean_reply)
+    finally:
+        stop.set()
         try:
-            user_input = _prompt_session.prompt("you> ").strip()
-        except (EOFError, KeyboardInterrupt):
-            print()
-            break
-        if not user_input or user_input.lower() in ("quit", "exit"):
-            break
+            await asyncio.wait_for(hb_task, timeout=5)
+        except (asyncio.TimeoutError, asyncio.CancelledError):
+            hb_task.cancel()
 
-        parsed = _parse_command(user_input)
-        if parsed is not None:
-            cmd, args = parsed
-            handler = _COMMAND_HANDLERS.get(cmd)
-            if handler is None:
-                console.print(f"unknown command: /{cmd}  (try /help)")
-                continue
-            try:
-                handler(args)
-            except ValueError as e:
-                console.print(str(e))
-            continue
 
-        messages.append({"role": "user", "content": user_input})
-
-        try:
-            with console.status("[dim]thinking…[/dim]", spinner="dots"):
-                reply = chat(messages, on_tool_call=_cli_tool_log)
-        except Exception as e:
-            console.print(f"\n[bold]bot>[/bold] Error: {e}\n")
-            messages.pop()
-            continue
-
-        messages.append({"role": "assistant", "content": reply})
-        hist.save_assistant(reply)
-
-        thinking, clean_reply = _split_thinking(reply)
-        if thinking and _show_thinking:
-            console.print(f"\n[dim]{thinking}[/dim]")
-        _print_bot_markdown(clean_reply)
+def main() -> None:
+    asyncio.run(_async_main())
 
 
 if __name__ == "__main__":
