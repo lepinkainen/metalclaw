@@ -8,6 +8,7 @@ venv/
 env/
 ENV/
 .envrc
+config.yaml
 
 # Python bytecode and caches
 __pycache__/

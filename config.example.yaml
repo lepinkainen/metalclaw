@@ -1,0 +1,17 @@
+# Copy to $XDG_CONFIG_HOME/metalclaw/config.yaml (or ~/.config/metalclaw/config.yaml)
+# and fill in your values. Override the location with METALCLAW_CONFIG=/path/to/config.yaml.
+
+# Absolute path to your Obsidian vault. Memory files live under <vault_path>/<memory_subdir>/.
+vault_path: /absolute/path/to/ObsidianVault
+
+# Subdirectory inside the vault for Metalclaw memory files. Created if missing.
+memory_subdir: Metalclaw/Memory
+
+# Fastmail JMAP API token. Env FASTMAIL_API_TOKEN takes precedence if set.
+fastmail_api_token: fmu1-xxxxxxxxxxxxxxxx
+
+# Optional: override Ollama endpoint. Env OLLAMA_URL takes precedence.
+ollama_url: http://localhost:11434/api/chat
+
+# Optional: override model name.
+model: gemma4:latest
