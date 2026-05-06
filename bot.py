@@ -258,9 +258,12 @@ def _parse_weather_args(args: str) -> dict:
 
 def _format_mail_result(result: dict) -> str:
     name = result["mailbox"]
-    total = result["total_emails"]
-    unread = result["unread_emails"]
-    header = f"{name}: {total} total, {unread} unread"
+    total = result.get("total_emails")
+    unread = result.get("unread_emails")
+    if total is None and unread is None:
+        header = f"{name}: {len(result.get('emails', []))} returned"
+    else:
+        header = f"{name}: {total} total, {unread} unread"
     emails = result.get("emails", [])
     if not emails:
         return f"{header}\n\nNo emails found."
@@ -268,7 +271,9 @@ def _format_mail_result(result: dict) -> str:
     for i, e in enumerate(emails, 1):
         unread_tag = " [UNREAD]" if e.get("unread") else ""
         received = e.get("received_at", "")[:10]
-        lines.append(f"{i}. {e['from']}  |  {received}{unread_tag}")
+        folders = e.get("folders") or []
+        folder_tag = f"  ({', '.join(folders)})" if folders else ""
+        lines.append(f"{i}. {e['from']}  |  {received}{unread_tag}{folder_tag}")
         lines.append(f"   {e['subject']}")
         if e.get("preview"):
             lines.append(f"   {e['preview'][:100]}")

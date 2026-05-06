@@ -309,17 +309,20 @@ def _fm_mailboxes() -> dict[str, Any]:
     mailboxes = resp.json()["methodResponses"][0][1]["list"]
     by_role: dict[str, dict[str, Any]] = {}
     by_name: dict[str, dict[str, Any]] = {}
+    by_id: dict[str, dict[str, Any]] = {}
     for mb in mailboxes:
         entry = {
             "id": mb["id"],
             "name": mb["name"],
+            "role": mb.get("role"),
             "total": mb.get("totalEmails", 0),
             "unread": mb.get("unreadEmails", 0),
         }
         if mb.get("role"):
             by_role[mb["role"]] = entry
         by_name[mb["name"].lower()] = entry
-    _FM_MAILBOXES = {"by_role": by_role, "by_name": by_name}
+        by_id[mb["id"]] = entry
+    _FM_MAILBOXES = {"by_role": by_role, "by_name": by_name, "by_id": by_id}
     return _FM_MAILBOXES
 
 
@@ -334,13 +337,23 @@ def _fm_lookup_mailbox(name: str) -> dict[str, Any]:
 
 
 @tool(
-    description="List and filter emails from a Fastmail mailbox. Use to answer questions like 'what's in my inbox?', 'how many unread emails do I have?', or 'is there an email from X?'.",
+    description=(
+        "List and filter emails from Fastmail. Use to answer questions like 'what's in my inbox?', "
+        "'how many unread emails do I have?', or 'is there an email from X?'. "
+        "Pass mailbox='all' to sweep every folder/label at once (skips trash, junk, drafts, sent) — "
+        "use this for cross-folder unread triage. Each result includes 'folders' so the caller can "
+        "rank by source (e.g. Newsletters vs Work)."
+    ),
     parameters={
         "type": "object",
         "properties": {
             "mailbox": {
                 "type": "string",
-                "description": "Mailbox to search. Accepts role names (inbox, sent, trash, drafts, archive, junk) or custom label/folder names. Case-insensitive. Default: inbox",
+                "description": (
+                    "Mailbox to search. Accepts role names (inbox, sent, trash, drafts, archive, junk), "
+                    "custom label/folder names, or 'all' for every folder (excluding trash/junk/drafts/sent). "
+                    "Case-insensitive. Default: inbox"
+                ),
             },
             "unread_only": {
                 "type": "boolean",
@@ -352,7 +365,7 @@ def _fm_lookup_mailbox(name: str) -> dict[str, Any]:
             },
             "limit": {
                 "type": "integer",
-                "description": "Maximum number of emails to return (1–50, default 10)",
+                "description": "Maximum number of emails to return (1–50, default 10; default 50 when mailbox='all')",
             },
         },
         "required": [],
@@ -362,20 +375,47 @@ def list_emails(
     mailbox: str = "inbox",
     unread_only: bool = False,
     from_search: str | None = None,
-    limit: int = 10,
+    limit: int | None = None,
 ) -> dict[str, Any]:
-    limit = min(max(1, limit), 50)
     session = _fm_session()
-    mb = _fm_lookup_mailbox(mailbox)
+    mbs = _fm_mailboxes()
+    is_all = mailbox.lower() == "all"
 
-    conditions: list[dict[str, Any]] = [{"inMailbox": mb["id"]}]
+    if limit is None:
+        limit = 50 if is_all else 10
+    limit = min(max(1, limit), 50)
+
+    conditions: list[dict[str, Any]] = []
+    if is_all:
+        skip_roles = ("trash", "junk", "drafts", "sent")
+        skip_ids = [mbs["by_role"][r]["id"] for r in skip_roles if r in mbs["by_role"]]
+        if skip_ids:
+            conditions.append({"inMailboxOtherThan": skip_ids})
+        mb_meta: dict[str, Any] = {"name": "all", "total": None, "unread": None}
+    else:
+        mb = _fm_lookup_mailbox(mailbox)
+        conditions.append({"inMailbox": mb["id"]})
+        mb_meta = {"name": mb["name"], "total": mb["total"], "unread": mb["unread"]}
+
     if unread_only:
         conditions.append({"notKeyword": "$seen"})
     if from_search:
         conditions.append({"from": from_search})
-    filter_obj: dict[str, Any] = (
-        conditions[0] if len(conditions) == 1 else {"operator": "AND", "conditions": conditions}
-    )
+
+    if not conditions:
+        filter_obj: dict[str, Any] | None = None
+    elif len(conditions) == 1:
+        filter_obj = conditions[0]
+    else:
+        filter_obj = {"operator": "AND", "conditions": conditions}
+
+    query_args: dict[str, Any] = {
+        "accountId": session["account_id"],
+        "sort": [{"property": "receivedAt", "isAscending": False}],
+        "limit": limit,
+    }
+    if filter_obj is not None:
+        query_args["filter"] = filter_obj
 
     resp = _HTTP.post(
         session["api_url"],
@@ -383,22 +423,21 @@ def list_emails(
         json={
             "using": ["urn:ietf:params:jmap:core", "urn:ietf:params:jmap:mail"],
             "methodCalls": [
-                [
-                    "Email/query",
-                    {
-                        "accountId": session["account_id"],
-                        "filter": filter_obj,
-                        "sort": [{"property": "receivedAt", "isAscending": False}],
-                        "limit": limit,
-                    },
-                    "q",
-                ],
+                ["Email/query", query_args, "q"],
                 [
                     "Email/get",
                     {
                         "accountId": session["account_id"],
                         "#ids": {"resultOf": "q", "name": "Email/query", "path": "/ids"},
-                        "properties": ["id", "subject", "from", "receivedAt", "keywords", "preview"],
+                        "properties": [
+                            "id",
+                            "subject",
+                            "from",
+                            "receivedAt",
+                            "keywords",
+                            "preview",
+                            "mailboxIds",
+                        ],
                     },
                     "g",
                 ],
@@ -409,6 +448,7 @@ def list_emails(
     responses = {r[2]: r[1] for r in resp.json()["methodResponses"]}
     emails_raw = responses["g"]["list"]
 
+    by_id = mbs["by_id"]
     emails = []
     for e in emails_raw:
         frm = e.get("from") or []
@@ -416,6 +456,8 @@ def list_emails(
             f"{p.get('name', '')} <{p.get('email', '')}>" if p.get("name") else p.get("email", "")
             for p in frm
         ).strip()
+        folder_ids = list((e.get("mailboxIds") or {}).keys())
+        folders = [by_id[fid]["name"] for fid in folder_ids if fid in by_id]
         emails.append(
             {
                 "subject": e.get("subject", ""),
@@ -423,13 +465,14 @@ def list_emails(
                 "received_at": e.get("receivedAt", ""),
                 "unread": "$seen" not in (e.get("keywords") or {}),
                 "preview": e.get("preview", ""),
+                "folders": folders,
             }
         )
 
     return {
-        "mailbox": mb["name"],
-        "total_emails": mb["total"],
-        "unread_emails": mb["unread"],
+        "mailbox": mb_meta["name"],
+        "total_emails": mb_meta["total"],
+        "unread_emails": mb_meta["unread"],
         "emails": emails,
     }
 
