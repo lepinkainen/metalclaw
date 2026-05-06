@@ -5,6 +5,7 @@ from typing import Any
 import httpx
 
 import memory
+import vault_search
 from config import get_config
 from registry import tool
 
@@ -707,3 +708,61 @@ def forget_user_memory(matcher: str) -> dict[str, Any]:
 )
 def get_user_memory() -> dict[str, Any]:
     return {"scope": memory.current_scope.get(), "markdown": memory.render_full()}
+
+
+# --- Obsidian vault search ---
+
+
+@tool(
+    description=(
+        "Search the user's Obsidian vault for notes matching a query (ripgrep "
+        "regex or literal text). Returns snippets with file paths and line "
+        "numbers. Use read_note afterwards to fetch the full body of a "
+        "promising hit."
+    ),
+    parameters={
+        "type": "object",
+        "properties": {
+            "query": {
+                "type": "string",
+                "description": "Ripgrep regex or literal text to search for.",
+            },
+            "max_results": {
+                "type": "integer",
+                "description": "Maximum number of hits to return (default 20, max 200).",
+            },
+            "context_lines": {
+                "type": "integer",
+                "description": "Lines of context before and after each match (default 1, max 10).",
+            },
+        },
+        "required": ["query"],
+    },
+)
+def search_vault(
+    query: str,
+    max_results: int = 20,
+    context_lines: int = 1,
+) -> dict[str, Any]:
+    return vault_search.search(query, max_results=max_results, context_lines=context_lines)
+
+
+@tool(
+    description=(
+        "Read a markdown note from the user's Obsidian vault by path relative "
+        "to the vault root (e.g. 'Projects/Metalclaw.md'). Refuses paths "
+        "outside the vault and non-markdown files."
+    ),
+    parameters={
+        "type": "object",
+        "properties": {
+            "path": {
+                "type": "string",
+                "description": "Path relative to the vault root, e.g. 'Projects/Metalclaw.md'.",
+            },
+        },
+        "required": ["path"],
+    },
+)
+def read_note(path: str) -> dict[str, Any]:
+    return vault_search.read(path)

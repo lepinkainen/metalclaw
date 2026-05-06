@@ -25,6 +25,8 @@ from bot import (
     _format_weather_result,
     _parse_mail_args,
     _format_mail_result,
+    _parse_search_args,
+    _format_search_result,
     _ONBOARDING_STEPS,
     _format_interests,
 )
@@ -139,6 +141,7 @@ _TOOL_COMMANDS: dict[str, tuple] = {
     "train":   ("train_departures", _parse_train_args,   _format_train_result),
     "weather": ("weather",          _parse_weather_args, _format_weather_result),
     "mail":    ("list_emails",      _parse_mail_args,    _format_mail_result),
+    "search":  ("search_vault",     _parse_search_args,  _format_search_result),
 }
 
 _HELP_TEXT = "\n".join([
@@ -146,6 +149,7 @@ _HELP_TEXT = "\n".join([
     "/train <station> [--line R] [--count 5]",
     "/weather <location>",
     "/mail [--mailbox inbox] [--unread] [--from name] [--count 10]",
+    "/search <query> [--max 20] [--context 1] — search the Obsidian vault",
     "/remember <key>=<value> — save a preference",
     "/forget <substring> — remove a memory entry",
     "/memory — show stored memory",
@@ -300,7 +304,7 @@ async def _async_main() -> None:
         )
     app = Application.builder().token(token).build()
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-    for cmd in ("help", "train", "weather", "mail", "new", "remember", "forget", "memory", "onboard", "heartbeat"):
+    for cmd in ("help", "train", "weather", "mail", "search", "new", "remember", "forget", "memory", "onboard", "heartbeat"):
         app.add_handler(CommandHandler(cmd, _make_cmd_handler(cmd)))
 
     channels.register(_TelegramChannel(app))

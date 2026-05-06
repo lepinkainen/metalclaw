@@ -34,6 +34,7 @@ _COMMANDS = {
     "train": "show train departures: /train <station> [--line R] [--count 5]",
     "weather": "show weather: /weather <location>",
     "mail": "show emails: /mail [--mailbox inbox] [--unread] [--from name] [--count 10]",
+    "search": "search the Obsidian vault: /search <query> [--max 20] [--context 1]",
     "remember": "save a preference: /remember <key>=<value>",
     "forget": "remove a memory entry: /forget <matcher>",
     "memory": "show your stored long-term memory",
@@ -296,6 +297,46 @@ def _parse_mail_args(args: str) -> dict:
     return {"mailbox": ns.mailbox, "unread_only": ns.unread, "from_search": ns.from_search, "limit": ns.count}
 
 
+def _parse_search_args(args: str) -> dict:
+    p = _ArgParser(prog="/search", add_help=False)
+    p.add_argument("--max", dest="max_results", type=int, default=20)
+    p.add_argument("--context", dest="context_lines", type=int, default=1)
+    p.add_argument("query", nargs="+")
+    try:
+        parts = shlex.split(args)
+    except ValueError as e:
+        raise ValueError(f"invalid /search arguments: {e}") from e
+    if not parts:
+        raise ValueError("usage: /search <query> [--max N] [--context N]")
+    ns = p.parse_args(parts)
+    return {
+        "query": " ".join(ns.query),
+        "max_results": ns.max_results,
+        "context_lines": ns.context_lines,
+    }
+
+
+def _format_search_result(result: dict) -> str:
+    hits = result.get("hits", [])
+    query = result.get("query", "")
+    if not hits:
+        return f"No matches for `{query}` in the vault."
+    lines = [f"**{len(hits)}** match(es) for `{query}`"]
+    if result.get("truncated"):
+        lines[0] += " (truncated)"
+    lines.append("")
+    for hit in hits:
+        path = hit.get("path", "?")
+        line_no = hit.get("line_number", "?")
+        snippet = hit.get("line", "")
+        lines.append(f"- **{path}:{line_no}** — {snippet}")
+        for ctx in hit.get("before", []):
+            lines.append(f"    {ctx}")
+        for ctx in hit.get("after", []):
+            lines.append(f"    {ctx}")
+    return "\n".join(lines)
+
+
 def _print_bot_markdown(text: str) -> None:
     console.print()
     console.print("[bold]bot>[/bold]")
@@ -413,6 +454,7 @@ _COMMAND_HANDLERS = {
     "train":     _make_tool_handler("train_departures", _parse_train_args,   _format_train_result),
     "weather":   _make_tool_handler("weather",          _parse_weather_args, _format_weather_result),
     "mail":      _make_tool_handler("list_emails",      _parse_mail_args,    _format_mail_result),
+    "search":    _make_tool_handler("search_vault",     _parse_search_args,  _format_search_result),
     "remember":  _handle_remember,
     "forget":    _handle_forget,
     "memory":    _handle_memory,

@@ -27,6 +27,27 @@ def test_loads_vault_path_and_defaults(tmp_path, cfg_file):
     assert cfg.ollama_url == "http://localhost:11434/api/chat"
     assert cfg.model == "gemma4:latest"
     assert cfg.fastmail_api_token is None
+    assert cfg.vault_search_excludes == ()
+
+
+def test_vault_search_excludes_round_trip(tmp_path, cfg_file):
+    _write(
+        cfg_file,
+        vault_path=str(tmp_path / "vault"),
+        vault_search_excludes=["Notion Export/**", "Journal/**"],
+    )
+    cfg = config.get_config()
+    assert cfg.vault_search_excludes == ("Notion Export/**", "Journal/**")
+
+
+def test_vault_search_excludes_rejects_non_list(tmp_path, cfg_file):
+    _write(
+        cfg_file,
+        vault_path=str(tmp_path / "vault"),
+        vault_search_excludes="Notion Export/**",
+    )
+    with pytest.raises(ValueError, match="vault_search_excludes"):
+        config.get_config()
 
 
 def test_yaml_overrides_defaults(tmp_path, cfg_file):

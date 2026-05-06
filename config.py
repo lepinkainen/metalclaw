@@ -29,6 +29,7 @@ class Config:
     heartbeat_enabled: bool
     heartbeat_interval_seconds: int
     heartbeat_active_hours: tuple[int, int] | None
+    vault_search_excludes: tuple[str, ...]
 
     @property
     def memory_dir(self) -> Path:
@@ -42,6 +43,7 @@ _DEFAULTS = {
     "heartbeat_enabled": True,
     "heartbeat_interval_seconds": 1800,
     "heartbeat_active_hours": None,
+    "vault_search_excludes": (),
 }
 
 
@@ -85,6 +87,14 @@ def get_config() -> Config:
         raw.get("heartbeat_interval_seconds", _DEFAULTS["heartbeat_interval_seconds"])
     )
 
+    excludes_raw = raw.get("vault_search_excludes", _DEFAULTS["vault_search_excludes"])
+    if excludes_raw is None:
+        excludes: tuple[str, ...] = ()
+    elif isinstance(excludes_raw, (list, tuple)):
+        excludes = tuple(str(e) for e in excludes_raw)
+    else:
+        raise ValueError("vault_search_excludes must be a list of glob patterns")
+
     return Config(
         vault_path=Path(vault_path_str).expanduser(),
         memory_subdir=raw.get("memory_subdir") or _DEFAULTS["memory_subdir"],
@@ -95,6 +105,7 @@ def get_config() -> Config:
         heartbeat_enabled=bool(heartbeat_enabled),
         heartbeat_interval_seconds=heartbeat_interval,
         heartbeat_active_hours=active_hours,
+        vault_search_excludes=excludes,
     )
 
 
