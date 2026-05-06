@@ -24,7 +24,7 @@ Env vars: `TELEGRAM_BOT_TOKEN` (required for `telegram_bot.py`), `METALCLAW_CONF
 
 ## Configuration
 
-YAML config at `$XDG_CONFIG_HOME/metalclaw/config.yaml` (or `~/.config/metalclaw/config.yaml`). Override the path with `METALCLAW_CONFIG=/path/to/config.yaml`. See `config.example.yaml` for fields: `vault_path`, `memory_subdir`, `fastmail_api_token`, `ollama_url`, `model`. The file is `.gitignore`d. Loaded lazily on first `get_config()` call (cached).
+YAML config search order: `METALCLAW_CONFIG` env var → `./config.yaml` in cwd (handy for dev) → `$XDG_CONFIG_HOME/metalclaw/config.yaml` (or `~/.config/metalclaw/config.yaml`). See `config.example.yaml` for fields: `vault_path`, `memory_subdir`, `fastmail_api_token`, `ollama_url`, `model`. The file is `.gitignore`d. Loaded lazily on first `get_config()` call (cached).
 
 ## Architecture
 

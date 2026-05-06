@@ -7,9 +7,13 @@ import yaml
 
 
 def _config_path() -> Path:
+    """Search order: METALCLAW_CONFIG env, ./config.yaml in cwd, then XDG default."""
     override = os.environ.get("METALCLAW_CONFIG")
     if override:
         return Path(override).expanduser()
+    cwd_path = Path.cwd() / "config.yaml"
+    if cwd_path.exists():
+        return cwd_path
     xdg = os.environ.get("XDG_CONFIG_HOME") or (Path.home() / ".config")
     return Path(xdg) / "metalclaw" / "config.yaml"
 

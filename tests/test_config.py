@@ -68,3 +68,37 @@ def test_missing_vault_path_raises(cfg_file):
 def test_memory_dir_property(tmp_path, cfg_file):
     _write(cfg_file, vault_path=str(tmp_path / "vault"), memory_subdir="A/B")
     assert config.get_config().memory_dir == tmp_path / "vault" / "A" / "B"
+
+
+def test_cwd_config_used_when_no_env_override(tmp_path, monkeypatch):
+    monkeypatch.delenv("METALCLAW_CONFIG", raising=False)
+    monkeypatch.delenv("FASTMAIL_API_TOKEN", raising=False)
+    monkeypatch.delenv("OLLAMA_URL", raising=False)
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "config.yaml").write_text(
+        yaml.safe_dump({"vault_path": str(tmp_path / "vault"), "model": "from-cwd"})
+    )
+    config.reset_cache()
+    try:
+        assert config.get_config().model == "from-cwd"
+    finally:
+        config.reset_cache()
+
+
+def test_env_override_beats_cwd_config(tmp_path, monkeypatch):
+    monkeypatch.delenv("FASTMAIL_API_TOKEN", raising=False)
+    monkeypatch.delenv("OLLAMA_URL", raising=False)
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "config.yaml").write_text(
+        yaml.safe_dump({"vault_path": str(tmp_path / "cwd-vault"), "model": "from-cwd"})
+    )
+    env_cfg = tmp_path / "env-config.yaml"
+    env_cfg.write_text(
+        yaml.safe_dump({"vault_path": str(tmp_path / "env-vault"), "model": "from-env"})
+    )
+    monkeypatch.setenv("METALCLAW_CONFIG", str(env_cfg))
+    config.reset_cache()
+    try:
+        assert config.get_config().model == "from-env"
+    finally:
+        config.reset_cache()

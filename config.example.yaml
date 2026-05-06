@@ -1,5 +1,8 @@
-# Copy to $XDG_CONFIG_HOME/metalclaw/config.yaml (or ~/.config/metalclaw/config.yaml)
-# and fill in your values. Override the location with METALCLAW_CONFIG=/path/to/config.yaml.
+# Copy to one of (search order):
+#   1. $METALCLAW_CONFIG (env override, absolute path)
+#   2. ./config.yaml in the working directory (handy for dev — gitignored)
+#   3. $XDG_CONFIG_HOME/metalclaw/config.yaml (or ~/.config/metalclaw/config.yaml)
+# and fill in your values.
 
 # Absolute path to your Obsidian vault. Memory files live under <vault_path>/<memory_subdir>/.
 vault_path: /absolute/path/to/ObsidianVault
