@@ -177,6 +177,16 @@ async def _discord_dispatch_command(
             _get_discord_session(channel_id),
             args.strip(),
         )
+    elif cmd in ("add-tool", "add_tool", "addtool"):
+        await common.run_add_tool(send, args, scope)
+    elif cmd == "approve":
+        await common.run_approve(send, scope)
+    elif cmd in ("approve_force", "approve-force"):
+        await common.run_approve(send, scope, force=True)
+    elif cmd == "reject":
+        await common.run_reject(send, scope)
+    elif cmd == "diff":
+        await common.run_diff(send, scope)
     elif cmd in common.TOOL_COMMANDS:
         tool_name, parser, formatter = common.TOOL_COMMANDS[cmd]
         try:

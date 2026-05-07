@@ -103,12 +103,12 @@ def finalise_add_tool_live(state: LiveAddState, choice: str) -> ApprovalResult:
     if state.new_file is None or state.slug is None:
         return ApprovalResult(choice, False, "no pending tool")
 
-    norm = choice.strip().lower().lstrip("/")
+    norm = choice.strip().lower().lstrip("/").replace("-", "_")
 
     if norm == "diff":
         return ApprovalResult(choice, True, "diff", diff=state.diff or "(no diff)")
 
-    if norm in {"approve", "approve-force"}:
+    if norm in {"approve", "approve_force"}:
         all_passed = all(state.gate_results.values())
         if norm == "approve" and not all_passed:
             return ApprovalResult(

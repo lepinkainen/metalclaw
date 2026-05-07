@@ -47,7 +47,7 @@ HELP_LINES: list[str] = [
     "/heartbeat — show heartbeat config; /heartbeat run to fire now",
     "/big <query> — ask the escalation cloud model directly",
     "/add-tool <description> — write a new tool live (CLI/Telegram/Discord)",
-    "/approve | /approve-force | /reject | /diff — resolve a pending self-change",
+    "/approve | /approve_force | /reject | /diff — resolve a pending self-change",
     "/new — reset this conversation",
     "/help — this message",
 ]
@@ -352,7 +352,7 @@ def _format_self_change_summary(state: live_tool.LiveAddState) -> str:
         marker = "ok" if state.gate_results[gate] else "FAIL"
         msg = state.gate_messages.get(gate, "")
         lines.append(f"  {gate}: {marker} — {msg}" if msg else f"  {gate}: {marker}")
-    lines.append("commands: /approve  /approve-force  /reject  /diff")
+    lines.append("commands: /approve  /approve_force  /reject  /diff")
     return "\n".join(lines)
 
 
@@ -362,7 +362,7 @@ async def run_add_tool(send: SendFn, request: str, scope: str) -> None:
         return
     if scope in _pending_self_change:
         await send(
-            "a self-change is already pending — /approve, /approve-force, /reject, or /diff first"
+            "a self-change is already pending — /approve, /approve_force, /reject, or /diff first"
         )
         return
     await send("running self-change… this can take a few minutes.")

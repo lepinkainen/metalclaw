@@ -31,8 +31,12 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 console = Console(highlight=False)
 
 _COMMANDS = {
-    "add-tool": "add a new tool — describe what it should do",
-    "self-edit": "make a general code change — describe what to change",
+    "add-tool": "live tool addition — describes the tool, registers in this session, persists",
+    "self-edit": "make a general code change — describe what to change (full lint/build/test)",
+    "approve": "approve a pending self-change (live or self-edit)",
+    "approve_force": "approve a pending self-change despite failing gates",
+    "reject": "reject a pending self-change and revert it",
+    "diff": "show diff of a pending self-change",
     "think": "toggle display of model thinking (off by default)",
     "train": "show train departures: /train <station> [--line R] [--count 5]",
     "weather": "show weather: /weather <location>",
@@ -56,11 +60,28 @@ def _print_help() -> None:
         console.print(f"  /{name}  —  {desc}")
 
 
-def _handle_add_tool(args: str) -> None:
-    request = f"Add a new tool: {args}"
-    result = self_change.run_self_change(request, REPO_ROOT)
-    status = "approved" if result.approved else "rejected"
-    console.print(f"\n[dim][self-change {status}][/dim]\n")
+async def _handle_add_tool(args: str) -> None:
+    if not args.strip():
+        console.print("usage: /add-tool <description>")
+        return
+    with console.status("[dim]running self-change…[/dim]", spinner="dots"):
+        await common.run_add_tool(_cli_send_dim, args, "cli")
+
+
+async def _handle_approve(_: str) -> None:
+    await common.run_approve(_cli_send_dim, "cli")
+
+
+async def _handle_approve_force(_: str) -> None:
+    await common.run_approve(_cli_send_dim, "cli", force=True)
+
+
+async def _handle_reject(_: str) -> None:
+    await common.run_reject(_cli_send_dim, "cli")
+
+
+async def _handle_diff(_: str) -> None:
+    await common.run_diff(_cli_send_dim, "cli")
 
 
 def _handle_self_edit(args: str) -> None:
@@ -154,8 +175,13 @@ async def _handle_heartbeat(args: str) -> None:
 
 
 _COMMAND_HANDLERS = {
-    "add-tool":  _handle_add_tool,
-    "self-edit": _handle_self_edit,
+    "add-tool":      _handle_add_tool,
+    "self-edit":     _handle_self_edit,
+    "approve":       _handle_approve,
+    "approve_force": _handle_approve_force,
+    "approve-force": _handle_approve_force,
+    "reject":        _handle_reject,
+    "diff":          _handle_diff,
     "think":     _handle_think,
     "train":     _make_tool_handler(*common.TOOL_COMMANDS["train"]),
     "weather":   _make_tool_handler(*common.TOOL_COMMANDS["weather"]),

@@ -135,17 +135,22 @@ def _get_telegram_session(chat_id: int) -> list[dict]:
 
 
 _TELEGRAM_BOT_COMMANDS: list[tuple[str, str]] = [
-    ("help",      "show available commands"),
-    ("train",     "train departures: <station> [--line R] [--count 5]"),
-    ("weather",   "weather for a location"),
-    ("mail",      "list emails [--mailbox] [--unread] [--from] [--count]"),
-    ("search",    "search the Obsidian vault"),
-    ("remember",  "save a preference: <key>=<value>"),
-    ("forget",    "remove a memory entry"),
-    ("memory",    "show stored long-term memory"),
-    ("heartbeat", "show heartbeat config (or 'run' to fire now)"),
-    ("big",       "ask the escalation cloud model directly"),
-    ("new",       "reset this conversation"),
+    ("help",          "show available commands"),
+    ("train",         "train departures: <station> [--line R] [--count 5]"),
+    ("weather",       "weather for a location"),
+    ("mail",          "list emails [--mailbox] [--unread] [--from] [--count]"),
+    ("search",        "search the Obsidian vault"),
+    ("remember",      "save a preference: <key>=<value>"),
+    ("forget",        "remove a memory entry"),
+    ("memory",        "show stored long-term memory"),
+    ("heartbeat",     "show heartbeat config (or 'run' to fire now)"),
+    ("big",           "ask the escalation cloud model directly"),
+    ("new",           "reset this conversation"),
+    ("add_tool",      "add a new tool live: <description>"),
+    ("approve",       "approve a pending self-change"),
+    ("approve_force", "approve a pending self-change despite failing gates"),
+    ("reject",        "reject a pending self-change"),
+    ("diff",          "show diff of a pending self-change"),
 ]
 
 _TELEGRAM_HELP_TEXT = "\n".join(common.HELP_LINES)
@@ -178,6 +183,16 @@ async def _telegram_dispatch_command(
         await common.run_big(
             send, typing_ctx, _get_telegram_session(chat_id), args.strip()
         )
+    elif cmd in ("add-tool", "add_tool", "addtool"):
+        await common.run_add_tool(send, args, scope)
+    elif cmd == "approve":
+        await common.run_approve(send, scope)
+    elif cmd in ("approve_force", "approve-force"):
+        await common.run_approve(send, scope, force=True)
+    elif cmd == "reject":
+        await common.run_reject(send, scope)
+    elif cmd == "diff":
+        await common.run_diff(send, scope)
     elif cmd in common.TOOL_COMMANDS:
         tool_name, parser, formatter = common.TOOL_COMMANDS[cmd]
         try:
