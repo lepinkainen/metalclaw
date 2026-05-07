@@ -13,6 +13,7 @@ import discord
 from telegram.ext import Application
 
 import heartbeat
+import memory
 from chat_loop import (
     _active_session_messages,
     _chat_with_provider,
@@ -63,6 +64,13 @@ async def _async_main(
     import tools  # noqa: F401 — triggers @tool registrations
 
     cfg = get_config()
+    migrated = memory.migrate_legacy_scopes()
+    if migrated:
+        logging.info(
+            "memory: migrated %d legacy scope file(s) into memory.md (%s); originals renamed to *.bak",
+            len(migrated),
+            ", ".join(migrated),
+        )
     tg_app: Application | None = None
     if with_telegram:
         if not cfg.telegram_bot_token:

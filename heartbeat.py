@@ -22,7 +22,6 @@ from pathlib import Path
 import yaml
 
 import channels
-import memory
 from config import get_config
 
 log = logging.getLogger("metalclaw.heartbeat")
@@ -217,7 +216,7 @@ def _within_active_hours(now: datetime, window: tuple[int, int] | None) -> bool:
 def _build_heartbeat_messages(scope: str, hb: HeartbeatFile, due: list[HeartbeatTask], now: datetime, build_system_prompt) -> list[dict]:
     local = now.astimezone() if now.tzinfo else now
     now_str = local.strftime("%Y-%m-%d %H:%M")
-    system = build_system_prompt(scope, now_str)
+    system = build_system_prompt(now_str)
     system += (
         "\n\nHEARTBEAT MODE: This is a scheduled wake-up, not a user message. "
         "Run only the tasks listed below. Use tools as needed. "
@@ -297,13 +296,9 @@ async def run_tick(*, now: datetime | None = None) -> dict[str, str]:
 
 
 async def _run_scope(scope, hb, due, now, chat_fn, build_system_prompt) -> str:
-    token = memory.current_scope.set(scope)
-    try:
-        messages = _build_heartbeat_messages(scope, hb, due, now, build_system_prompt)
-        loop = asyncio.get_running_loop()
-        return await loop.run_in_executor(None, lambda: chat_fn(messages))
-    finally:
-        memory.current_scope.reset(token)
+    messages = _build_heartbeat_messages(scope, hb, due, now, build_system_prompt)
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(None, lambda: chat_fn(messages))
 
 
 async def run(stop: asyncio.Event) -> None:

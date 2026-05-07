@@ -72,25 +72,35 @@ _ESCALATION_HINT = (
 )
 
 
-def build_system_prompt(scope: str, now: str) -> str:
+def build_system_prompt(now: str) -> str:
     base = _SYSTEM_PROMPT_BASE.format(now=now)
     cfg = get_config()
     if cfg.escalation_enabled and cfg.provider == "ollama":
         base += "\n\n" + _ESCALATION_HINT
-    summary = memory.summary(scope)
+    summary = memory.summary()
     if summary:
-        base += f"\n\nKnown about user (scope={scope}):\n{summary}"
+        base += f"\n\nKnown about user:\n{summary}"
     return base
 
 
-def _refresh_system_prompt(messages: list[dict], scope: str) -> None:
+def _refresh_system_prompt(messages: list[dict]) -> None:
     """Rewrite messages[0] with current memory summary so mid-session writes are visible."""
     now = datetime.now().strftime("%Y-%m-%d %H:%M")
-    prompt = build_system_prompt(scope, now)
+    prompt = build_system_prompt(now)
     if messages and messages[0].get("role") == "system":
         messages[0] = {"role": "system", "content": prompt}
     else:
         messages.insert(0, {"role": "system", "content": prompt})
+
+
+_MEMORY_MUTATORS = frozenset(
+    {
+        "set_user_preference",
+        "add_user_fact",
+        "add_user_instruction",
+        "forget_user_memory",
+    }
+)
 
 
 def _tool_result_json(result: object) -> str:
@@ -149,13 +159,20 @@ def _chat_with_provider(
                 return am.text
 
             results: list[tuple] = []
+            memory_dirty = False
             for tc in am.tool_calls:
                 result = _run_tool(tc.name, tc.arguments)
                 result_json = _tool_result_json(result)
                 if on_tool_call:
                     on_tool_call(tc.name, tc.arguments, result_json[:120])
                 results.append((tc, result_json))
+                if tc.name in _MEMORY_MUTATORS:
+                    memory_dirty = True
             history.extend(provider.format_tool_results(results))
+
+            if memory_dirty:
+                now = datetime.now().strftime("%Y-%m-%d %H:%M")
+                system = build_system_prompt(now)
     finally:
         _active_session_messages.reset(token)
 
