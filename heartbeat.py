@@ -39,7 +39,6 @@ class HeartbeatTask:
     name: str
     interval_seconds: int
     prompt: str
-    precheck: str | None = None
 
 
 @dataclass
@@ -99,7 +98,6 @@ def parse_heartbeat_file(text: str) -> HeartbeatFile:
                     name=str(name),
                     interval_seconds=parse_interval(interval),
                     prompt=str(prompt),
-                    precheck=entry.get("precheck"),
                 )
             )
     return HeartbeatFile(tasks=tasks, body=body.strip())
