@@ -167,55 +167,40 @@ def test_run_manual_uninitialised_points_at_init(vault):
 # --- run_heartbeat ---
 
 
-def test_run_heartbeat_status_no_checklist(vault):
+def test_run_heartbeat_status_no_actions(vault):
     send, captured = _send_capture()
-    asyncio.run(common.run_heartbeat(send, "test-scope", ""))
+    asyncio.run(common.run_heartbeat(send, "cli", ""))
     out = "\n".join(captured)
     assert "heartbeat enabled=" in out
-    assert "no checklist" in out
+    assert "no active actions" in out
 
 
-def test_run_heartbeat_status_lists_tasks(vault):
-    path = vault / "heartbeat-test-scope.md"
-    path.write_text(
-        "---\n"
-        "tasks:\n"
-        "  - name: ping\n"
-        "    interval: 1h\n"
-        "    prompt: ping\n"
-        "---\n"
-        "body\n",
-        encoding="utf-8",
+def test_run_heartbeat_status_lists_active_actions(vault):
+    import heartbeat
+
+    heartbeat.create_action(
+        kind=heartbeat.ActionKind.EVERY,
+        prompt="watch the kettle",
+        channel="cli",
+        created_from="cli",
+        every=300,
     )
     send, captured = _send_capture()
-    asyncio.run(common.run_heartbeat(send, "test-scope", ""))
+    asyncio.run(common.run_heartbeat(send, "cli", ""))
     out = "\n".join(captured)
-    assert "ping" in out
-    assert "every 3600s" in out
+    assert "active actions:" in out
+    assert "[every]" in out
+    assert "every 300s" in out
+    assert "watch the kettle" in out
 
 
 def test_run_heartbeat_warn_no_discord_channel(vault):
     send, captured = _send_capture()
     asyncio.run(
-        common.run_heartbeat(send, "test-scope", "", warn_no_discord_channel=True)
+        common.run_heartbeat(send, "cli", "", warn_no_discord_channel=True)
     )
     out = "\n".join(captured)
     assert "no discord_heartbeat_channel" in out
-
-
-def test_run_heartbeat_parse_error_reported(vault):
-    path = vault / "heartbeat-test-scope.md"
-    path.write_text(
-        "---\n"
-        "tasks:\n"
-        "  - {name: 'broken', no_interval: yes}\n"
-        "---\n",
-        encoding="utf-8",
-    )
-    send, captured = _send_capture()
-    asyncio.run(common.run_heartbeat(send, "test-scope", ""))
-    out = "\n".join(captured)
-    assert "parse error" in out
 
 
 # --- run_big ---
