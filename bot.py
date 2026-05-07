@@ -12,6 +12,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import NoReturn
 
+import discord
 from prompt_toolkit import PromptSession
 from prompt_toolkit.application import run_in_terminal
 from prompt_toolkit.patch_stdout import patch_stdout
@@ -967,6 +968,403 @@ async def _stop_telegram(app: Application) -> None:
     await app.shutdown()
 
 
+# --- Discord ---
+
+
+_discord_sessions: dict[int, list[dict]] = {}
+_discord_onboarding: dict[int, int] = {}
+_known_discord_channels: set[int] = set()
+
+_DISCORD_MAX_MESSAGE = 2000
+
+_DISCORD_HELP_TEXT = "\n".join([
+    "Available commands:",
+    "/train <station> [--line R] [--count 5]",
+    "/weather <location>",
+    "/mail [--mailbox inbox] [--unread] [--from name] [--count 10]",
+    "/search <query> [--max 20] [--context 1] — search the Obsidian vault",
+    "/remember <key>=<value> — save a preference",
+    "/forget <substring> — remove a memory entry",
+    "/memory — show stored memory",
+    "/onboard — answer a few questions to seed memory",
+    "/heartbeat — show heartbeat config; /heartbeat run to fire now",
+    "/big <query> — ask the escalation cloud model directly",
+    "/new — reset this conversation",
+    "/help — this message",
+])
+
+def _discord_scope_for(channel_id: int) -> str:
+    return f"discord-{channel_id}"
+
+
+def _strip_bot_mention(text: str, bot_user_id: int) -> str:
+    """Remove @mentions of the bot (including <@!id> nickname form) from text."""
+    pattern = re.compile(rf"<@!?{bot_user_id}>")
+    return pattern.sub("", text).strip()
+
+
+def _split_for_discord(text: str, limit: int = _DISCORD_MAX_MESSAGE) -> list[str]:
+    """Split text into ≤limit-char chunks on paragraph/line/word boundaries.
+
+    If a fenced code block is split across chunks, close it with ``` at the end
+    of one chunk and reopen with the same language fence at the start of the next.
+    """
+    if len(text) <= limit:
+        return [text]
+
+    raw_chunks: list[str] = []
+    remaining = text
+    while len(remaining) > limit:
+        cut = remaining.rfind("\n\n", 0, limit)
+        if cut <= 0:
+            cut = remaining.rfind("\n", 0, limit)
+        if cut <= 0:
+            cut = remaining.rfind(" ", 0, limit)
+        if cut <= 0:
+            cut = limit
+        raw_chunks.append(remaining[:cut].rstrip())
+        remaining = remaining[cut:].lstrip()
+    if remaining:
+        raw_chunks.append(remaining)
+
+    fixed: list[str] = []
+    open_fence: str | None = None
+    for chunk in raw_chunks:
+        body = (f"```{open_fence}\n" if open_fence is not None else "") + chunk
+        fences = re.findall(r"^```(\w*)\s*$", body, flags=re.MULTILINE)
+        if len(fences) % 2 == 1:
+            new_fence = fences[-1]
+            body = body + "\n```"
+            open_fence = new_fence
+        else:
+            open_fence = None
+        if len(body) > limit:
+            body = body[:limit]
+        fixed.append(body)
+    return fixed
+
+
+async def _discord_send(channel: "discord.abc.Messageable", text: str) -> None:
+    """Send text to a Discord channel, splitting if it exceeds the 2000-char limit."""
+    if not text:
+        return
+    for chunk in _split_for_discord(text):
+        try:
+            await channel.send(chunk)
+        except Exception as e:  # noqa: BLE001
+            logging.warning("discord send failed: %s", e)
+            return
+
+
+class _DiscordChannel:
+    name = "discord"
+
+    def __init__(self, client: discord.Client, heartbeat_channel_id: int | None) -> None:
+        self._client = client
+        self._heartbeat_channel_id = heartbeat_channel_id
+
+    async def notify(self, scope: str, text: str) -> None:
+        if self._heartbeat_channel_id is None:
+            logging.warning(
+                "discord heartbeat: discord_heartbeat_channel unset, dropping reply for scope %s",
+                scope,
+            )
+            return
+        ch = self._client.get_channel(self._heartbeat_channel_id)
+        if ch is None:
+            try:
+                ch = await self._client.fetch_channel(self._heartbeat_channel_id)
+            except Exception as e:  # noqa: BLE001
+                logging.warning(
+                    "discord heartbeat: cannot resolve channel %s: %s",
+                    self._heartbeat_channel_id,
+                    e,
+                )
+                return
+        await _discord_send(ch, text)
+
+    def active_scopes(self) -> Iterable[str]:
+        return tuple(f"discord-{cid}" for cid in _known_discord_channels)
+
+
+def _get_discord_session(channel_id: int) -> list[dict]:
+    if channel_id not in _discord_sessions:
+        scope = _discord_scope_for(channel_id)
+        memory.current_scope.set(scope)
+        now = datetime.now().strftime("%Y-%m-%d %H:%M")
+        _discord_sessions[channel_id] = [
+            {"role": "system", "content": build_system_prompt(scope, now)}
+        ]
+    return _discord_sessions[channel_id]
+
+
+async def _discord_start_onboarding(message: "discord.Message", channel_id: int) -> None:
+    memory.current_scope.set(_discord_scope_for(channel_id))
+    if memory.load().preferences:
+        await _discord_send(
+            message.channel,
+            "Already onboarded. Use /memory to inspect or /forget to remove entries.",
+        )
+        return
+    _discord_onboarding[channel_id] = 0
+    _, question = _ONBOARDING_STEPS[0]
+    await _discord_send(
+        message.channel,
+        f"Onboarding — answer briefly, send '-' to skip.\n\n{question}",
+    )
+
+
+async def _discord_handle_onboarding_answer(
+    message: "discord.Message", channel_id: int, text: str
+) -> None:
+    memory.current_scope.set(_discord_scope_for(channel_id))
+    step = _discord_onboarding[channel_id]
+    key, _ = _ONBOARDING_STEPS[step]
+    if text != "-" and text.strip():
+        value = _format_interests(text) if key == "interests" else text.strip()
+        memory.set_preference(key, value)
+
+    next_step = step + 1
+    if next_step >= len(_ONBOARDING_STEPS):
+        del _discord_onboarding[channel_id]
+        _discord_sessions.pop(channel_id, None)
+        await _discord_send(
+            message.channel,
+            "Onboarding done. Memory will enter the system prompt on next message.",
+        )
+        return
+
+    _discord_onboarding[channel_id] = next_step
+    _, question = _ONBOARDING_STEPS[next_step]
+    await _discord_send(message.channel, question)
+
+
+async def _discord_heartbeat_cmd(
+    message: "discord.Message", sub: str, channel_id: int
+) -> None:
+    scope = _discord_scope_for(channel_id)
+    path = heartbeat.heartbeat_path_for(scope)
+    if sub == "run":
+        asyncio.create_task(heartbeat.run_tick())
+        await _discord_send(message.channel, "heartbeat tick fired")
+        return
+    cfg = get_config()
+    lines = [
+        f"heartbeat enabled={cfg.heartbeat_enabled} interval={cfg.heartbeat_interval_seconds}s",
+        f"checklist: {path}",
+    ]
+    if cfg.discord_heartbeat_channel is None:
+        lines.append("(no discord_heartbeat_channel configured — replies will drop)")
+    if path.exists():
+        try:
+            hb = heartbeat.parse_heartbeat_file(path.read_text(encoding="utf-8"))
+        except ValueError as e:
+            lines.append(f"parse error: {e}")
+        else:
+            if hb.tasks:
+                for t in hb.tasks:
+                    lines.append(f"  • {t.name}  every {t.interval_seconds}s")
+            else:
+                lines.append("(free-form body only, no tasks)")
+    else:
+        lines.append("no checklist — copy heartbeat.example.md (in repo root) to the path above")
+    await _discord_send(message.channel, "\n".join(lines))
+
+
+async def _discord_big(message: "discord.Message", query: str, channel_id: int) -> None:
+    if not query:
+        await _discord_send(message.channel, "usage: /big <query>")
+        return
+    cfg = get_config()
+    if not cfg.escalation_enabled:
+        await _discord_send(
+            message.channel,
+            "escalation disabled — set escalation_enabled: true in config.yaml",
+        )
+        return
+    scope = _discord_scope_for(channel_id)
+    messages = _get_discord_session(channel_id)
+    _refresh_system_prompt(messages, scope)
+    messages.append({"role": "user", "content": query})
+    loop = asyncio.get_running_loop()
+    try:
+        async with message.channel.typing():
+            reply = await loop.run_in_executor(
+                None, lambda: chat_via_escalation(messages)
+            )
+    except Exception as e:  # noqa: BLE001
+        messages.pop()
+        await _discord_send(message.channel, f"Error: {e}")
+        return
+    messages.append({"role": "assistant", "content": reply})
+    _, clean_reply = _split_thinking(reply)
+    await _discord_send(message.channel, clean_reply)
+
+
+async def _discord_dispatch_command(
+    message: "discord.Message", cmd: str, args: str
+) -> None:
+    channel_id = message.channel.id
+    if cmd == "help":
+        await _discord_send(message.channel, _DISCORD_HELP_TEXT)
+    elif cmd == "new":
+        _discord_sessions.pop(channel_id, None)
+        _discord_onboarding.pop(channel_id, None)
+        await _discord_send(message.channel, "Conversation reset.")
+    elif cmd == "remember":
+        if "=" not in args:
+            await _discord_send(message.channel, "usage: /remember <key>=<value>")
+            return
+        key, value = args.split("=", 1)
+        key, value = key.strip(), value.strip()
+        if not key or not value:
+            await _discord_send(message.channel, "usage: /remember <key>=<value>")
+            return
+        memory.set_preference(key, value)
+        await _discord_send(message.channel, f"saved {key}={value}")
+    elif cmd == "forget":
+        matcher = args.strip()
+        if not matcher:
+            await _discord_send(message.channel, "usage: /forget <substring>")
+            return
+        if memory.forget(matcher):
+            await _discord_send(message.channel, f"forgot entry matching '{matcher}'")
+        else:
+            await _discord_send(message.channel, f"no entry matched '{matcher}'")
+    elif cmd == "memory":
+        await _discord_send(message.channel, memory.render_full())
+    elif cmd == "onboard":
+        await _discord_start_onboarding(message, channel_id)
+    elif cmd == "heartbeat":
+        await _discord_heartbeat_cmd(message, args.strip(), channel_id)
+    elif cmd == "big":
+        await _discord_big(message, args.strip(), channel_id)
+    elif cmd in _TELEGRAM_TOOL_COMMANDS:
+        tool_name, parser, formatter = _TELEGRAM_TOOL_COMMANDS[cmd]
+        try:
+            params = parser(args)
+        except ValueError as e:
+            await _discord_send(message.channel, str(e))
+            return
+        tool_obj = TOOLS.get(tool_name)
+        if tool_obj is None:
+            await _discord_send(message.channel, f"{tool_name} tool unavailable")
+            return
+        loop = asyncio.get_running_loop()
+        try:
+            async with message.channel.typing():
+                result = await loop.run_in_executor(
+                    None, lambda: tool_obj.func(**params)
+                )
+        except Exception as e:  # noqa: BLE001
+            await _discord_send(message.channel, f"Error: {e}")
+            return
+        await _discord_send(message.channel, formatter(result))
+    else:
+        await _discord_send(message.channel, f"Unknown command: /{cmd}  (try /help)")
+
+
+def _discord_should_respond(
+    message: "discord.Message", bot_user: "discord.ClientUser | None"
+) -> bool:
+    """Decide whether to handle a non-command message based on channel context."""
+    if isinstance(message.channel, discord.DMChannel):
+        return True
+    cfg = get_config()
+    if message.channel.id in cfg.discord_chat_channels:
+        return True
+    if bot_user is not None and bot_user in message.mentions:
+        return True
+    ref = message.reference
+    if (
+        ref is not None
+        and isinstance(ref.resolved, discord.Message)
+        and bot_user is not None
+        and ref.resolved.author.id == bot_user.id
+    ):
+        return True
+    return False
+
+
+async def _discord_handle_message(
+    client: discord.Client, message: "discord.Message"
+) -> None:
+    if message.author.bot:
+        return
+    raw = (message.content or "").strip()
+    if not raw:
+        return
+
+    bot_user = client.user
+    text = _strip_bot_mention(raw, bot_user.id) if bot_user is not None else raw
+    parsed = _parse_command(text)
+
+    if parsed is None and not _discord_should_respond(message, bot_user):
+        return
+    if not text:
+        return
+
+    channel_id = message.channel.id
+    _known_discord_channels.add(channel_id)
+    memory.current_scope.set(_discord_scope_for(channel_id))
+    messages = _get_discord_session(channel_id)
+
+    if parsed is not None:
+        cmd, args = parsed
+        await _discord_dispatch_command(message, cmd, args)
+        return
+
+    if channel_id in _discord_onboarding:
+        await _discord_handle_onboarding_answer(message, channel_id, text)
+        return
+
+    _refresh_system_prompt(messages, _discord_scope_for(channel_id))
+    messages.append({"role": "user", "content": text})
+    loop = asyncio.get_running_loop()
+    try:
+        async with message.channel.typing():
+            reply = await loop.run_in_executor(None, lambda: chat(messages))
+    except Exception as e:  # noqa: BLE001
+        messages.pop()
+        await _discord_send(message.channel, f"Error: {e}")
+        return
+    messages.append({"role": "assistant", "content": reply})
+    _, clean_reply = _split_thinking(reply)
+    await _discord_send(message.channel, clean_reply)
+
+
+class _MetalclawDiscordClient(discord.Client):
+    async def on_ready(self) -> None:
+        logging.info("discord ready as %s", self.user)
+
+    async def on_message(self, message: "discord.Message") -> None:
+        try:
+            await _discord_handle_message(self, message)
+        except Exception:
+            logging.exception("discord on_message crashed")
+
+
+async def _start_discord(token: str) -> tuple[discord.Client, asyncio.Task]:
+    cfg = get_config()
+    intents = discord.Intents.default()
+    intents.message_content = True
+    client = _MetalclawDiscordClient(intents=intents)
+    channels.register(_DiscordChannel(client, cfg.discord_heartbeat_channel))
+    task = asyncio.create_task(client.start(token))
+    return client, task
+
+
+async def _stop_discord(client: discord.Client, task: asyncio.Task) -> None:
+    try:
+        await client.close()
+    except Exception:
+        logging.exception("discord client close failed")
+    try:
+        await asyncio.wait_for(task, timeout=5)
+    except (asyncio.TimeoutError, asyncio.CancelledError):
+        task.cancel()
+
+
 # --- Entrypoint ---
 
 
@@ -1061,14 +1459,16 @@ async def _run_cli_repl() -> None:
             _print_bot_markdown(clean_reply)
 
 
-async def _async_main(*, daemon: bool, with_telegram: bool) -> None:
+async def _async_main(
+    *, daemon: bool, with_telegram: bool, with_discord: bool
+) -> None:
     import tools  # noqa: F401 — triggers @tool registrations
 
     cfg = get_config()
     tg_app: Application | None = None
     if with_telegram:
         if not cfg.telegram_bot_token:
-            if daemon:
+            if daemon and not (with_discord and cfg.discord_bot_token):
                 raise RuntimeError(
                     "telegram_bot_token missing — set TELEGRAM_BOT_TOKEN env or "
                     "telegram_bot_token in config.yaml"
@@ -1077,6 +1477,20 @@ async def _async_main(*, daemon: bool, with_telegram: bool) -> None:
         else:
             tg_app = await _start_telegram(cfg.telegram_bot_token)
             console.print(f"[dim]telegram polling started ({len(_known_chats)} known chat(s))[/dim]")
+
+    discord_client: discord.Client | None = None
+    discord_task: asyncio.Task | None = None
+    if with_discord:
+        if not cfg.discord_bot_token:
+            if daemon and tg_app is None:
+                raise RuntimeError(
+                    "no frontend token configured — set telegram_bot_token or "
+                    "discord_bot_token (or pass --no-daemon to use the CLI)"
+                )
+            console.print("[dim]no discord_bot_token — discord disabled[/dim]")
+        else:
+            discord_client, discord_task = await _start_discord(cfg.discord_bot_token)
+            console.print("[dim]discord gateway connecting…[/dim]")
 
     stop = asyncio.Event()
     hb_task = asyncio.create_task(heartbeat.run(stop))
@@ -1098,17 +1512,23 @@ async def _async_main(*, daemon: bool, with_telegram: bool) -> None:
             hb_task.cancel()
         if tg_app is not None:
             await _stop_telegram(tg_app)
+        if discord_client is not None and discord_task is not None:
+            await _stop_discord(discord_client, discord_task)
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(prog="metalclaw")
     parser.add_argument(
         "--daemon", action="store_true",
-        help="run without CLI REPL (Telegram + heartbeat only)",
+        help="run without CLI REPL (Telegram + Discord + heartbeat only)",
     )
     parser.add_argument(
         "--no-telegram", action="store_true",
         help="skip starting the Telegram frontend",
+    )
+    parser.add_argument(
+        "--no-discord", action="store_true",
+        help="skip starting the Discord frontend",
     )
     args = parser.parse_args()
 
@@ -1116,9 +1536,19 @@ def main() -> None:
     logging.getLogger("httpx").setLevel(logging.WARNING)
     logging.getLogger("telegram").setLevel(logging.WARNING)
     logging.getLogger("telegram.ext").setLevel(logging.WARNING)
+    logging.getLogger("discord").setLevel(logging.WARNING)
+    logging.getLogger("discord.client").setLevel(logging.WARNING)
+    logging.getLogger("discord.gateway").setLevel(logging.WARNING)
+    logging.getLogger("discord.http").setLevel(logging.WARNING)
 
     try:
-        asyncio.run(_async_main(daemon=args.daemon, with_telegram=not args.no_telegram))
+        asyncio.run(
+            _async_main(
+                daemon=args.daemon,
+                with_telegram=not args.no_telegram,
+                with_discord=not args.no_discord,
+            )
+        )
     except KeyboardInterrupt:
         pass
 

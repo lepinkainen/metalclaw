@@ -6,6 +6,7 @@ requires-python = ">=3.14"
 dependencies = [
     "anthropic>=0.40",
     "beautifulsoup4>=4.12",
+    "discord.py>=2.3,<3.0",
     "httpx>=0.28.1",
     "markdown-it-py>=3.0",
     "markdownify>=0.13",

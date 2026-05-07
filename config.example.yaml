@@ -16,6 +16,23 @@ fastmail_api_token: fmu1-xxxxxxxxxxxxxxxx
 # Telegram bot token from @BotFather. Env TELEGRAM_BOT_TOKEN takes precedence if set.
 telegram_bot_token: 123456:ABC-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
 
+# --- Discord ---
+# Bot token from the Discord developer portal (https://discord.com/developers).
+# Required scopes when inviting the bot: `bot`. Required intents (enabled in
+# the dev portal): MESSAGE CONTENT INTENT (privileged), SERVER MEMBERS off,
+# PRESENCE off. Env DISCORD_BOT_TOKEN takes precedence if set.
+discord_bot_token: REPLACE_WITH_DISCORD_BOT_TOKEN
+# Channel IDs that the bot treats as dedicated chat threads — it replies to
+# every message in these channels (no @mention required), and each channel
+# keeps its own conversation context. DMs always behave this way too. Other
+# guild channels need an @mention or a reply to the bot's own message.
+# Right-click a channel in Discord with developer mode on to copy its ID.
+discord_chat_channels: []
+# Channel ID where Discord heartbeats post. Required for any
+# `heartbeat-discord*.md` file under the memory dir to deliver. Set to a
+# server channel ID for shared visibility, or to a DM channel ID for private.
+# discord_heartbeat_channel: 1000000000000000000
+
 # Which LLM provider drives the bot. One of: ollama | openai | anthropic.
 # Default: ollama (local). Use openai or anthropic for VPS deployments.
 provider: ollama

@@ -27,6 +27,9 @@ class Config:
     memory_subdir: str
     fastmail_api_token: str | None
     telegram_bot_token: str | None
+    discord_bot_token: str | None
+    discord_chat_channels: tuple[int, ...]
+    discord_heartbeat_channel: int | None
     ollama_url: str
     model: str
     provider: str
@@ -110,6 +113,7 @@ def get_config() -> Config:
 
     fastmail_token = os.environ.get("FASTMAIL_API_TOKEN") or raw.get("fastmail_api_token")
     telegram_token = os.environ.get("TELEGRAM_BOT_TOKEN") or raw.get("telegram_bot_token")
+    discord_token = os.environ.get("DISCORD_BOT_TOKEN") or raw.get("discord_bot_token")
     ollama_url = os.environ.get("OLLAMA_URL") or raw.get("ollama_url") or _DEFAULTS["ollama_url"]
     openai_key = os.environ.get("OPENAI_API_KEY") or raw.get("openai_api_key")
     anthropic_key = os.environ.get("ANTHROPIC_API_KEY") or raw.get("anthropic_api_key")
@@ -154,11 +158,36 @@ def get_config() -> Config:
     else:
         raise ValueError("vault_search_excludes must be a list of glob patterns")
 
+    chat_channels_raw = raw.get("discord_chat_channels") or ()
+    if isinstance(chat_channels_raw, (list, tuple)):
+        try:
+            discord_chat_channels = tuple(int(c) for c in chat_channels_raw)
+        except (TypeError, ValueError) as e:
+            raise ValueError(
+                "discord_chat_channels must be a list of integer channel IDs"
+            ) from e
+    else:
+        raise ValueError("discord_chat_channels must be a list of integer channel IDs")
+
+    discord_heartbeat_channel_raw = raw.get("discord_heartbeat_channel")
+    if discord_heartbeat_channel_raw is None:
+        discord_heartbeat_channel: int | None = None
+    else:
+        try:
+            discord_heartbeat_channel = int(discord_heartbeat_channel_raw)
+        except (TypeError, ValueError) as e:
+            raise ValueError(
+                "discord_heartbeat_channel must be an integer channel ID"
+            ) from e
+
     return Config(
         vault_path=Path(vault_path_str).expanduser(),
         memory_subdir=raw.get("memory_subdir") or _DEFAULTS["memory_subdir"],
         fastmail_api_token=fastmail_token,
         telegram_bot_token=telegram_token,
+        discord_bot_token=discord_token,
+        discord_chat_channels=discord_chat_channels,
+        discord_heartbeat_channel=discord_heartbeat_channel,
         ollama_url=ollama_url,
         model=raw.get("model") or _DEFAULTS["model"],
         provider=provider,
