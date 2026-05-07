@@ -119,6 +119,67 @@ def test_escalation_model_explicit_wins(tmp_path, cfg_file):
     assert cfg.escalation_model == "claude-opus-4-7"
 
 
+def test_discord_defaults(tmp_path, cfg_file):
+    _write(cfg_file, vault_path=str(tmp_path / "vault"))
+    cfg = config.get_config()
+    assert cfg.discord_bot_token is None
+    assert cfg.discord_chat_channels == ()
+    assert cfg.discord_heartbeat_channel is None
+
+
+def test_discord_token_yaml(tmp_path, cfg_file):
+    _write(cfg_file, vault_path=str(tmp_path / "vault"), discord_bot_token="from-yaml")
+    assert config.get_config().discord_bot_token == "from-yaml"
+
+
+def test_env_discord_token_wins_over_yaml(tmp_path, cfg_file, monkeypatch):
+    _write(cfg_file, vault_path=str(tmp_path / "vault"), discord_bot_token="from-yaml")
+    monkeypatch.setenv("DISCORD_BOT_TOKEN", "from-env")
+    config.reset_cache()
+    assert config.get_config().discord_bot_token == "from-env"
+
+
+def test_discord_chat_channels_parses_int_list(tmp_path, cfg_file):
+    _write(
+        cfg_file,
+        vault_path=str(tmp_path / "vault"),
+        discord_chat_channels=[123, "456"],
+    )
+    cfg = config.get_config()
+    assert cfg.discord_chat_channels == (123, 456)
+
+
+def test_discord_chat_channels_rejects_non_list(tmp_path, cfg_file):
+    _write(cfg_file, vault_path=str(tmp_path / "vault"), discord_chat_channels="123")
+    with pytest.raises(ValueError, match="discord_chat_channels"):
+        config.get_config()
+
+
+def test_discord_chat_channels_rejects_non_int(tmp_path, cfg_file):
+    _write(cfg_file, vault_path=str(tmp_path / "vault"), discord_chat_channels=["abc"])
+    with pytest.raises(ValueError, match="discord_chat_channels"):
+        config.get_config()
+
+
+def test_discord_heartbeat_channel_parses_int(tmp_path, cfg_file):
+    _write(
+        cfg_file,
+        vault_path=str(tmp_path / "vault"),
+        discord_heartbeat_channel=42,
+    )
+    assert config.get_config().discord_heartbeat_channel == 42
+
+
+def test_discord_heartbeat_channel_rejects_non_int(tmp_path, cfg_file):
+    _write(
+        cfg_file,
+        vault_path=str(tmp_path / "vault"),
+        discord_heartbeat_channel="not-a-number",
+    )
+    with pytest.raises(ValueError, match="discord_heartbeat_channel"):
+        config.get_config()
+
+
 def test_vault_search_excludes_round_trip(tmp_path, cfg_file):
     _write(
         cfg_file,
