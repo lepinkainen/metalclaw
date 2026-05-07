@@ -266,7 +266,6 @@ async def run_cli_repl() -> None:
                 messages.pop()
                 continue
 
-            messages.append({"role": "assistant", "content": reply})
             hist.save_assistant(reply)
 
             thinking, clean_reply = _split_thinking(reply)

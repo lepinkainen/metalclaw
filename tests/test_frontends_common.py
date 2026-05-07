@@ -201,7 +201,11 @@ def test_run_big_disabled_when_escalation_off(vault):
 
 
 def test_run_big_routes_through_escalation(vault_with_escalation, monkeypatch):
-    monkeypatch.setattr(common, "chat_via_escalation", lambda msgs: "cloud reply")
+    def fake_escalate(msgs: list[dict]) -> str:
+        msgs.append({"role": "assistant", "content": "cloud reply"})
+        return "cloud reply"
+
+    monkeypatch.setattr(common, "chat_via_escalation", fake_escalate)
 
     messages: list[dict] = [{"role": "system", "content": "x"}]
     send, captured = _send_capture()

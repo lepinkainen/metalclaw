@@ -250,7 +250,6 @@ async def _discord_handle_message(
         messages.pop()
         await _discord_send(message.channel, f"Error: {e}")
         return
-    messages.append({"role": "assistant", "content": reply})
     _, clean_reply = _split_thinking(reply)
     await _discord_send(message.channel, clean_reply)
 

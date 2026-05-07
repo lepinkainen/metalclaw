@@ -331,7 +331,6 @@ async def run_big(
         messages.pop()
         await send(f"Error: {e}")
         return
-    messages.append({"role": "assistant", "content": reply})
     _, clean_reply = _split_thinking(reply)
     await send(clean_reply)
 

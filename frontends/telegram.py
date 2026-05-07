@@ -224,7 +224,6 @@ async def _telegram_handle_message(update: Update, context: ContextTypes.DEFAULT
         messages.pop()
         await _tg_reply(update, f"Error: {e}")
         return
-    messages.append({"role": "assistant", "content": reply})
     _, clean_reply = _split_thinking(reply)
     await _tg_reply(update, clean_reply)
 
