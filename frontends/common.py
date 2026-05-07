@@ -20,7 +20,7 @@ from typing import NoReturn
 
 import heartbeat
 import memory
-from chat_loop import _refresh_system_prompt, _split_thinking, chat_via_escalation
+from chat_loop import chat_via_escalation, run_turn
 from config import get_config
 
 SendFn = Callable[[str], Awaitable[None]]
@@ -319,19 +319,14 @@ async def run_big(
     if not cfg.escalation_enabled:
         await send("escalation disabled — set escalation_enabled: true in config.yaml")
         return
-    _refresh_system_prompt(messages)
-    messages.append({"role": "user", "content": query})
-    loop = asyncio.get_running_loop()
     try:
         async with typing_ctx:
-            reply = await loop.run_in_executor(
-                None, lambda: chat_via_escalation(messages)
+            _, _, clean_reply = await run_turn(
+                messages, query, lambda: chat_via_escalation(messages)
             )
     except Exception as e:
-        messages.pop()
         await send(f"Error: {e}")
         return
-    _, clean_reply = _split_thinking(reply)
     await send(clean_reply)
 
 

@@ -16,11 +16,10 @@ import memory
 import self_change
 from chat_loop import (
     _parse_command,
-    _refresh_system_prompt,
-    _split_thinking,
     build_system_prompt,
     chat,
     chat_via_escalation,
+    run_turn,
 )
 from config import get_config
 from frontends import common
@@ -108,7 +107,7 @@ def _cli_messages_ref() -> list[dict] | None:
     return _cli_messages
 
 
-def _handle_big(args: str) -> None:
+async def _handle_big(args: str) -> None:
     query = args.strip()
     if not query:
         console.print("usage: /big <query>")
@@ -121,17 +120,14 @@ def _handle_big(args: str) -> None:
     if messages is None:
         console.print("internal error: no active CLI session")
         return
-    _refresh_system_prompt(messages)
-    messages.append({"role": "user", "content": query})
     try:
         with console.status("[dim]asking the big model…[/dim]", spinner="dots"):
-            reply = chat_via_escalation(messages)
+            _, _, clean_reply = await run_turn(
+                messages, query, lambda: chat_via_escalation(messages)
+            )
     except Exception as e:
-        messages.pop()
         console.print(f"\n[bold]bot>[/bold] Error: {e}\n")
         return
-    messages.append({"role": "assistant", "content": reply})
-    _, clean_reply = _split_thinking(reply)
     _print_bot_markdown(clean_reply)
 
 
@@ -253,22 +249,19 @@ async def run_cli_repl() -> None:
                     console.print(str(e))
                 continue
 
-            _refresh_system_prompt(messages)
-            messages.append({"role": "user", "content": user_input})
-
             try:
                 with console.status("[dim]thinking…[/dim]", spinner="dots"):
-                    reply = await asyncio.get_running_loop().run_in_executor(
-                        None, lambda: chat(messages, on_tool_call=_cli_tool_log)
+                    reply, thinking, clean_reply = await run_turn(
+                        messages,
+                        user_input,
+                        lambda: chat(messages, on_tool_call=_cli_tool_log),
                     )
             except Exception as e:
                 console.print(f"\n[bold]bot>[/bold] Error: {e}\n")
-                messages.pop()
                 continue
 
             hist.save_assistant(reply)
 
-            thinking, clean_reply = _split_thinking(reply)
             if thinking and _show_thinking:
                 console.print(f"\n[dim]{thinking}[/dim]")
             _print_bot_markdown(clean_reply)

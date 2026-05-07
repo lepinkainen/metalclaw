@@ -4,6 +4,7 @@ No frontend dependencies. Imported by every frontend (CLI, Telegram, Discord)
 and by tests directly.
 """
 
+import asyncio
 import json
 import re
 from collections.abc import Callable
@@ -28,6 +29,7 @@ __all__ = [
     "build_system_prompt",
     "chat",
     "chat_via_escalation",
+    "run_turn",
 ]
 
 _THINK_RE = re.compile(r"<think>(.*?)</think>", re.DOTALL)
@@ -221,3 +223,31 @@ def chat_via_escalation(messages: list[dict]) -> str:
     return _chat_with_provider(
         big, messages, exclude_tools={"escalate_to_big_model"}
     )
+
+
+async def run_turn(
+    messages: list[dict],
+    user_text: str,
+    chat_call: Callable[[], str],
+) -> tuple[str, str, str]:
+    """Single user-turn orchestration shared by every frontend.
+
+    Refreshes the system prompt, appends ``user_text``, runs ``chat_call`` in a
+    thread executor, then splits ``<think>`` tags from the result. Returns
+    ``(raw_reply, thinking, clean_reply)``. On any exception from the chat call,
+    pops the user message from ``messages`` (so the caller's session state
+    stays consistent) and re-raises.
+
+    ``chat_call`` is a no-arg closure so callers can bind ``chat`` /
+    ``chat_via_escalation`` plus any ``on_tool_call`` hook themselves.
+    """
+    _refresh_system_prompt(messages)
+    messages.append({"role": "user", "content": user_text})
+    loop = asyncio.get_running_loop()
+    try:
+        reply = await loop.run_in_executor(None, chat_call)
+    except Exception:
+        messages.pop()
+        raise
+    thinking, clean_reply = _split_thinking(reply)
+    return reply, thinking, clean_reply

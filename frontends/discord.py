@@ -11,10 +11,9 @@ import discord
 import channels
 from chat_loop import (
     _parse_command,
-    _refresh_system_prompt,
-    _split_thinking,
     build_system_prompt,
     chat,
+    run_turn,
 )
 from config import get_config
 from frontends import common
@@ -251,17 +250,14 @@ async def _discord_handle_message(
             await _discord_dispatch_command(message, cmd, args)
             return
 
-        _refresh_system_prompt(messages)
-        messages.append({"role": "user", "content": text})
-        loop = asyncio.get_running_loop()
         try:
             async with message.channel.typing():
-                reply = await loop.run_in_executor(None, lambda: chat(messages))
+                _, _, clean_reply = await run_turn(
+                    messages, text, lambda: chat(messages)
+                )
         except Exception as e:  # noqa: BLE001
-            messages.pop()
             await _discord_send(message.channel, f"Error: {e}")
             return
-        _, clean_reply = _split_thinking(reply)
         await _discord_send(message.channel, clean_reply)
 
 

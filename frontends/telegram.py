@@ -16,10 +16,9 @@ import channels
 import telegram_format
 from chat_loop import (
     _parse_command,
-    _refresh_system_prompt,
-    _split_thinking,
     build_system_prompt,
     chat,
+    run_turn,
 )
 from config import xdg_data_dir
 from frontends import common
@@ -214,17 +213,14 @@ async def _telegram_handle_message(update: Update, context: ContextTypes.DEFAULT
         await _telegram_dispatch_command(update, cmd, args, context.bot)
         return
 
-    _refresh_system_prompt(messages)
-    messages.append({"role": "user", "content": text})
-    loop = asyncio.get_running_loop()
     try:
         async with _typing(chat_id, context.bot):
-            reply = await loop.run_in_executor(None, lambda: chat(messages))
+            _, _, clean_reply = await run_turn(
+                messages, text, lambda: chat(messages)
+            )
     except Exception as e:
-        messages.pop()
         await _tg_reply(update, f"Error: {e}")
         return
-    _, clean_reply = _split_thinking(reply)
     await _tg_reply(update, clean_reply)
 
 
