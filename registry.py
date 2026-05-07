@@ -10,6 +10,7 @@ _EMPTY_PARAMETERS: dict[str, Any] = {"type": "object", "properties": {}, "requir
 class Tool:
     func: Callable[..., Any]
     schema: dict[str, Any]
+    args_model: type[BaseModel] | None = None
 
 
 TOOLS: dict[str, Tool] = {}
@@ -55,6 +56,7 @@ def tool(
                     "parameters": parameters,
                 },
             },
+            args_model=args,
         )
         return func
 

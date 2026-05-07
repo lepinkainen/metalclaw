@@ -10,6 +10,8 @@ from collections.abc import Callable
 from contextvars import ContextVar
 from datetime import datetime
 
+from pydantic import ValidationError
+
 import memory
 from config import get_config
 from providers import Provider, get_provider
@@ -124,8 +126,27 @@ def _run_tool(name: str, args: dict) -> object:
     tool_obj = TOOLS.get(name)
     if tool_obj is None:
         return f"Error: unknown tool '{name}'"
+    if tool_obj.args_model is not None:
+        try:
+            validated = tool_obj.args_model.model_validate(args)
+        except ValidationError as e:
+            return {
+                "error": "invalid_arguments",
+                "tool": name,
+                "issues": [
+                    {
+                        "field": ".".join(str(p) for p in err["loc"]),
+                        "message": err["msg"],
+                        "type": err["type"],
+                    }
+                    for err in e.errors()
+                ],
+            }
+        call_args = validated.model_dump()
+    else:
+        call_args = args
     try:
-        return tool_obj.func(**args)
+        return tool_obj.func(**call_args)
     except Exception as e:
         return f"Error: {e}"
 

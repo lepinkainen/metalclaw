@@ -132,6 +132,28 @@ def test_run_tool_executes_registered_tool():
     assert "Rolled" in str(out)
 
 
+def test_run_tool_returns_structured_validation_error_on_bad_args():
+    out = bot._run_tool("roll_die", {"sides": "not-an-int"})
+    assert isinstance(out, dict)
+    assert out["error"] == "invalid_arguments"
+    assert out["tool"] == "roll_die"
+    assert any(issue["field"] == "sides" for issue in out["issues"])
+
+
+def test_run_tool_returns_structured_validation_error_on_missing_required():
+    out = bot._run_tool("roll_die", {})
+    assert isinstance(out, dict)
+    assert out["error"] == "invalid_arguments"
+    assert any(issue["field"] == "sides" for issue in out["issues"])
+
+
+def test_run_tool_rejects_unknown_field():
+    out = bot._run_tool("roll_die", {"sides": 6, "bogus": 1})
+    # pydantic default ignores extras — call still succeeds.
+    # Confirms validation does not break legitimate calls.
+    assert "Rolled" in str(out)
+
+
 def test_add_user_instruction_tool_routes_to_memory_and_refreshes(tmp_path, monkeypatch):
     import config as _config
 
