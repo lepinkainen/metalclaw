@@ -12,6 +12,7 @@ tasks:
         fi
       - echo "Lint OK"
   build:
+    deps: [lint, test]
     cmd: uv run python -c "import bot, tools, registry, self_change, memory, config"
   test:
     silent: true
