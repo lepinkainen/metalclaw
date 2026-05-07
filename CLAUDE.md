@@ -2,6 +2,26 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Deep architecture docs (AI-only)
+
+Detailed architecture, dataflow, conventions, and gotchas live in `ai-docs/` — written for AI consumption (dense, indexed, file:line refs). Start at `ai-docs/INDEX.md`. Load topic-specific files when editing the matching area:
+
+- `ai-docs/architecture.md` — module graph, layer rules, lifecycle
+- `ai-docs/modules.md` — per-file symbol map
+- `ai-docs/chat-loop.md` — `_chat_with_provider` deep dive, escalation
+- `ai-docs/tools.md` — registration mechanics, full tool catalog, slash wiring
+- `ai-docs/providers.md` — Provider Protocol, per-provider quirks
+- `ai-docs/memory.md` — file format, locking, atomic write, forget semantics
+- `ai-docs/frontends.md` — CLI/Telegram/Discord delta, sessions, gating
+- `ai-docs/heartbeat.md` — scope file format, scheduler, sentinel
+- `ai-docs/config.md` — field table, env overrides, validators
+- `ai-docs/dataflow.md` — sequence diagrams (user turn, escalation, heartbeat, memory write)
+- `ai-docs/conventions.md` — house rules
+- `ai-docs/gotchas.md` — circular imports, ContextVar, Anthropic shape, etc.
+- `ai-docs/testing.md` — pytest fixtures, common stubs, CI gates
+
+Prefer these over re-reading the source for orientation. Update them when changing the matching area.
+
 ## Project
 
 Metalclaw is a single-user chatbot that talks to an LLM provider — Ollama (default, `gemma4:latest`), OpenAI, or Anthropic — with tool calling, exposed via a single executable (`bot.py`) that runs the CLI REPL, the Telegram frontend, and the Discord frontend together. It also has a controlled self-modification path that shells out to `claude -p` to edit its own source.
