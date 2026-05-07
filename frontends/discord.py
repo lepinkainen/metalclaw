@@ -166,6 +166,8 @@ async def _discord_dispatch_command(
         await common.run_forget(send, args)
     elif cmd == "memory":
         await common.run_memory(send)
+    elif cmd == "manual":
+        await common.run_manual(send, args)
     elif cmd == "heartbeat":
         await common.run_heartbeat(
             send, scope, args.strip(), warn_no_discord_channel=True

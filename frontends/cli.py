@@ -47,6 +47,7 @@ _COMMANDS = {
     "remember": "save a preference: /remember <key>=<value>",
     "forget": "remove a memory entry: /forget <matcher>",
     "memory": "show your stored long-term memory",
+    "manual": "show the user manual: /manual [section] (or /manual init)",
     "heartbeat": "show heartbeat config / run a tick now (/heartbeat run)",
     "big": "ask the escalation cloud model directly: /big <query>",
     "help": "show this help",
@@ -190,6 +191,16 @@ def _handle_memory(_: str) -> None:
     _print_bot_markdown(memory.render_full())
 
 
+async def _handle_manual(args: str) -> None:
+    chunks: list[str] = []
+
+    async def _capture(text: str) -> None:
+        chunks.append(text)
+
+    await common.run_manual(_capture, args)
+    _print_bot_markdown("\n\n".join(chunks))
+
+
 async def _handle_heartbeat(args: str) -> None:
     await common.run_heartbeat(_cli_send_dim, "cli", args.strip())
 
@@ -210,6 +221,7 @@ _COMMAND_HANDLERS = {
     "remember":  _handle_remember,
     "forget":    _handle_forget,
     "memory":    _handle_memory,
+    "manual":    _handle_manual,
     "heartbeat": _handle_heartbeat,
     "big":       _handle_big,
     "help":      _handle_help,

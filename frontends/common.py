@@ -48,6 +48,7 @@ HELP_LINES: list[str] = [
     "/big <query> — ask the escalation cloud model directly",
     "/add-tool <description> — write a new tool live (CLI/Telegram/Discord)",
     "/approve | /approve_force | /reject | /diff — resolve a pending self-change",
+    "/manual [section] — show the user manual; /manual init to create it",
     "/new — reset this conversation",
     "/help — this message",
 ]
@@ -278,6 +279,41 @@ async def run_forget(send: SendFn, args: str) -> None:
 
 async def run_memory(send: SendFn) -> None:
     await send(memory.render_full())
+
+
+async def run_manual(send: SendFn, args: str) -> None:
+    """Drive the read_manual tool from a slash command.
+
+    ``/manual``           → table of contents.
+    ``/manual <section>`` → that section's prose.
+    ``/manual init``      → copy the bundled template into the user's vault.
+    """
+    from tools import manual as manual_tool
+
+    arg = args.strip()
+    if arg == "init":
+        res = manual_tool.init_manual()
+        if res["status"] == "created":
+            await send(f"manual created at {res['path']}")
+        else:
+            await send(f"manual already exists at {res['path']}")
+        return
+
+    res = manual_tool.read_manual(arg or None)
+    if "error" in res:
+        if res["error"] == "manual_not_initialised":
+            await send(f"manual not initialised — {res['hint']}")
+            return
+        available = ", ".join(res.get("available", []))
+        await send(f"unknown manual section '{res['requested']}'. available: {available}")
+        return
+
+    if "markdown" in res:
+        await send(res["markdown"])
+        return
+
+    body = res["toc"] + "\n" + res["hint"]
+    await send(body)
 
 
 async def run_heartbeat(

@@ -143,6 +143,7 @@ _TELEGRAM_BOT_COMMANDS: list[tuple[str, str]] = [
     ("remember",      "save a preference: <key>=<value>"),
     ("forget",        "remove a memory entry"),
     ("memory",        "show stored long-term memory"),
+    ("manual",        "show the user manual (section name optional, 'init' to create)"),
     ("heartbeat",     "show heartbeat config (or 'run' to fire now)"),
     ("big",           "ask the escalation cloud model directly"),
     ("new",           "reset this conversation"),
@@ -176,6 +177,8 @@ async def _telegram_dispatch_command(
         await common.run_forget(send, args)
     elif cmd == "memory":
         await common.run_memory(send)
+    elif cmd == "manual":
+        await common.run_manual(send, args)
     elif cmd == "heartbeat":
         await common.run_heartbeat(send, scope, args.strip())
     elif cmd == "big":
