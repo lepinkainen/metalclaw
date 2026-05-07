@@ -67,7 +67,8 @@ YAML config search order: `METALCLAW_CONFIG` env var → `./config.yaml` in cwd 
 - **heartbeat.py** — Scheduled proactive checks. Drop a `heartbeat-<scope>.md` file (with YAML frontmatter listing `tasks:`) into `<vault>/<memory_subdir>/`. The scheduler in `bot.py` discovers scopes via `discover_scopes()`, runs due tasks against the configured provider, and routes the result through `channels.for_scope(scope)`. State (last-run timestamps) lives in `$XDG_DATA_HOME/metalclaw/heartbeat_state.json`. Honors `heartbeat_active_hours` window. The model is taught to emit the literal `HEARTBEAT_OK` sentinel when nothing needs reporting, suppressing the message.
 - **vault_search.py** — Obsidian vault search (`search`) and note read (`read`) backing the `search_vault` / `read_note` tools. `search` shells out to `ripgrep` (must be on PATH), respects `vault_search_excludes` globs from config, and trims long lines/bodies (`_LINE_CHAR_LIMIT=300`, `_BODY_CHAR_LIMIT=50_000`). `/search <query>` slash command in all three frontends.
 - **telegram_format.py** — Markdown → Telegram-flavoured HTML via `markdown-it-py` (Telegram doesn't render CommonMark natively; Discord does). Used only by the Telegram frontend.
-- **self_change.py** — Spawns `claude -p` with `--allowedTools Edit,Write,Read`, snapshots pre-existing dirty/untracked files so reject reverts only Claude's delta, runs `task lint/build/test`, then prompts approve / approve! / reject / diff. Approved entries appended to `changes.jsonl`.
+- **self_change.py** — Backs `/self-edit`. Spawns `claude -p` with `--allowedTools Edit,Write,Read`, snapshots pre-existing dirty/untracked files so reject reverts only Claude's delta, runs `task lint/build/test`, then prompts approve / approve! / reject / diff. Approved entries appended to `changes.jsonl`. CLI-only; takes effect on next bot launch.
+- **live_tool.py** — Backs `/add-tool`. Same `claude -p` shell with a tighter contract: write exactly one new file at `tools/<slug>.py`, edit nothing else. Focused gates (ruff on the new file, `importlib.import_module` + register diff against `registry.TOOLS`, schema-shape sanity) — seconds, not minutes. On `/approve`, appends `from .<slug> import <names>` to `tools/__init__.py` and merges the names into `__all__` via an AST-aware idempotent edit. The new tool is callable in the *current* session because the import side-effect already mutated `registry.TOOLS` and `chat_loop.py` rebuilds the provider-facing schema list every turn. `/reject` unlinks the file and pops the new keys from `TOOLS`. CLI + Telegram + Discord.
 
 ### Escalation
 
@@ -75,11 +76,23 @@ When `escalation_enabled: true` in config, the local model can call the `escalat
 
 ### Adding a new tool
 
-Define a function in `tools.py` decorated with `@tool(...)`. Schema follows Ollama's OpenAI-compatible function-calling format. To expose it as a slash command, add a parser + formatter in `frontends/common.py` and wire it into `common.TOOL_COMMANDS` — that single registry is consumed by all three frontends (CLI wraps the formatter in `_print_bot_markdown`; Telegram/Discord send the formatted string directly).
+Drop a new module under `tools/` decorating one or more functions with `@tool(...)` from `registry`. Schema follows Ollama's OpenAI-compatible function-calling format. Add the import + `__all__` entry to `tools/__init__.py` (or let `/add-tool` do it for you). To expose it as a slash command, add a parser + formatter in `frontends/common.py` and wire it into `common.TOOL_COMMANDS` — that single registry is consumed by all three frontends (CLI wraps the formatter in `_print_bot_markdown`; Telegram/Discord send the formatted string directly).
 
 ### Self-modification flow
 
-`/add-tool` and `/self-edit` → `self_change.run_self_change(request, REPO_ROOT)` → Claude subprocess edits files → lint+build+test gates → interactive approve/reject. `approve!` overrides failing checks. Reject uses `git checkout --` for tracked changes and unlinks new untracked files (only those Claude introduced).
+Two paths, both shell out to `claude -p`:
+
+- **`/add-tool <description>`** (live, CLI/Telegram/Discord) → `live_tool.run_add_tool_live` → constrained Claude run (one new `tools/<slug>.py`, no other edits) → focused gates (ruff + import + schema sanity) → async approval. The model registers immediately because importing the new module fires the `@tool` decorator; on `/approve` the import is also persisted to `tools/__init__.py`. On `/reject` the file is unlinked and the new keys are popped from `registry.TOOLS`.
+- **`/self-edit <description>`** (CLI-only, restart-tied) → `self_change.run_self_change` → unconstrained Claude run anywhere in the repo → `task lint/build/test` gates → interactive approve/reject. `approve!` overrides failing gates. Reject uses `git checkout --` for tracked changes and unlinks new untracked files (only those Claude introduced).
+
+Approval commands (slash form only — bare-word would collide with chatting "approve, looks good" to the model):
+
+- `/approve` — accept if all gates passed.
+- `/approve_force` (or `/approve-force` in CLI) — accept regardless.
+- `/reject` — discard.
+- `/diff` — show the diff, leave the pending change in place.
+
+Approved entries (live-add or self-edit) are appended to `changes.jsonl`.
 
 ### Memory system
 
