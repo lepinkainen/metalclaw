@@ -12,7 +12,6 @@ from rich.console import Console
 from rich.markdown import Markdown
 
 import channels
-import heartbeat
 import memory
 import self_change
 from chat_loop import (
@@ -138,65 +137,24 @@ def _handle_big(args: str) -> None:
     _print_bot_markdown(clean_reply)
 
 
-def _handle_remember(args: str) -> None:
-    if "=" not in args:
-        console.print("usage: /remember <key>=<value>")
-        return
-    key, value = args.split("=", 1)
-    key, value = key.strip(), value.strip()
-    if not key or not value:
-        console.print("usage: /remember <key>=<value>")
-        return
-    memory.set_preference(key, value)
-    console.print(f"[dim]saved {key}={value}[/dim]")
+async def _cli_send_dim(msg: str) -> None:
+    console.print(f"[dim]{msg}[/dim]")
 
 
-def _handle_forget(args: str) -> None:
-    matcher = args.strip()
-    if not matcher:
-        console.print("usage: /forget <substring>")
-        return
-    if memory.forget(matcher):
-        console.print(f"[dim]forgot entry matching '{matcher}'[/dim]")
-    else:
-        console.print(f"no entry matched '{matcher}'")
+async def _handle_remember(args: str) -> None:
+    await common.run_remember(_cli_send_dim, args)
+
+
+async def _handle_forget(args: str) -> None:
+    await common.run_forget(_cli_send_dim, args)
 
 
 def _handle_memory(_: str) -> None:
     _print_bot_markdown(memory.render_full())
 
 
-def _handle_heartbeat(args: str) -> None:
-    sub = args.strip()
-    path = heartbeat.heartbeat_path_for(memory.current_scope.get())
-    if sub == "run":
-        try:
-            asyncio.get_running_loop()
-        except RuntimeError:
-            asyncio.run(heartbeat.run_tick())
-        else:
-            asyncio.create_task(heartbeat.run_tick())
-        console.print("[dim]heartbeat tick fired[/dim]")
-        return
-    cfg = get_config()
-    console.print(f"[dim]heartbeat enabled={cfg.heartbeat_enabled} interval={cfg.heartbeat_interval_seconds}s[/dim]")
-    console.print(f"[dim]checklist: {path}[/dim]")
-    if path.exists():
-        try:
-            hb = heartbeat.parse_heartbeat_file(path.read_text(encoding="utf-8"))
-        except ValueError as e:
-            console.print(f"[red]parse error: {e}[/red]")
-            return
-        if hb.tasks:
-            for t in hb.tasks:
-                console.print(f"  • {t.name}  every {t.interval_seconds}s")
-        else:
-            console.print("[dim]no tasks defined (free-form body only)[/dim]")
-    else:
-        template = REPO_ROOT / "heartbeat.example.md"
-        console.print(
-            f"[dim]no checklist — copy {template} to the path above to opt in[/dim]"
-        )
+async def _handle_heartbeat(args: str) -> None:
+    await common.run_heartbeat(_cli_send_dim, memory.current_scope.get(), args.strip())
 
 
 def _handle_onboard(_: str) -> None:
@@ -305,7 +263,9 @@ async def run_cli_repl() -> None:
                     console.print(f"unknown command: /{cmd}  (try /help)")
                     continue
                 try:
-                    handler(args)
+                    result = handler(args)
+                    if asyncio.iscoroutine(result):
+                        await result
                 except ValueError as e:
                     console.print(str(e))
                 continue
