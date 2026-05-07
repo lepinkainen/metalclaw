@@ -7,6 +7,8 @@ from pathlib import Path
 
 from prompt_toolkit import PromptSession
 from prompt_toolkit.application import run_in_terminal
+from prompt_toolkit.completion import Completer, Completion
+from prompt_toolkit.document import Document
 from prompt_toolkit.patch_stdout import patch_stdout
 from rich.console import Console
 from rich.markdown import Markdown
@@ -53,6 +55,24 @@ _COMMANDS = {
 _show_thinking = False
 _prompt_session: PromptSession | None = None
 _cli_messages: list[dict] | None = None
+
+
+class _SlashCompleter(Completer):
+    """Complete slash-command names from `_COMMANDS` when input begins with `/`."""
+
+    def get_completions(self, document: Document, _complete_event):
+        text = document.text_before_cursor
+        if not text.startswith("/") or " " in text:
+            return
+        word = text[1:]
+        for name, desc in _COMMANDS.items():
+            if name.startswith(word):
+                yield Completion(
+                    name,
+                    start_position=-len(word),
+                    display=f"/{name}",
+                    display_meta=desc,
+                )
 
 
 def _print_help() -> None:
@@ -226,7 +246,11 @@ async def run_cli_repl() -> None:
     now = datetime.now().strftime("%Y-%m-%d %H:%M")
     session_id = datetime.now().strftime("%Y%m%dT%H%M%S")
     hist = SQLiteHistory(session_id)
-    _prompt_session = PromptSession(history=hist)
+    _prompt_session = PromptSession(
+        history=hist,
+        completer=_SlashCompleter(),
+        complete_while_typing=True,
+    )
 
     messages: list[dict] = [
         {
