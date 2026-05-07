@@ -187,7 +187,7 @@ def heartbeat_path_for(scope: str) -> Path:
 
 
 def discover_scopes() -> list[str]:
-    """Scopes with a heartbeat-<scope>.md file. Falls back to active channels."""
+    """Return scopes that have a heartbeat-<scope>.md file in `memory_dir`."""
     cfg = get_config()
     scopes: set[str] = set()
     if cfg.memory_dir.exists():
@@ -265,6 +265,10 @@ async def run_tick(*, now: datetime | None = None) -> dict[str, str]:
         if not due and not hb.body:
             continue
 
+        # Body-only files (or files where no tasks are due but a body is set)
+        # fire on every tick within active hours: they carry no per-task state
+        # to advance, so the only throttle is `_within_active_hours` plus the
+        # scheduler interval. Treat the body as an always-on context block.
         try:
             reply = await _run_scope(scope, hb, due, now, chat_loop.chat, chat_loop.build_system_prompt)
         except Exception as e:

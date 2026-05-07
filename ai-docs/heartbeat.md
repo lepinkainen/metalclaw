@@ -72,11 +72,21 @@ while not stop.is_set():
 3. For each scope from `discover_scopes()`:
    a. Read + parse heartbeat file.
    b. Compute `due = [t for t in hb.tasks if is_due(...)]`. Skip if no due tasks AND no body.
-   c. `_run_scope(...)` — builds messages, calls `bot.chat(messages)` via executor (blocking).
+   c. `_run_scope(...)` — builds messages, calls `chat_loop.chat(messages)` via executor (blocking).
    d. Update `state[state_key(scope, t.name)] = now.isoformat()` for each due task.
    e. Strip reply; if `clean == SENTINEL` or starts with `SENTINEL` → silent (no notify).
    f. Else `channels.for_scope(scope).notify(scope, clean)`. Drop with warning if no channel.
 4. `save_state(state)`.
+
+### Body-only files fire every tick
+
+If a scope file has a body but no due tasks (or no tasks at all), step 3b's
+`due` is empty but step 3c still runs. Step 3d's loop has nothing to advance,
+so **no state is recorded** — meaning a body-only file (or a body + only
+not-yet-due tasks) re-fires every tick within active hours. This is
+intentional: treat the body as an always-on context block, throttled only by
+`heartbeat_active_hours` and `heartbeat_interval_seconds`. If you want a
+rate-limit, define an explicit task with an `interval`.
 
 ## System-prompt augmentation
 
