@@ -1,7 +1,12 @@
 from collections.abc import Iterator
 
-import bot
 import tools  # noqa: F401 — register tools
+from chat_loop import (
+    _active_session_messages,
+    _chat_with_provider,
+    _run_tool,
+    _split_system,
+)
 from providers.base import AssistantMessage, ToolCall
 
 
@@ -37,7 +42,7 @@ def test_loop_terminates_on_empty_tool_calls():
         {"role": "system", "content": "sys"},
         {"role": "user", "content": "hi"},
     ]
-    out = bot._chat_with_provider(provider, messages)
+    out = _chat_with_provider(provider, messages)
     assert out == "hello"
     assert messages[0] == {"role": "system", "content": "sys"}
     assert messages[-1] == {"role": "assistant", "content": "hello"}
@@ -61,7 +66,7 @@ def test_loop_dispatches_tool_call_and_feeds_result_back():
     provider = provider[0]
 
     messages = [{"role": "user", "content": "roll a d6"}]
-    out = bot._chat_with_provider(provider, messages)
+    out = _chat_with_provider(provider, messages)
     assert out == "rolled"
     # FakeProvider format_tool_results emits a role:tool message with the
     # JSON-serialized tool output. Confirm it appears in history.
@@ -75,7 +80,7 @@ def test_loop_excludes_tools_from_schema():
         AssistantMessage(text="ok", tool_calls=[], raw={"role": "assistant", "content": "ok"}),
     ])
     messages = [{"role": "user", "content": "hi"}]
-    bot._chat_with_provider(
+    _chat_with_provider(
         provider, messages, exclude_tools={"escalate_to_big_model"}
     )
     schemas_passed = provider.calls[0][1]
@@ -92,7 +97,7 @@ def test_active_session_messages_contextvar_is_set_during_chat():
         name = "peek"
 
         def chat_once(self, messages, tools_, system):
-            captured.append(bot._active_session_messages.get())
+            captured.append(_active_session_messages.get())
             return AssistantMessage(
                 text="done", tool_calls=[], raw={"role": "assistant", "content": "done"}
             )
@@ -101,14 +106,14 @@ def test_active_session_messages_contextvar_is_set_during_chat():
             return []
 
     messages = [{"role": "user", "content": "x"}]
-    bot._chat_with_provider(PeekProvider(), messages)
+    _chat_with_provider(PeekProvider(), messages)
     assert captured == [messages]
     # Resets on exit
-    assert bot._active_session_messages.get() is None
+    assert _active_session_messages.get() is None
 
 
 def test_split_system_extracts_first_message_only():
-    sys, hist = bot._split_system([
+    sys, hist = _split_system([
         {"role": "system", "content": "S"},
         {"role": "user", "content": "U"},
     ])
@@ -117,23 +122,23 @@ def test_split_system_extracts_first_message_only():
 
 
 def test_split_system_handles_no_system_role():
-    sys, hist = bot._split_system([{"role": "user", "content": "U"}])
+    sys, hist = _split_system([{"role": "user", "content": "U"}])
     assert sys == ""
     assert hist == [{"role": "user", "content": "U"}]
 
 
 def test_run_tool_returns_error_for_unknown_name():
-    out = bot._run_tool("nonexistent_tool", {})
+    out = _run_tool("nonexistent_tool", {})
     assert "unknown tool" in str(out)
 
 
 def test_run_tool_executes_registered_tool():
-    out = bot._run_tool("roll_die", {"sides": 6})
+    out = _run_tool("roll_die", {"sides": 6})
     assert "Rolled" in str(out)
 
 
 def test_run_tool_returns_structured_validation_error_on_bad_args():
-    out = bot._run_tool("roll_die", {"sides": "not-an-int"})
+    out = _run_tool("roll_die", {"sides": "not-an-int"})
     assert isinstance(out, dict)
     assert out["error"] == "invalid_arguments"
     assert out["tool"] == "roll_die"
@@ -141,14 +146,14 @@ def test_run_tool_returns_structured_validation_error_on_bad_args():
 
 
 def test_run_tool_returns_structured_validation_error_on_missing_required():
-    out = bot._run_tool("roll_die", {})
+    out = _run_tool("roll_die", {})
     assert isinstance(out, dict)
     assert out["error"] == "invalid_arguments"
     assert any(issue["field"] == "sides" for issue in out["issues"])
 
 
 def test_run_tool_rejects_unknown_field():
-    out = bot._run_tool("roll_die", {"sides": 6, "bogus": 1})
+    out = _run_tool("roll_die", {"sides": 6, "bogus": 1})
     # pydantic default ignores extras — call still succeeds.
     # Confirms validation does not break legitimate calls.
     assert "Rolled" in str(out)
@@ -182,7 +187,7 @@ def test_add_user_instruction_tool_routes_to_memory_and_refreshes(tmp_path, monk
             {"role": "system", "content": "old-system"},
             {"role": "user", "content": "from now on Finnish"},
         ]
-        bot._chat_with_provider(provider, messages)
+        _chat_with_provider(provider, messages)
         import memory as _memory
         assert _memory.load().instructions == ["Reply in Finnish."]
         second_system = provider.calls[1][2]
@@ -310,7 +315,7 @@ def test_memory_mutator_refreshes_system_prompt_mid_loop(tmp_path, monkeypatch):
             {"role": "system", "content": "old-system"},
             {"role": "user", "content": "remember tone=terse"},
         ]
-        bot._chat_with_provider(provider, messages)
+        _chat_with_provider(provider, messages)
         first_system = provider.calls[0][2]
         second_system = provider.calls[1][2]
         assert first_system == "old-system"

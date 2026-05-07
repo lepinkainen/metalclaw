@@ -199,7 +199,7 @@ def test_run_tick_sentinel_suppresses_notify(cfg):
     ch = _StubChannel()
     channels.register(ch)
 
-    with patch("bot.chat", return_value="HEARTBEAT_OK"):
+    with patch("chat_loop.chat", return_value="HEARTBEAT_OK"):
         replies = asyncio.run(heartbeat.run_tick())
     assert replies == {"cli": ""}
     assert ch.calls == []
@@ -212,7 +212,7 @@ def test_run_tick_alerts_via_channel(cfg):
     ch = _StubChannel()
     channels.register(ch)
 
-    with patch("bot.chat", return_value="ALERT: something happened"):
+    with patch("chat_loop.chat", return_value="ALERT: something happened"):
         replies = asyncio.run(heartbeat.run_tick())
     assert replies["cli"] == "ALERT: something happened"
     assert ch.calls == [("cli", "ALERT: something happened")]
@@ -231,7 +231,7 @@ def test_run_tick_skips_when_no_due_and_no_body(cfg):
         called["n"] += 1
         return "HEARTBEAT_OK"
 
-    with patch("bot.chat", side_effect=fake_chat):
+    with patch("chat_loop.chat", side_effect=fake_chat):
         asyncio.run(heartbeat.run_tick(now=now))
     assert called["n"] == 0
 
@@ -241,7 +241,7 @@ def test_run_tick_writes_state(cfg):
         "tasks:\n  - name: ping\n    interval: 1s\n    prompt: 'x'\n"
     )
     channels.register(_StubChannel())
-    with patch("bot.chat", return_value="HEARTBEAT_OK"):
+    with patch("chat_loop.chat", return_value="HEARTBEAT_OK"):
         asyncio.run(heartbeat.run_tick())
     state = heartbeat.load_state()
     assert "cli::ping" in state

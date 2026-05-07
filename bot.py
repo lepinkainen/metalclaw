@@ -2,7 +2,7 @@
 
 Wires the CLI REPL, Telegram, and Discord frontends together with the heartbeat
 scheduler. Imports ``tools`` to trigger ``@tool`` registrations before any
-provider is invoked. Frontend-pinned helpers are re-exported for the test suite.
+provider is invoked.
 """
 
 import argparse
@@ -14,24 +14,10 @@ from telegram.ext import Application
 
 import heartbeat
 import memory
-from chat_loop import (
-    _active_session_messages,
-    _chat_with_provider,
-    _parse_command,
-    _run_tool,
-    _split_system,
-    build_system_prompt,
-    chat,
-)
 from config import get_config
 from frontends import telegram as _telegram
 from frontends.cli import console, run_cli_repl as _run_cli_repl
 from frontends.discord import (
-    _DISCORD_MAX_MESSAGE,
-    _DiscordChannel,
-    _discord_scope_for,
-    _split_for_discord,
-    _strip_bot_mention,
     start_discord as _start_discord,
     stop_discord as _stop_discord,
 )
@@ -39,23 +25,6 @@ from frontends.telegram import (
     start_telegram as _start_telegram,
     stop_telegram as _stop_telegram,
 )
-
-# Re-exports retained so existing tests can keep importing these as ``bot._foo``,
-# plus ``bot.chat`` / ``bot.build_system_prompt`` consumed by heartbeat.run_tick.
-__all__ = [
-    "_DISCORD_MAX_MESSAGE",
-    "_DiscordChannel",
-    "_active_session_messages",
-    "_chat_with_provider",
-    "_discord_scope_for",
-    "_parse_command",
-    "_run_tool",
-    "_split_for_discord",
-    "_split_system",
-    "_strip_bot_mention",
-    "build_system_prompt",
-    "chat",
-]
 
 
 async def _async_main(

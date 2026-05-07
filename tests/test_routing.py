@@ -1,4 +1,4 @@
-from bot import _parse_command
+from chat_loop import _parse_command
 
 
 def test_add_tool_with_args():

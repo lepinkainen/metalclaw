@@ -1,5 +1,5 @@
-import bot
 import tools
+from chat_loop import _active_session_messages
 from providers.base import AssistantMessage
 
 
@@ -46,11 +46,11 @@ def test_escalate_routes_through_provider(cfg_file, write_config, monkeypatch):
         {"role": "system", "content": "you are local"},
         {"role": "user", "content": "earlier turn"},
     ]
-    token = bot._active_session_messages.set(session)
+    token = _active_session_messages.set(session)
     try:
         out = tools.escalate_to_big_model(query="hard one", reason="too hard")
     finally:
-        bot._active_session_messages.reset(token)
+        _active_session_messages.reset(token)
 
     assert out["status"] == "ok"
     assert out["reply"] == "cloud says hi"

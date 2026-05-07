@@ -1,7 +1,7 @@
 """Heartbeat scheduler.
 
 Periodic asyncio loop that wakes Metalclaw on a per-scope `HEARTBEAT.md`,
-filters tasks to those due, calls `bot.chat()` with a synthetic prompt, and
+filters tasks to those due, calls `chat_loop.chat()` with a synthetic prompt, and
 routes any non-`HEARTBEAT_OK` reply to the matching frontend channel.
 
 State (per-scope, per-task last-run timestamps) is persisted at
@@ -238,7 +238,7 @@ def _build_heartbeat_messages(scope: str, hb: HeartbeatFile, due: list[Heartbeat
 
 async def run_tick(*, now: datetime | None = None) -> dict[str, str]:
     """Single heartbeat tick across all eligible scopes. Returns per-scope reply (or "" if silent)."""
-    import bot  # local to avoid circular import at module load
+    import chat_loop  # local to avoid circular import at module load
 
     now = now or datetime.now(timezone.utc)
     cfg = get_config()
@@ -266,7 +266,7 @@ async def run_tick(*, now: datetime | None = None) -> dict[str, str]:
             continue
 
         try:
-            reply = await _run_scope(scope, hb, due, now, bot.chat, bot.build_system_prompt)
+            reply = await _run_scope(scope, hb, due, now, chat_loop.chat, chat_loop.build_system_prompt)
         except Exception as e:
             log.exception("scope %s: heartbeat turn failed: %s", scope, e)
             continue
