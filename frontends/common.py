@@ -16,17 +16,23 @@ import argparse
 import asyncio
 import shlex
 from collections.abc import Awaitable, Callable
+from pathlib import Path
 from typing import NoReturn
 
 import heartbeat
+import live_tool
 import memory
 from chat_loop import chat_via_escalation, run_turn
 from config import get_config
 
 SendFn = Callable[[str], Awaitable[None]]
 
+REPO_ROOT = Path(__file__).resolve().parent.parent
+
 TELEGRAM_SCOPE_PREFIX = "telegram-"
 DISCORD_SCOPE_PREFIX = "discord-"
+
+_pending_self_change: dict[str, live_tool.LiveAddState] = {}
 
 
 HELP_LINES: list[str] = [
@@ -40,6 +46,8 @@ HELP_LINES: list[str] = [
     "/memory — show stored memory",
     "/heartbeat — show heartbeat config; /heartbeat run to fire now",
     "/big <query> — ask the escalation cloud model directly",
+    "/add-tool <description> — write a new tool live (CLI/Telegram/Discord)",
+    "/approve | /approve-force | /reject | /diff — resolve a pending self-change",
     "/new — reset this conversation",
     "/help — this message",
 ]
@@ -328,5 +336,77 @@ async def run_big(
         await send(f"Error: {e}")
         return
     await send(clean_reply)
+
+
+# --- self-change pending-state pump ---
+
+
+def _format_self_change_summary(state: live_tool.LiveAddState) -> str:
+    lines = [f"self-change ready: {state.slug}"]
+    lines.append(f"  file: {state.new_file}")
+    registered = ", ".join(state.registered_names) or "(none — gate failed)"
+    lines.append(f"  registered: {registered}")
+    for gate in ("ruff", "import", "schema"):
+        if gate not in state.gate_results:
+            continue
+        marker = "ok" if state.gate_results[gate] else "FAIL"
+        msg = state.gate_messages.get(gate, "")
+        lines.append(f"  {gate}: {marker} — {msg}" if msg else f"  {gate}: {marker}")
+    lines.append("commands: /approve  /approve-force  /reject  /diff")
+    return "\n".join(lines)
+
+
+async def run_add_tool(send: SendFn, request: str, scope: str) -> None:
+    if not request.strip():
+        await send("usage: /add-tool <description of the tool to add>")
+        return
+    if scope in _pending_self_change:
+        await send(
+            "a self-change is already pending — /approve, /approve-force, /reject, or /diff first"
+        )
+        return
+    await send("running self-change… this can take a few minutes.")
+    state = await asyncio.to_thread(live_tool.run_add_tool_live, request, REPO_ROOT)
+    if state.aborted:
+        await send(f"aborted: {state.aborted}\n\n{state.plan_output}".strip())
+        return
+    _pending_self_change[scope] = state
+    await send(_format_self_change_summary(state))
+
+
+async def run_approve(send: SendFn, scope: str, *, force: bool = False) -> None:
+    state = _pending_self_change.get(scope)
+    if state is None:
+        await send("no pending self-change")
+        return
+    res = live_tool.finalise_add_tool_live(state, "approve-force" if force else "approve")
+    if res.ok:
+        _pending_self_change.pop(scope, None)
+    await send(res.message)
+
+
+async def run_reject(send: SendFn, scope: str) -> None:
+    state = _pending_self_change.get(scope)
+    if state is None:
+        await send("no pending self-change")
+        return
+    res = live_tool.finalise_add_tool_live(state, "reject")
+    if res.ok:
+        _pending_self_change.pop(scope, None)
+    await send(res.message)
+
+
+async def run_diff(send: SendFn, scope: str) -> None:
+    state = _pending_self_change.get(scope)
+    if state is None:
+        await send("no pending self-change")
+        return
+    res = live_tool.finalise_add_tool_live(state, "diff")
+    body = res.diff or res.message
+    await send(f"```\n{body}\n```")
+
+
+def has_pending_self_change(scope: str) -> bool:
+    return scope in _pending_self_change
 
 
