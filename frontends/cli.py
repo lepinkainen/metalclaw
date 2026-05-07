@@ -36,6 +36,7 @@ console = Console(highlight=False)
 _COMMANDS = common.cli_command_table()
 
 _show_thinking = False
+_show_tools = False
 _prompt_session: PromptSession | None = None
 _cli_messages: list[dict] | None = None
 
@@ -104,6 +105,13 @@ def _handle_think(_: str) -> None:
     _show_thinking = not _show_thinking
     state = "on" if _show_thinking else "off"
     console.print(f"[dim]thinking display {state}[/dim]")
+
+
+def _handle_tools(_: str) -> None:
+    global _show_tools
+    _show_tools = not _show_tools
+    state = "on" if _show_tools else "off"
+    console.print(f"[dim]tool-call trace {state}[/dim]")
 
 
 def _print_bot_markdown(text: str) -> None:
@@ -207,6 +215,7 @@ _COMMAND_HANDLERS = {
     "reject":        _handle_reject,
     "diff":          _handle_diff,
     "think":     _handle_think,
+    "tools":     _handle_tools,
     "train":     _make_tool_handler(*common.TOOL_COMMANDS["train"]),
     "weather":   _make_tool_handler(*common.TOOL_COMMANDS["weather"]),
     "mail":      _make_tool_handler(*common.TOOL_COMMANDS["mail"]),
@@ -221,11 +230,12 @@ _COMMAND_HANDLERS = {
 }
 
 
-def _cli_tool_log(name: str, args: dict, short_result: str) -> None:
-    if not _show_thinking:
+def _cli_tool_log(name: str, args: dict, result: str) -> None:
+    if not (_show_thinking or _show_tools):
         return
     args_summary = ", ".join(f"{k}={v!r}" for k, v in args.items()) if args else ""
-    console.print(f"  [dim][tool: {name}({args_summary})] → {short_result}[/dim]")
+    console.print(f"  [tool: {name}({args_summary})]", style="dim", markup=False)
+    console.print(f"    → {result}", style="dim", markup=False)
 
 
 class _CLIChannel:

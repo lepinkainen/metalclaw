@@ -230,7 +230,7 @@ def _chat_with_provider(
                 result = _run_tool(tc.name, tc.arguments)
                 result_json = _tool_result_json(result)
                 if on_tool_call:
-                    on_tool_call(tc.name, tc.arguments, result_json[:120])
+                    on_tool_call(tc.name, tc.arguments, result_json)
                 results.append((tc, result_json))
                 if tc.name in _MEMORY_MUTATORS:
                     memory_dirty = True

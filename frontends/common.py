@@ -80,6 +80,7 @@ COMMANDS: tuple[CommandSpec, ...] = (
     CommandSpec("diff",          "/diff — show diff of a pending self-change",                             "show diff of a pending self-change",                             ALL_FRONTENDS),
     CommandSpec("self-edit",     "/self-edit <description> — make a general code change (CLI only)",       "make a general code change (full lint/build/test)",              frozenset({CLI})),
     CommandSpec("think",         "/think — toggle display of model thinking (off by default)",             "toggle display of model thinking (off by default)",              frozenset({CLI})),
+    CommandSpec("tools",         "/tools — toggle dim trace of tool calls (off by default)",               "toggle dim trace of tool calls (off by default)",                frozenset({CLI})),
     CommandSpec("new",           "/new — reset this conversation",                                         "reset this conversation",                                        ALL_FRONTENDS),
     CommandSpec("help",          "/help — this message",                                                   "show available commands",                                        ALL_FRONTENDS),
 )
