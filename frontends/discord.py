@@ -21,7 +21,16 @@ from frontends import common
 from registry import TOOLS
 
 _discord_sessions: dict[int, list[dict]] = {}
+_discord_session_locks: dict[int, asyncio.Lock] = {}
 _known_discord_channels: set[int] = set()
+
+
+def _session_lock(channel_id: int) -> asyncio.Lock:
+    lock = _discord_session_locks.get(channel_id)
+    if lock is None:
+        lock = asyncio.Lock()
+        _discord_session_locks[channel_id] = lock
+    return lock
 
 _DISCORD_MAX_MESSAGE = 2000
 
@@ -233,25 +242,27 @@ async def _discord_handle_message(
 
     channel_id = message.channel.id
     _known_discord_channels.add(channel_id)
-    messages = _get_discord_session(channel_id)
 
-    if parsed is not None:
-        cmd, args = parsed
-        await _discord_dispatch_command(message, cmd, args)
-        return
+    async with _session_lock(channel_id):
+        messages = _get_discord_session(channel_id)
 
-    _refresh_system_prompt(messages)
-    messages.append({"role": "user", "content": text})
-    loop = asyncio.get_running_loop()
-    try:
-        async with message.channel.typing():
-            reply = await loop.run_in_executor(None, lambda: chat(messages))
-    except Exception as e:  # noqa: BLE001
-        messages.pop()
-        await _discord_send(message.channel, f"Error: {e}")
-        return
-    _, clean_reply = _split_thinking(reply)
-    await _discord_send(message.channel, clean_reply)
+        if parsed is not None:
+            cmd, args = parsed
+            await _discord_dispatch_command(message, cmd, args)
+            return
+
+        _refresh_system_prompt(messages)
+        messages.append({"role": "user", "content": text})
+        loop = asyncio.get_running_loop()
+        try:
+            async with message.channel.typing():
+                reply = await loop.run_in_executor(None, lambda: chat(messages))
+        except Exception as e:  # noqa: BLE001
+            messages.pop()
+            await _discord_send(message.channel, f"Error: {e}")
+            return
+        _, clean_reply = _split_thinking(reply)
+        await _discord_send(message.channel, clean_reply)
 
 
 class _MetalclawDiscordClient(discord.Client):

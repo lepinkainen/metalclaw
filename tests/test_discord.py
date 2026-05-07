@@ -2,6 +2,7 @@ import asyncio
 
 import bot
 import channels as channels_mod
+from frontends import discord as discord_frontend
 
 
 # --- scope helper ---
@@ -140,6 +141,47 @@ def test_discord_channel_falls_back_to_fetch():
     asyncio.run(channel.notify("discord-anything", "alert"))
     assert fake_client.fetched_id == 4242
     assert msg_channel.sent == ["alert"]
+
+
+# --- per-channel session lock ---
+
+
+def test_session_lock_same_channel_returns_same_lock():
+    async def _run():
+        a = discord_frontend._session_lock(111)
+        b = discord_frontend._session_lock(111)
+        return a is b
+
+    discord_frontend._discord_session_locks.clear()
+    assert asyncio.run(_run())
+
+
+def test_session_lock_different_channels_distinct():
+    async def _run():
+        a = discord_frontend._session_lock(111)
+        b = discord_frontend._session_lock(222)
+        return a is not b
+
+    discord_frontend._discord_session_locks.clear()
+    assert asyncio.run(_run())
+
+
+def test_session_lock_serialises_same_channel():
+    async def _run():
+        order: list[str] = []
+
+        async def worker(name: str, hold: float) -> None:
+            async with discord_frontend._session_lock(555):
+                order.append(f"{name}-start")
+                await asyncio.sleep(hold)
+                order.append(f"{name}-end")
+
+        await asyncio.gather(worker("a", 0.02), worker("b", 0.0))
+        return order
+
+    discord_frontend._discord_session_locks.clear()
+    order = asyncio.run(_run())
+    assert order == ["a-start", "a-end", "b-start", "b-end"]
 
 
 # --- channels.for_scope routing ---
