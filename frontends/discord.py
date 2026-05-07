@@ -152,42 +152,43 @@ async def _discord_dispatch_command(
     channel_id = message.channel.id
     scope = _discord_scope_for(channel_id)
     send = _send_for(message.channel)
+    canon = common.canonicalize(cmd) or cmd
 
-    if cmd == "help":
+    if canon == "help":
         await _discord_send(message.channel, _DISCORD_HELP_TEXT)
-    elif cmd == "new":
+    elif canon == "new":
         old = _discord_sessions.pop(channel_id, None)
         if old is not None:
             forget_session_provider(old)
         await _discord_send(message.channel, "Conversation reset.")
-    elif cmd == "remember":
+    elif canon == "remember":
         await common.run_remember(send, args)
-    elif cmd == "forget":
+    elif canon == "forget":
         await common.run_forget(send, args)
-    elif cmd == "memory":
+    elif canon == "memory":
         await common.run_memory(send)
-    elif cmd == "manual":
+    elif canon == "manual":
         await common.run_manual(send, args)
-    elif cmd == "heartbeat":
+    elif canon == "heartbeat":
         await common.run_heartbeat(
             send, scope, args.strip(), warn_no_discord_channel=True
         )
-    elif cmd == "big":
+    elif canon == "big":
         await common.run_big(
             send,
             message.channel.typing(),
             _get_discord_session(channel_id),
             args.strip(),
         )
-    elif cmd in ("add-tool", "add_tool", "addtool"):
+    elif canon == "add-tool":
         await common.run_add_tool(send, args, scope)
-    elif cmd == "approve":
+    elif canon == "approve":
         await common.run_approve(send, scope)
-    elif cmd in ("approve_force", "approve-force"):
+    elif canon == "approve-force":
         await common.run_approve(send, scope, force=True)
-    elif cmd == "reject":
+    elif canon == "reject":
         await common.run_reject(send, scope)
-    elif cmd == "diff":
+    elif canon == "diff":
         await common.run_diff(send, scope)
     elif cmd in common.TOOL_COMMANDS:
         tool_name, parser, formatter = common.TOOL_COMMANDS[cmd]

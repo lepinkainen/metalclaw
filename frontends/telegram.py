@@ -134,25 +134,7 @@ def _get_telegram_session(chat_id: int) -> list[dict]:
     return _telegram_sessions[chat_id]
 
 
-_TELEGRAM_BOT_COMMANDS: list[tuple[str, str]] = [
-    ("help",          "show available commands"),
-    ("train",         "train departures: <station> [--line R] [--count 5]"),
-    ("weather",       "weather for a location"),
-    ("mail",          "list emails [--mailbox] [--unread] [--from] [--count]"),
-    ("search",        "search the Obsidian vault"),
-    ("remember",      "save a preference: <key>=<value>"),
-    ("forget",        "remove a memory entry"),
-    ("memory",        "show stored long-term memory"),
-    ("manual",        "show the user manual (section name optional, 'init' to create)"),
-    ("heartbeat",     "show heartbeat config (or 'run' to fire now)"),
-    ("big",           "ask the escalation cloud model directly"),
-    ("new",           "reset this conversation"),
-    ("add_tool",      "add a new tool live: <description>"),
-    ("approve",       "approve a pending self-change"),
-    ("approve_force", "approve a pending self-change despite failing gates"),
-    ("reject",        "reject a pending self-change"),
-    ("diff",          "show diff of a pending self-change"),
-]
+_TELEGRAM_BOT_COMMANDS: list[tuple[str, str]] = common.telegram_bot_commands()
 
 _TELEGRAM_HELP_TEXT = "\n".join(common.HELP_LINES)
 
@@ -163,38 +145,39 @@ async def _telegram_dispatch_command(
     chat_id = update.effective_chat.id
     scope = _telegram_scope_for(chat_id)
     send = _send_for(update)
+    canon = common.canonicalize(cmd) or cmd
 
-    if cmd == "help":
+    if canon == "help":
         await _tg_reply(update, _TELEGRAM_HELP_TEXT)
-    elif cmd == "new":
+    elif canon == "new":
         old = _telegram_sessions.pop(chat_id, None)
         if old is not None:
             forget_session_provider(old)
         await _tg_reply(update, "Conversation reset.")
-    elif cmd == "remember":
+    elif canon == "remember":
         await common.run_remember(send, args)
-    elif cmd == "forget":
+    elif canon == "forget":
         await common.run_forget(send, args)
-    elif cmd == "memory":
+    elif canon == "memory":
         await common.run_memory(send)
-    elif cmd == "manual":
+    elif canon == "manual":
         await common.run_manual(send, args)
-    elif cmd == "heartbeat":
+    elif canon == "heartbeat":
         await common.run_heartbeat(send, scope, args.strip())
-    elif cmd == "big":
+    elif canon == "big":
         typing_ctx = _typing(chat_id, bot) if bot is not None else nullcontext()
         await common.run_big(
             send, typing_ctx, _get_telegram_session(chat_id), args.strip()
         )
-    elif cmd in ("add-tool", "add_tool", "addtool"):
+    elif canon == "add-tool":
         await common.run_add_tool(send, args, scope)
-    elif cmd == "approve":
+    elif canon == "approve":
         await common.run_approve(send, scope)
-    elif cmd in ("approve_force", "approve-force"):
+    elif canon == "approve-force":
         await common.run_approve(send, scope, force=True)
-    elif cmd == "reject":
+    elif canon == "reject":
         await common.run_reject(send, scope)
-    elif cmd == "diff":
+    elif canon == "diff":
         await common.run_diff(send, scope)
     elif cmd in common.TOOL_COMMANDS:
         tool_name, parser, formatter = common.TOOL_COMMANDS[cmd]
@@ -257,6 +240,11 @@ async def start_telegram(token: str) -> Application:
     global _known_chats
     _known_chats = _load_known_chats()
 
+    # PTB's Application serializes updates per-chat by default, so the
+    # `_telegram_sessions` list mutation in handlers needs no per-chat lock
+    # (cf. the explicit asyncio.Lock in frontends/discord.py). If anyone ever
+    # passes `concurrent_updates=True` to the builder below, add a per-chat
+    # lock around session reads/writes the same way Discord does.
     app = Application.builder().token(token).build()
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, _telegram_handle_message))
     for cmd, _desc in _TELEGRAM_BOT_COMMANDS:

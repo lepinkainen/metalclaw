@@ -32,26 +32,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 
 console = Console(highlight=False)
 
-_COMMANDS = {
-    "add-tool": "live tool addition — describes the tool, registers in this session, persists",
-    "self-edit": "make a general code change — describe what to change (full lint/build/test)",
-    "approve": "approve a pending self-change (live or self-edit)",
-    "approve_force": "approve a pending self-change despite failing gates",
-    "reject": "reject a pending self-change and revert it",
-    "diff": "show diff of a pending self-change",
-    "think": "toggle display of model thinking (off by default)",
-    "train": "show train departures: /train <station> [--line R] [--count 5]",
-    "weather": "show weather: /weather <location>",
-    "mail": "show emails: /mail [--mailbox inbox] [--unread] [--from name] [--count 10]",
-    "search": "search the Obsidian vault: /search <query> [--max 20] [--context 1]",
-    "remember": "save a preference: /remember <key>=<value>",
-    "forget": "remove a memory entry: /forget <matcher>",
-    "memory": "show your stored long-term memory",
-    "manual": "show the user manual: /manual [section] (or /manual init)",
-    "heartbeat": "show heartbeat config / run a tick now (/heartbeat run)",
-    "big": "ask the escalation cloud model directly: /big <query>",
-    "help": "show this help",
-}
+_COMMANDS = common.cli_command_table()
 
 _show_thinking = False
 _prompt_session: PromptSession | None = None
@@ -211,11 +192,13 @@ async def _handle_heartbeat(args: str) -> None:
     await common.run_heartbeat(_cli_send_dim, "cli", args.strip())
 
 
+# Keys are canonical command names from `common.COMMANDS`; user-typed aliases
+# (e.g. "approve_force", "add_tool") are folded to the canonical form by
+# `common.canonicalize` before lookup in the dispatcher below.
 _COMMAND_HANDLERS = {
     "add-tool":      _handle_add_tool,
     "self-edit":     _handle_self_edit,
     "approve":       _handle_approve,
-    "approve_force": _handle_approve_force,
     "approve-force": _handle_approve_force,
     "reject":        _handle_reject,
     "diff":          _handle_diff,
@@ -307,7 +290,8 @@ async def run_cli_repl() -> None:
             parsed = _parse_command(user_input)
             if parsed is not None:
                 cmd, args = parsed
-                handler = _COMMAND_HANDLERS.get(cmd)
+                canon = common.canonicalize(cmd) or cmd
+                handler = _COMMAND_HANDLERS.get(canon)
                 if handler is None:
                     console.print(f"unknown command: /{cmd}  (try /help)")
                     continue

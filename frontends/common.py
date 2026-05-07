@@ -16,6 +16,7 @@ import argparse
 import asyncio
 import shlex
 from collections.abc import Awaitable, Callable
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import NoReturn
 
@@ -35,23 +36,98 @@ DISCORD_SCOPE_PREFIX = "discord-"
 _pending_self_change: dict[str, live_tool.LiveAddState] = {}
 
 
-HELP_LINES: list[str] = [
-    "Available commands:",
-    "/train <station> [--line R] [--count 5]",
-    "/weather <location>",
-    "/mail [--mailbox inbox] [--unread] [--from name] [--count 10]",
-    "/search <query> [--max 20] [--context 1] — search the Obsidian vault",
-    "/remember <key>=<value> — save a preference",
-    "/forget <substring> — remove a memory entry",
-    "/memory — show stored memory",
-    "/heartbeat — show heartbeat config; /heartbeat run to fire now",
-    "/big <query> — ask the escalation cloud model directly",
-    "/add-tool <description> — write a new tool live (CLI/Telegram/Discord)",
-    "/approve | /approve_force | /reject | /diff — resolve a pending self-change",
-    "/manual [section] — show the user manual; /manual init to create it",
-    "/new — reset this conversation",
-    "/help — this message",
-]
+# --- Cross-frontend slash-command registry ---
+#
+# Single source of truth for command name + descriptions. Drives:
+#   - HELP_LINES (the /help output, identical across frontends)
+#   - Telegram BotCommand registration (telegram_bot_commands())
+#   - CLI completer + handler map (cli_command_table() + canonicalize())
+#   - Discord dispatch (canonicalize())
+#
+# Adding a command here, plus a dispatch branch in the relevant frontend(s),
+# is the only place new command metadata needs to land.
+
+CLI = "cli"
+TELEGRAM = "telegram"
+DISCORD = "discord"
+ALL_FRONTENDS = frozenset({CLI, TELEGRAM, DISCORD})
+
+
+@dataclass(frozen=True)
+class CommandSpec:
+    name: str                       # canonical hyphenated form, e.g. "add-tool"
+    help_line: str                  # full /help line including arg syntax
+    short: str                      # 1-line description for completer / Telegram BotCommand
+    frontends: frozenset[str]
+    aliases: tuple[str, ...] = field(default=())  # extra spellings users may type
+
+
+COMMANDS: tuple[CommandSpec, ...] = (
+    CommandSpec("train",         "/train <station> [--line R] [--count 5]",                                "train departures: <station> [--line R] [--count 5]",            ALL_FRONTENDS),
+    CommandSpec("weather",       "/weather <location>",                                                    "weather for a location",                                         ALL_FRONTENDS),
+    CommandSpec("mail",          "/mail [--mailbox inbox] [--unread] [--from name] [--count 10]",          "list emails [--mailbox] [--unread] [--from] [--count]",          ALL_FRONTENDS),
+    CommandSpec("search",        "/search <query> [--max 20] [--context 1] — search the Obsidian vault",   "search the Obsidian vault",                                      ALL_FRONTENDS),
+    CommandSpec("remember",      "/remember <key>=<value> — save a preference",                            "save a preference: <key>=<value>",                               ALL_FRONTENDS),
+    CommandSpec("forget",        "/forget <substring> — remove a memory entry",                            "remove a memory entry",                                          ALL_FRONTENDS),
+    CommandSpec("memory",        "/memory — show stored memory",                                           "show stored long-term memory",                                   ALL_FRONTENDS),
+    CommandSpec("manual",        "/manual [section] — show the user manual; /manual init to create it",    "show the user manual ('init' to create)",                        ALL_FRONTENDS),
+    CommandSpec("heartbeat",     "/heartbeat — show heartbeat config; /heartbeat run to fire now",         "show heartbeat config (or 'run' to fire now)",                   ALL_FRONTENDS),
+    CommandSpec("big",           "/big <query> — ask the escalation cloud model directly",                 "ask the escalation cloud model directly",                        ALL_FRONTENDS),
+    CommandSpec("add-tool",      "/add-tool <description> — write a new tool live (CLI/Telegram/Discord)", "add a new tool live: <description>",                             ALL_FRONTENDS, aliases=("add_tool", "addtool")),
+    CommandSpec("approve",       "/approve — accept a pending self-change",                                "approve a pending self-change",                                  ALL_FRONTENDS),
+    CommandSpec("approve-force", "/approve-force — accept a pending self-change despite failing gates",    "approve a pending self-change despite failing gates",            ALL_FRONTENDS, aliases=("approve_force",)),
+    CommandSpec("reject",        "/reject — discard a pending self-change",                                "reject a pending self-change",                                   ALL_FRONTENDS),
+    CommandSpec("diff",          "/diff — show diff of a pending self-change",                             "show diff of a pending self-change",                             ALL_FRONTENDS),
+    CommandSpec("self-edit",     "/self-edit <description> — make a general code change (CLI only)",       "make a general code change (full lint/build/test)",              frozenset({CLI})),
+    CommandSpec("think",         "/think — toggle display of model thinking (off by default)",             "toggle display of model thinking (off by default)",              frozenset({CLI})),
+    CommandSpec("new",           "/new — reset this conversation",                                         "reset this conversation",                                        ALL_FRONTENDS),
+    CommandSpec("help",          "/help — this message",                                                   "show available commands",                                        ALL_FRONTENDS),
+)
+
+
+def _build_name_index() -> dict[str, CommandSpec]:
+    out: dict[str, CommandSpec] = {}
+    for spec in COMMANDS:
+        out[spec.name] = spec
+        for alias in spec.aliases:
+            out[alias] = spec
+    return out
+
+
+_BY_ANY_NAME: dict[str, CommandSpec] = _build_name_index()
+
+
+def canonicalize(cmd: str) -> str | None:
+    """Map a user-typed command name (or alias) to its canonical form, else None.
+
+    Strips a leading slash and lowercases. Returns ``None`` for unknown
+    commands so callers can decide whether to error or fall through (e.g. to
+    ``TOOL_COMMANDS`` lookup).
+    """
+    spec = _BY_ANY_NAME.get(cmd.lstrip("/").lower())
+    return spec.name if spec else None
+
+
+def help_lines() -> list[str]:
+    """Lines for /help across all frontends — built from COMMANDS."""
+    return ["Available commands:", *[s.help_line for s in COMMANDS]]
+
+
+def telegram_bot_commands() -> list[tuple[str, str]]:
+    """List for ``Application.bot.set_my_commands`` — Telegram needs ``[a-z][a-z0-9_]*`` so hyphens become underscores."""
+    return [
+        (s.name.replace("-", "_"), s.short)
+        for s in COMMANDS
+        if TELEGRAM in s.frontends
+    ]
+
+
+def cli_command_table() -> dict[str, str]:
+    """Mapping ``name → short`` for the CLI completer."""
+    return {s.name: s.short for s in COMMANDS if CLI in s.frontends}
+
+
+HELP_LINES: list[str] = help_lines()
 
 
 def telegram_scope(chat_id: int) -> str:
