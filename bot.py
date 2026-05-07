@@ -7,11 +7,11 @@ import re
 import shlex
 from collections.abc import Callable, Iterable
 from contextlib import asynccontextmanager
+from contextvars import ContextVar
 from datetime import datetime
 from pathlib import Path
 from typing import NoReturn
 
-import httpx
 from prompt_toolkit import PromptSession
 from prompt_toolkit.application import run_in_terminal
 from prompt_toolkit.patch_stdout import patch_stdout
@@ -28,6 +28,7 @@ import self_change
 import telegram_format
 from config import get_config
 from history import SQLiteHistory
+from providers import Provider, get_provider
 from registry import TOOLS
 
 REPO_ROOT = Path(__file__).parent.resolve()
@@ -47,6 +48,7 @@ _COMMANDS = {
     "memory": "show your stored long-term memory",
     "onboard": "answer a few questions to seed long-term memory",
     "heartbeat": "show heartbeat config / run a tick now (/heartbeat run)",
+    "big": "ask the escalation cloud model directly: /big <query>",
     "help": "show this help",
 }
 
@@ -95,8 +97,19 @@ _SYSTEM_PROMPT_BASE = (
 )
 
 
+_ESCALATION_HINT = (
+    "When a question is beyond your capability — complex reasoning, deep code "
+    "analysis, niche knowledge — call escalate_to_big_model rather than "
+    "guessing. Pass the user's question and a short reason. Do not escalate "
+    "trivial requests."
+)
+
+
 def build_system_prompt(scope: str, now: str) -> str:
     base = _SYSTEM_PROMPT_BASE.format(now=now)
+    cfg = get_config()
+    if cfg.escalation_enabled and cfg.provider == "ollama":
+        base += "\n\n" + _ESCALATION_HINT
     summary = memory.summary(scope)
     if summary:
         base += f"\n\nKnown about user (scope={scope}):\n{summary}"
@@ -112,66 +125,99 @@ def _refresh_system_prompt(messages: list[dict], scope: str) -> None:
     else:
         messages.insert(0, {"role": "system", "content": prompt})
 
-_CLIENT = httpx.Client(timeout=120.0)
-
-
-# --- Ollama client ---
+# --- Provider-agnostic chat loop ---
 
 
 def _tool_result_json(result: object) -> str:
     return json.dumps(result, ensure_ascii=False)
 
 
+# Snapshot of the current session's messages list, set on each chat() entry so
+# tools (notably escalate_to_big_model) can read full conversation context.
+_active_session_messages: ContextVar[list[dict] | None] = ContextVar(
+    "active_session_messages", default=None
+)
+
+
+def _split_system(messages: list[dict]) -> tuple[str, list[dict]]:
+    if messages and messages[0].get("role") == "system":
+        return messages[0].get("content", "") or "", list(messages[1:])
+    return "", list(messages)
+
+
+def _run_tool(name: str, args: dict) -> object:
+    tool_obj = TOOLS.get(name)
+    if tool_obj is None:
+        return f"Error: unknown tool '{name}'"
+    try:
+        return tool_obj.func(**args)
+    except Exception as e:
+        return f"Error: {e}"
+
+
+def _chat_with_provider(
+    provider: Provider,
+    messages: list[dict],
+    *,
+    on_tool_call: Callable[[str, dict, str], None] | None = None,
+    exclude_tools: frozenset[str] | set[str] = frozenset(),
+) -> str:
+    """Run the tool-call loop against `provider`, mutating `messages` in place."""
+    tool_schemas = [
+        t.schema for name, t in TOOLS.items() if name not in exclude_tools
+    ]
+    system, history = _split_system(messages)
+    token = _active_session_messages.set(messages)
+    try:
+        while True:
+            am = provider.chat_once(history, tool_schemas, system)
+            raw = am.raw
+            if isinstance(raw, list):
+                history.extend(raw)
+            elif raw is not None:
+                history.append(raw)
+
+            if not am.tool_calls:
+                messages[:] = (
+                    [{"role": "system", "content": system}] if system else []
+                ) + history
+                return am.text
+
+            results: list[tuple] = []
+            for tc in am.tool_calls:
+                result = _run_tool(tc.name, tc.arguments)
+                result_json = _tool_result_json(result)
+                if on_tool_call:
+                    on_tool_call(tc.name, tc.arguments, result_json[:120])
+                results.append((tc, result_json))
+            history.extend(provider.format_tool_results(results))
+    finally:
+        _active_session_messages.reset(token)
+
+
 def chat(
     messages: list[dict],
     on_tool_call: Callable[[str, dict, str], None] | None = None,
 ) -> str:
-    """Send messages to Ollama, handle tool calls in a loop, return final text.
+    """Send messages via the configured provider, handle tool calls, return final text.
 
-    Note: mutates `messages` in place, appending tool-call/result entries
-    so the caller retains full conversation history.
+    Mutates `messages` in place, appending tool-call/result entries so the
+    caller retains full conversation history.
     """
-    tool_schemas = [t.schema for t in TOOLS.values()]
-
     cfg = get_config()
-    while True:
-        response = _CLIENT.post(
-            cfg.ollama_url,
-            json={
-                "model": cfg.model,
-                "messages": messages,
-                "tools": tool_schemas or None,
-                "stream": False,
-            },
-        )
-        response.raise_for_status()
-        msg = response.json()["message"]
+    provider = get_provider(cfg.provider)
+    return _chat_with_provider(provider, messages, on_tool_call=on_tool_call)
 
-        if not msg.get("tool_calls"):
-            return msg.get("content", "")
 
-        # Append assistant message (with tool_calls) to history
-        messages.append(msg)
-
-        # Execute each tool call and append results
-        for tc in msg["tool_calls"]:
-            name = tc["function"]["name"]
-            args = tc["function"]["arguments"]
-            tool_obj = TOOLS.get(name)
-            if tool_obj is None:
-                result = f"Error: unknown tool '{name}'"
-            else:
-                try:
-                    result = tool_obj.func(**args)
-                except Exception as e:
-                    result = f"Error: {e}"
-
-            result_json = _tool_result_json(result)
-            short_result = result_json[:120]
-            if on_tool_call:
-                on_tool_call(name, args, short_result)
-
-            messages.append({"role": "tool", "content": result_json, "name": name})
+def chat_via_escalation(messages: list[dict]) -> str:
+    """Run a chat turn through the escalation provider, no recursion into itself."""
+    cfg = get_config()
+    if not cfg.escalation_enabled:
+        raise RuntimeError("escalation is disabled in config")
+    big = get_provider(cfg.escalation_provider, model_override=cfg.escalation_model)
+    return _chat_with_provider(
+        big, messages, exclude_tools={"escalate_to_big_model"}
+    )
 
 
 # --- CLI ---
@@ -384,6 +430,40 @@ def _handle_help(_: str) -> None:
     _print_help()
 
 
+def _handle_big(args: str) -> None:
+    query = args.strip()
+    if not query:
+        console.print("usage: /big <query>")
+        return
+    cfg = get_config()
+    if not cfg.escalation_enabled:
+        console.print("escalation disabled — set escalation_enabled: true in config.yaml")
+        return
+    messages = _cli_messages_ref()
+    if messages is None:
+        console.print("internal error: no active CLI session")
+        return
+    _refresh_system_prompt(messages, "cli")
+    messages.append({"role": "user", "content": query})
+    try:
+        with console.status("[dim]asking the big model…[/dim]", spinner="dots"):
+            reply = chat_via_escalation(messages)
+    except Exception as e:
+        messages.pop()
+        console.print(f"\n[bold]bot>[/bold] Error: {e}\n")
+        return
+    messages.append({"role": "assistant", "content": reply})
+    _, clean_reply = _split_thinking(reply)
+    _print_bot_markdown(clean_reply)
+
+
+_cli_messages: list[dict] | None = None
+
+
+def _cli_messages_ref() -> list[dict] | None:
+    return _cli_messages
+
+
 def _handle_remember(args: str) -> None:
     if "=" not in args:
         console.print("usage: /remember <key>=<value>")
@@ -479,6 +559,7 @@ _COMMAND_HANDLERS = {
     "memory":    _handle_memory,
     "onboard":   _handle_onboard,
     "heartbeat": _handle_heartbeat,
+    "big":       _handle_big,
     "help":      _handle_help,
 }
 
@@ -635,6 +716,7 @@ _TELEGRAM_BOT_COMMANDS: list[tuple[str, str]] = [
     ("memory",    "show stored long-term memory"),
     ("onboard",   "seed memory by answering a few questions"),
     ("heartbeat", "show heartbeat config (or 'run' to fire now)"),
+    ("big",       "ask the escalation cloud model directly"),
     ("new",       "reset this conversation"),
 ]
 
@@ -649,6 +731,7 @@ _TELEGRAM_HELP_TEXT = "\n".join([
     "/memory — show stored memory",
     "/onboard — answer a few questions to seed memory",
     "/heartbeat — show heartbeat config; /heartbeat run to fire now",
+    "/big <query> — ask the escalation cloud model directly",
     "/new — reset this conversation",
     "/help — this message",
 ])
@@ -718,6 +801,36 @@ async def _telegram_heartbeat_cmd(update: Update, sub: str, chat_id: int) -> Non
     await _tg_reply(update, "\n".join(lines))
 
 
+async def _telegram_big(update: Update, query: str, chat_id: int, bot) -> None:
+    if not query:
+        await _tg_reply(update, "usage: /big <query>")
+        return
+    cfg = get_config()
+    if not cfg.escalation_enabled:
+        await _tg_reply(
+            update, "escalation disabled — set escalation_enabled: true in config.yaml"
+        )
+        return
+    scope = _telegram_scope_for(chat_id)
+    messages = _get_telegram_session(chat_id)
+    _refresh_system_prompt(messages, scope)
+    messages.append({"role": "user", "content": query})
+    loop = asyncio.get_running_loop()
+    try:
+        if bot is not None:
+            async with _typing(chat_id, bot):
+                reply = await loop.run_in_executor(None, lambda: chat_via_escalation(messages))
+        else:
+            reply = await loop.run_in_executor(None, lambda: chat_via_escalation(messages))
+    except Exception as e:
+        messages.pop()
+        await _tg_reply(update, f"Error: {e}")
+        return
+    messages.append({"role": "assistant", "content": reply})
+    _, clean_reply = _split_thinking(reply)
+    await _tg_reply(update, clean_reply)
+
+
 async def _telegram_dispatch_command(
     update: Update, cmd: str, args: str, bot=None
 ) -> None:
@@ -754,6 +867,8 @@ async def _telegram_dispatch_command(
         await _telegram_start_onboarding(update, chat_id)
     elif cmd == "heartbeat":
         await _telegram_heartbeat_cmd(update, args.strip(), chat_id)
+    elif cmd == "big":
+        await _telegram_big(update, args.strip(), chat_id, bot)
     elif cmd in _TELEGRAM_TOOL_COMMANDS:
         tool_name, parser, formatter = _TELEGRAM_TOOL_COMMANDS[cmd]
         try:
@@ -856,7 +971,7 @@ async def _stop_telegram(app: Application) -> None:
 
 
 async def _run_cli_repl() -> None:
-    global _prompt_session
+    global _prompt_session, _cli_messages
     memory.current_scope.set("cli")
     channels.register(_CLIChannel())
 
@@ -871,8 +986,22 @@ async def _run_cli_repl() -> None:
             "content": build_system_prompt("cli", now),
         },
     ]
+    _cli_messages = messages
 
-    console.print(f"metalclaw bot ({get_config().model}) — type 'quit' to exit")
+    cfg = get_config()
+    if cfg.provider == "ollama":
+        model_label = cfg.model
+    elif cfg.provider == "openai":
+        model_label = cfg.openai_model
+    else:
+        model_label = cfg.anthropic_model
+    console.print(
+        f"metalclaw bot ({cfg.provider}: {model_label}) — type 'quit' to exit"
+    )
+    if cfg.escalation_enabled and cfg.provider == "ollama":
+        console.print(
+            f"[dim]escalation: {cfg.escalation_provider}: {cfg.escalation_model}[/dim]"
+        )
     console.print(f"  {len(TOOLS)} tool(s) loaded: {', '.join(TOOLS)}\n")
 
     with patch_stdout(raw=True):

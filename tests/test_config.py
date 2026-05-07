@@ -10,6 +10,8 @@ def cfg_file(tmp_path, monkeypatch):
     monkeypatch.setenv("METALCLAW_CONFIG", str(path))
     monkeypatch.delenv("FASTMAIL_API_TOKEN", raising=False)
     monkeypatch.delenv("OLLAMA_URL", raising=False)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     config.reset_cache()
     yield path
     config.reset_cache()
@@ -28,6 +30,93 @@ def test_loads_vault_path_and_defaults(tmp_path, cfg_file):
     assert cfg.model == "gemma4:latest"
     assert cfg.fastmail_api_token is None
     assert cfg.vault_search_excludes == ()
+    assert cfg.provider == "ollama"
+    assert cfg.openai_api_key is None
+    assert cfg.openai_model == "gpt-4o-mini"
+    assert cfg.anthropic_api_key is None
+    assert cfg.anthropic_model == "claude-haiku-4-5"
+    assert cfg.escalation_enabled is False
+    assert cfg.escalation_provider == "anthropic"
+
+
+def test_provider_invalid_raises(tmp_path, cfg_file):
+    _write(cfg_file, vault_path=str(tmp_path / "vault"), provider="bogus")
+    with pytest.raises(ValueError, match="provider"):
+        config.get_config()
+
+
+def test_provider_openai_requires_key(tmp_path, cfg_file):
+    _write(cfg_file, vault_path=str(tmp_path / "vault"), provider="openai")
+    with pytest.raises(ValueError, match="openai_api_key"):
+        config.get_config()
+
+
+def test_provider_anthropic_requires_key(tmp_path, cfg_file):
+    _write(cfg_file, vault_path=str(tmp_path / "vault"), provider="anthropic")
+    with pytest.raises(ValueError, match="anthropic_api_key"):
+        config.get_config()
+
+
+def test_env_openai_key_wins_over_yaml(tmp_path, cfg_file, monkeypatch):
+    _write(
+        cfg_file,
+        vault_path=str(tmp_path / "vault"),
+        provider="openai",
+        openai_api_key="from-yaml",
+    )
+    monkeypatch.setenv("OPENAI_API_KEY", "from-env")
+    config.reset_cache()
+    assert config.get_config().openai_api_key == "from-env"
+
+
+def test_env_anthropic_key_wins_over_yaml(tmp_path, cfg_file, monkeypatch):
+    _write(
+        cfg_file,
+        vault_path=str(tmp_path / "vault"),
+        provider="anthropic",
+        anthropic_api_key="from-yaml",
+    )
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "from-env")
+    config.reset_cache()
+    assert config.get_config().anthropic_api_key == "from-env"
+
+
+def test_escalation_enabled_requires_target_key(tmp_path, cfg_file):
+    _write(
+        cfg_file,
+        vault_path=str(tmp_path / "vault"),
+        provider="ollama",
+        escalation_enabled=True,
+        escalation_provider="anthropic",
+    )
+    with pytest.raises(ValueError, match="anthropic_api_key"):
+        config.get_config()
+
+
+def test_escalation_model_defaults_to_provider_model(tmp_path, cfg_file):
+    _write(
+        cfg_file,
+        vault_path=str(tmp_path / "vault"),
+        escalation_enabled=True,
+        escalation_provider="anthropic",
+        anthropic_api_key="sk-ant",
+        anthropic_model="claude-haiku-4-5",
+    )
+    cfg = config.get_config()
+    assert cfg.escalation_model == "claude-haiku-4-5"
+
+
+def test_escalation_model_explicit_wins(tmp_path, cfg_file):
+    _write(
+        cfg_file,
+        vault_path=str(tmp_path / "vault"),
+        escalation_enabled=True,
+        escalation_provider="anthropic",
+        anthropic_api_key="sk-ant",
+        escalation_model="claude-opus-4-7",
+    )
+    cfg = config.get_config()
+    assert cfg.escalation_model == "claude-opus-4-7"
 
 
 def test_vault_search_excludes_round_trip(tmp_path, cfg_file):

@@ -766,3 +766,59 @@ def search_vault(
 )
 def read_note(path: str) -> dict[str, Any]:
     return vault_search.read(path)
+
+
+# --- Escalation ---
+
+
+@tool(
+    description=(
+        "Escalate to a more capable cloud model. Use ONLY when you genuinely "
+        "cannot answer or the task needs reasoning beyond your capability. "
+        "Pass the user's question and a brief reason. Do NOT use for trivial "
+        "requests."
+    ),
+    parameters={
+        "type": "object",
+        "properties": {
+            "query": {
+                "type": "string",
+                "description": "The user's question or task, restated.",
+            },
+            "reason": {
+                "type": "string",
+                "description": "Why you are escalating instead of answering.",
+            },
+        },
+        "required": ["query", "reason"],
+    },
+)
+def escalate_to_big_model(query: str, reason: str) -> dict[str, Any]:
+    cfg = get_config()
+    if not cfg.escalation_enabled:
+        return {"status": "disabled", "message": "Escalation disabled in config."}
+
+    # Lazy import to avoid circular dependency (tools.py loads before bot.py
+    # has finished setup, and bot.py imports tools at runtime).
+    import bot
+    from providers import get_provider
+
+    snapshot = bot._active_session_messages.get()
+    if snapshot is None:
+        sub_messages: list[dict] = [{"role": "user", "content": query}]
+    else:
+        sub_messages = list(snapshot)
+        sub_messages.append(
+            {"role": "user", "content": f"[escalation: {reason}] {query}"}
+        )
+
+    big = get_provider(cfg.escalation_provider, model_override=cfg.escalation_model)
+    reply = bot._chat_with_provider(
+        big, sub_messages, exclude_tools={"escalate_to_big_model"}
+    )
+    return {
+        "status": "ok",
+        "model": f"{cfg.escalation_provider}:{cfg.escalation_model}",
+        "reason": reason,
+        "reply": reply,
+    }

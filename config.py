@@ -18,6 +18,9 @@ def _config_path() -> Path:
     return Path(xdg) / "metalclaw" / "config.yaml"
 
 
+_VALID_PROVIDERS = ("ollama", "openai", "anthropic")
+
+
 @dataclass(frozen=True)
 class Config:
     vault_path: Path
@@ -26,6 +29,14 @@ class Config:
     telegram_bot_token: str | None
     ollama_url: str
     model: str
+    provider: str
+    openai_api_key: str | None
+    openai_model: str
+    anthropic_api_key: str | None
+    anthropic_model: str
+    escalation_enabled: bool
+    escalation_provider: str
+    escalation_model: str | None
     heartbeat_enabled: bool
     heartbeat_interval_seconds: int
     heartbeat_active_hours: tuple[int, int] | None
@@ -40,6 +51,12 @@ _DEFAULTS = {
     "memory_subdir": "Metalclaw/Memory",
     "ollama_url": "http://localhost:11434/api/chat",
     "model": "gemma4:latest",
+    "provider": "ollama",
+    "openai_model": "gpt-4o-mini",
+    "anthropic_model": "claude-haiku-4-5",
+    "escalation_enabled": False,
+    "escalation_provider": "anthropic",
+    "escalation_model": None,
     "heartbeat_enabled": True,
     "heartbeat_interval_seconds": 1800,
     "heartbeat_active_hours": None,
@@ -57,6 +74,28 @@ def _load_yaml(path: Path) -> dict:
     return data
 
 
+def _resolve_provider_model(provider: str, raw: dict, fallback_model: str) -> str | None:
+    """Per-provider model lookup. None when no model is configured."""
+    if provider == "ollama":
+        return fallback_model
+    if provider == "openai":
+        return raw.get("openai_model") or _DEFAULTS["openai_model"]
+    if provider == "anthropic":
+        return raw.get("anthropic_model") or _DEFAULTS["anthropic_model"]
+    return None
+
+
+def _require_key_for(provider: str, openai_key: str | None, anthropic_key: str | None) -> None:
+    if provider == "openai" and not openai_key:
+        raise ValueError(
+            "openai_api_key missing — set OPENAI_API_KEY env or openai_api_key in config.yaml"
+        )
+    if provider == "anthropic" and not anthropic_key:
+        raise ValueError(
+            "anthropic_api_key missing — set ANTHROPIC_API_KEY env or anthropic_api_key in config.yaml"
+        )
+
+
 @lru_cache(maxsize=1)
 def get_config() -> Config:
     path = _config_path()
@@ -72,6 +111,26 @@ def get_config() -> Config:
     fastmail_token = os.environ.get("FASTMAIL_API_TOKEN") or raw.get("fastmail_api_token")
     telegram_token = os.environ.get("TELEGRAM_BOT_TOKEN") or raw.get("telegram_bot_token")
     ollama_url = os.environ.get("OLLAMA_URL") or raw.get("ollama_url") or _DEFAULTS["ollama_url"]
+    openai_key = os.environ.get("OPENAI_API_KEY") or raw.get("openai_api_key")
+    anthropic_key = os.environ.get("ANTHROPIC_API_KEY") or raw.get("anthropic_api_key")
+
+    provider = raw.get("provider") or _DEFAULTS["provider"]
+    if provider not in _VALID_PROVIDERS:
+        raise ValueError(f"provider must be one of {_VALID_PROVIDERS}, got {provider!r}")
+
+    escalation_enabled = bool(raw.get("escalation_enabled", _DEFAULTS["escalation_enabled"]))
+    escalation_provider = raw.get("escalation_provider") or _DEFAULTS["escalation_provider"]
+    if escalation_provider not in _VALID_PROVIDERS:
+        raise ValueError(
+            f"escalation_provider must be one of {_VALID_PROVIDERS}, got {escalation_provider!r}"
+        )
+    escalation_model = raw.get("escalation_model") or _resolve_provider_model(
+        escalation_provider, raw, fallback_model=raw.get("model") or _DEFAULTS["model"]
+    )
+
+    _require_key_for(provider, openai_key, anthropic_key)
+    if escalation_enabled:
+        _require_key_for(escalation_provider, openai_key, anthropic_key)
 
     active_hours_raw = raw.get("heartbeat_active_hours", _DEFAULTS["heartbeat_active_hours"])
     active_hours: tuple[int, int] | None
@@ -102,6 +161,14 @@ def get_config() -> Config:
         telegram_bot_token=telegram_token,
         ollama_url=ollama_url,
         model=raw.get("model") or _DEFAULTS["model"],
+        provider=provider,
+        openai_api_key=openai_key,
+        openai_model=raw.get("openai_model") or _DEFAULTS["openai_model"],
+        anthropic_api_key=anthropic_key,
+        anthropic_model=raw.get("anthropic_model") or _DEFAULTS["anthropic_model"],
+        escalation_enabled=escalation_enabled,
+        escalation_provider=escalation_provider,
+        escalation_model=escalation_model,
         heartbeat_enabled=bool(heartbeat_enabled),
         heartbeat_interval_seconds=heartbeat_interval,
         heartbeat_active_hours=active_hours,
