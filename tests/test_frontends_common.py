@@ -127,6 +127,43 @@ def test_run_memory_returns_render(vault):
     assert "v" in captured[0]
 
 
+# --- run_manual ---
+
+
+def test_run_manual_init_creates_file(vault):
+    send, captured = _send_capture()
+    asyncio.run(common.run_manual(send, "init"))
+    assert (vault / "manual.md").exists()
+    assert any("manual created at" in c for c in captured)
+
+
+def test_run_manual_no_args_emits_toc(vault):
+    asyncio.run(common.run_manual(_send_capture()[0], "init"))
+    send, captured = _send_capture()
+    asyncio.run(common.run_manual(send, ""))
+    assert len(captured) == 1
+    out = captured[0]
+    assert "memory-system" in out
+    assert "heartbeat" in out
+
+
+def test_run_manual_unknown_section_helpful_error(vault):
+    asyncio.run(common.run_manual(_send_capture()[0], "init"))
+    send, captured = _send_capture()
+    asyncio.run(common.run_manual(send, "nope"))
+    assert len(captured) == 1
+    out = captured[0]
+    assert "unknown manual section" in out
+    assert "memory-system" in out
+
+
+def test_run_manual_uninitialised_points_at_init(vault):
+    send, captured = _send_capture()
+    asyncio.run(common.run_manual(send, ""))
+    assert len(captured) == 1
+    assert "/manual init" in captured[0]
+
+
 # --- run_heartbeat ---
 
 
