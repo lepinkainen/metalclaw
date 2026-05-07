@@ -153,21 +153,7 @@ _TELEGRAM_BOT_COMMANDS: list[tuple[str, str]] = [
     ("new",       "reset this conversation"),
 ]
 
-_TELEGRAM_HELP_TEXT = "\n".join([
-    "Available commands:",
-    "/train <station> [--line R] [--count 5]",
-    "/weather <location>",
-    "/mail [--mailbox inbox] [--unread] [--from name] [--count 10]",
-    "/search <query> [--max 20] [--context 1] — search the Obsidian vault",
-    "/remember <key>=<value> — save a preference",
-    "/forget <substring> — remove a memory entry",
-    "/memory — show stored memory",
-    "/onboard — answer a few questions to seed memory",
-    "/heartbeat — show heartbeat config; /heartbeat run to fire now",
-    "/big <query> — ask the escalation cloud model directly",
-    "/new — reset this conversation",
-    "/help — this message",
-])
+_TELEGRAM_HELP_TEXT = "\n".join(common.HELP_LINES)
 
 
 async def _telegram_dispatch_command(

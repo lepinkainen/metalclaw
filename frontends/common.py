@@ -30,6 +30,23 @@ TELEGRAM_SCOPE_PREFIX = "telegram-"
 DISCORD_SCOPE_PREFIX = "discord-"
 
 
+HELP_LINES: list[str] = [
+    "Available commands:",
+    "/train <station> [--line R] [--count 5]",
+    "/weather <location>",
+    "/mail [--mailbox inbox] [--unread] [--from name] [--count 10]",
+    "/search <query> [--max 20] [--context 1] — search the Obsidian vault",
+    "/remember <key>=<value> — save a preference",
+    "/forget <substring> — remove a memory entry",
+    "/memory — show stored memory",
+    "/onboard — answer a few questions to seed memory",
+    "/heartbeat — show heartbeat config; /heartbeat run to fire now",
+    "/big <query> — ask the escalation cloud model directly",
+    "/new — reset this conversation",
+    "/help — this message",
+]
+
+
 def telegram_scope(chat_id: int) -> str:
     return f"{TELEGRAM_SCOPE_PREFIX}{chat_id}"
 
