@@ -191,6 +191,96 @@ def test_add_user_instruction_tool_routes_to_memory_and_refreshes(tmp_path, monk
         _config.reset_cache()
 
 
+def test_chat_resets_session_when_provider_switches_mid_session(monkeypatch):
+    """If config.provider changes between chat() calls on the same session,
+    tool-call-tainted history must be dropped (system + last user kept)."""
+    import chat_loop
+
+    class _Cfg:
+        provider = "ollama"
+
+    fake_cfg = _Cfg()
+
+    def _get_cfg():
+        return fake_cfg
+
+    providers_built: list[str] = []
+
+    def _make_provider(name, model_override=None):
+        providers_built.append(name)
+        return FakeProvider([
+            AssistantMessage(
+                text="hi",
+                tool_calls=[],
+                raw={"role": "assistant", "content": "hi"},
+            ),
+        ])
+
+    monkeypatch.setattr(chat_loop, "get_config", _get_cfg)
+    monkeypatch.setattr(chat_loop, "get_provider", _make_provider)
+
+    messages = [
+        {"role": "system", "content": "sys"},
+        {"role": "user", "content": "first"},
+        # Simulate prior provider-shaped tool call entries from a previous turn.
+        {"role": "assistant", "tool_calls": [{"id": "a"}]},
+        {"role": "tool", "name": "roll_die", "content": "{}"},
+        {"role": "assistant", "content": "rolled"},
+        {"role": "user", "content": "second"},
+    ]
+    chat_loop.chat(messages)
+    # First call stamps "ollama"; history preserved (no mismatch yet).
+    assert any(m.get("role") == "tool" for m in messages)
+
+    # Switch provider in config and call again.
+    fake_cfg.provider = "openai"
+    messages.append({"role": "user", "content": "third"})
+    chat_loop.chat(messages)
+
+    roles = [m.get("role") for m in messages]
+    # Reset must drop foreign tool-call entries; system + final user kept,
+    # plus the assistant reply appended by the new provider's turn.
+    assert "tool" not in roles
+    assert messages[0] == {"role": "system", "content": "sys"}
+    assert any(
+        m.get("role") == "user" and m.get("content") == "third" for m in messages
+    )
+    assert providers_built == ["ollama", "openai"]
+    chat_loop.forget_session_provider(messages)
+
+
+def test_chat_does_not_reset_when_provider_unchanged(monkeypatch):
+    import chat_loop
+
+    class _Cfg:
+        provider = "ollama"
+
+    monkeypatch.setattr(chat_loop, "get_config", lambda: _Cfg())
+    monkeypatch.setattr(
+        chat_loop,
+        "get_provider",
+        lambda name, model_override=None: FakeProvider([
+            AssistantMessage(
+                text="ok",
+                tool_calls=[],
+                raw={"role": "assistant", "content": "ok"},
+            ),
+        ]),
+    )
+
+    messages = [
+        {"role": "system", "content": "sys"},
+        {"role": "user", "content": "first"},
+    ]
+    chat_loop.chat(messages)
+    before = list(messages)
+    messages.append({"role": "user", "content": "second"})
+    chat_loop.chat(messages)
+    # System + first user + first assistant + second user + second assistant.
+    assert messages[: len(before)] == before
+    chat_loop.forget_session_provider(messages)
+
+
 def test_memory_mutator_refreshes_system_prompt_mid_loop(tmp_path, monkeypatch):
     """After a memory-mutating tool runs, the next chat_once must see the new memory in `system`."""
     import config as _config

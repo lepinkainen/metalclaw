@@ -13,6 +13,7 @@ from chat_loop import (
     _parse_command,
     build_system_prompt,
     chat,
+    forget_session_provider,
     run_turn,
 )
 from config import get_config
@@ -155,7 +156,9 @@ async def _discord_dispatch_command(
     if cmd == "help":
         await _discord_send(message.channel, _DISCORD_HELP_TEXT)
     elif cmd == "new":
-        _discord_sessions.pop(channel_id, None)
+        old = _discord_sessions.pop(channel_id, None)
+        if old is not None:
+            forget_session_provider(old)
         await _discord_send(message.channel, "Conversation reset.")
     elif cmd == "remember":
         await common.run_remember(send, args)

@@ -29,6 +29,7 @@ __all__ = [
     "build_system_prompt",
     "chat",
     "chat_via_escalation",
+    "forget_session_provider",
     "run_turn",
 ]
 
@@ -200,6 +201,40 @@ def _chat_with_provider(
         _active_session_messages.reset(token)
 
 
+# Session -> provider name. Each call to `chat()` stamps the session so we can
+# detect a mid-session config switch (different providers' tool-call wire
+# formats are incompatible — Anthropic vs OpenAI vs Ollama).
+_session_providers: dict[int, str] = {}
+
+
+def forget_session_provider(messages: list[dict]) -> None:
+    """Drop the provider stamp for `messages` (call on /new or session disposal)."""
+    _session_providers.pop(id(messages), None)
+
+
+def _check_session_provider(messages: list[dict], provider_name: str) -> bool:
+    """Stamp the session; if the provider switched, drop tainted history.
+
+    Keeps the leading system message and the trailing user turn (both wire-
+    format-agnostic) and discards everything in between. Returns True if a
+    reset happened.
+    """
+    sid = id(messages)
+    stamped = _session_providers.get(sid)
+    _session_providers[sid] = provider_name
+    if stamped is None or stamped == provider_name:
+        return False
+    kept: list[dict] = []
+    if messages and messages[0].get("role") == "system":
+        kept.append(messages[0])
+    if messages and messages[-1].get("role") == "user" and (
+        not kept or messages[-1] is not kept[0]
+    ):
+        kept.append(messages[-1])
+    messages[:] = kept
+    return True
+
+
 def chat(
     messages: list[dict],
     on_tool_call: Callable[[str, dict, str], None] | None = None,
@@ -207,9 +242,13 @@ def chat(
     """Send messages via the configured provider, handle tool calls, return final text.
 
     Mutates `messages` in place, appending tool-call/result entries so the
-    caller retains full conversation history.
+    caller retains full conversation history. If the configured provider
+    changed since this session's last turn, prior tool-call history is
+    dropped (system + current user turn preserved) so the new provider does
+    not choke on foreign wire formats.
     """
     cfg = get_config()
+    _check_session_provider(messages, cfg.provider)
     provider = get_provider(cfg.provider)
     return _chat_with_provider(provider, messages, on_tool_call=on_tool_call)
 

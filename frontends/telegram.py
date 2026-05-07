@@ -18,6 +18,7 @@ from chat_loop import (
     _parse_command,
     build_system_prompt,
     chat,
+    forget_session_provider,
     run_turn,
 )
 from config import xdg_data_dir
@@ -160,7 +161,9 @@ async def _telegram_dispatch_command(
     if cmd == "help":
         await _tg_reply(update, _TELEGRAM_HELP_TEXT)
     elif cmd == "new":
-        _telegram_sessions.pop(chat_id, None)
+        old = _telegram_sessions.pop(chat_id, None)
+        if old is not None:
+            forget_session_provider(old)
         await _tg_reply(update, "Conversation reset.")
     elif cmd == "remember":
         await common.run_remember(send, args)
