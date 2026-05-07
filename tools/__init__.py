@@ -8,6 +8,7 @@ populate the global ``registry.TOOLS`` dict before any provider runs.
 from .dice import roll_die
 from .escalation import escalate_to_big_model
 from .mail import list_emails, read_email
+from .manual import read_manual
 from .memory_tools import (
     add_user_fact,
     add_user_instruction,
@@ -27,6 +28,7 @@ __all__ = [
     "get_user_memory",
     "list_emails",
     "read_email",
+    "read_manual",
     "read_note",
     "roll_die",
     "search_vault",

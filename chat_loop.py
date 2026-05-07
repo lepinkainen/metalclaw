@@ -65,7 +65,10 @@ _SYSTEM_PROMPT_BASE = (
     "add_user_fact, or forget_user_memory to record durable information about the "
     "user; call get_user_memory to read the full file. "
     "If a request needs more info, check memory first before asking the user. "
-    "When the user gives information, store it in memory if relevant."
+    "When the user gives information, store it in memory if relevant. "
+    "When asked about your own features, slash commands, memory, heartbeat, "
+    "escalation, self-modification, or frontends, call read_manual rather "
+    "than guessing."
 )
 
 
