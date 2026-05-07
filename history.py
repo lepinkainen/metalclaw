@@ -1,16 +1,14 @@
-import os
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 
 from prompt_toolkit.history import History
 
+from config import xdg_data_dir
+
 
 def _db_path() -> Path:
-    xdg = os.environ.get("XDG_DATA_HOME") or (Path.home() / ".local" / "share")
-    p = Path(xdg) / "metalclaw" / "history.db"
-    p.parent.mkdir(parents=True, exist_ok=True)
-    return p
+    return xdg_data_dir() / "history.db"
 
 
 def _init(path: Path) -> sqlite3.Connection:

@@ -18,6 +18,14 @@ def _config_path() -> Path:
     return Path(xdg) / "metalclaw" / "config.yaml"
 
 
+def xdg_data_dir() -> Path:
+    """Return ``$XDG_DATA_HOME/metalclaw`` (or ``~/.local/share/metalclaw``), creating it."""
+    xdg = os.environ.get("XDG_DATA_HOME") or (Path.home() / ".local" / "share")
+    p = Path(xdg) / "metalclaw"
+    p.mkdir(parents=True, exist_ok=True)
+    return p
+
+
 _VALID_PROVIDERS = ("ollama", "openai", "anthropic")
 
 
