@@ -23,6 +23,16 @@ def _read_file(path: Path) -> str:
         return f"<could not read {path.name}>"
 
 
+def _read_tools_package(repo_root: Path) -> str:
+    pkg = repo_root / "tools"
+    if not pkg.is_dir():
+        return _read_file(repo_root / "tools.py")
+    parts: list[str] = []
+    for path in sorted(pkg.glob("*.py")):
+        parts.append(f"--- tools/{path.name} ---\n{_read_file(path)}")
+    return "\n\n".join(parts)
+
+
 def _run(cmd: list[str], cwd: Path, timeout: int = 60) -> tuple[int, str, str]:
     try:
         r = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, timeout=timeout)
@@ -43,7 +53,7 @@ def _untracked(repo_root: Path) -> set[str]:
 
 def run_self_change(request: str, repo_root: Path) -> SelfChangeResult:
     bot_src = _read_file(repo_root / "bot.py")
-    tools_src = _read_file(repo_root / "tools.py")
+    tools_src = _read_tools_package(repo_root)
     registry_src = _read_file(repo_root / "registry.py")
 
     # Snapshot pre-existing dirty state so reject only reverts Claude's changes
@@ -63,7 +73,7 @@ Current file contents:
 === bot.py ===
 {bot_src}
 
-=== tools.py ===
+=== tools/ package ===
 {tools_src}
 
 === registry.py ===
