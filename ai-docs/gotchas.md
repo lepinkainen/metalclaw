@@ -4,17 +4,17 @@ Subtle traps. Read before editing.
 
 ## Tool registration order
 
-`registry.TOOLS` is empty until `tools.py` is imported. `bot._async_main` does this (`bot.py:64`) **before** any frontend starts. Tests must `import tools` (or `import bot`) to populate. `tests/test_tools_registration.py` enforces.
+`registry.TOOLS` is empty until the `tools` package is imported. `_async_main` does this at `bot.py:33` (`import tools  # noqa: F401`) **before** any frontend starts. Tests must `import tools` to populate. `tests/test_tools_registration.py` enforces.
 
-If you add a new tool module that doesn't get imported anywhere, its tools won't register — re-export from `tools.py` or import explicitly.
+If you add a new tool module under `tools/`, re-export it from `tools/__init__.py` so it registers on `import tools` — `/add-tool` does this automatically on approve.
 
 ## Circular imports
 
-`tools.py` imports `bot` lazily inside `escalate_to_big_model` (`tools.py:784`). `heartbeat.py` imports `bot` lazily inside `run_tick` (`heartbeat.py:243`). Both are because `bot.py` imports `tools` at runtime and `heartbeat` at top — flipping to top-level imports inside `tools` or `heartbeat` will break startup.
+`tools/escalation.py` lazy-imports `chat_loop` + `providers` inside `escalate_to_big_model` (`tools/escalation.py:30`) to avoid the `chat_loop → registry → tools` cycle at module load. `heartbeat.py` lazy-imports `chat_loop` inside `run_tick` (`heartbeat.py:241`) for the same reason. Don't promote either to a top-level import.
 
-## Re-exports for tests
+## Test imports
 
-`bot.py:43` lists private symbols re-exported so tests can do `import bot; bot._chat_with_provider(...)`. **Don't remove items from `__all__` without updating tests.**
+Tests import directly from the defining module — `chat_loop._chat_with_provider`, `chat_loop._active_session_messages`, `frontends.discord._split_for_discord`, etc. `bot.py` is a thin entrypoint and re-exports nothing; `import bot; bot._foo` will fail.
 
 ## `messages` mutation contract
 

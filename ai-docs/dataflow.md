@@ -64,10 +64,10 @@ _run_tool("escalate_to_big_model", {...})
     ▼
 tools.escalate_to_big_model(query, reason):
     ├─ if not cfg.escalation_enabled: return {"status":"disabled"}
-    ├─ snapshot = bot._active_session_messages.get()    # ContextVar
+    ├─ snapshot = chat_loop._active_session_messages.get()    # ContextVar
     ├─ sub_messages = list(snapshot) + [{"role":"user","content": f"[escalation: {reason}] {query}"}]
     ├─ big = get_provider(cfg.escalation_provider, model_override=cfg.escalation_model)
-    └─ reply = bot._chat_with_provider(big, sub_messages, exclude_tools={"escalate_to_big_model"})
+    └─ reply = chat_loop._chat_with_provider(big, sub_messages, exclude_tools={"escalate_to_big_model"})
     ▼
 returns {"status":"ok","model":"...","reason","reply"} as the tool result
     ▼
@@ -88,7 +88,7 @@ run_tick()
          ├─ if not due and not hb.body: skip
          ├─ messages = _build_heartbeat_messages(scope, hb, due, now, build_system_prompt)
          │       ▲ system prompt + HEARTBEAT MODE postscript
-         ├─ reply = await loop.run_in_executor(None, lambda: bot.chat(messages))
+         ├─ reply = await loop.run_in_executor(None, lambda: chat_loop.chat(messages))
          ├─ state[state_key(scope, t.name)] = now.isoformat()  for each due
          ├─ if reply.strip() startswith SENTINEL: continue     # silent
          └─ channels.for_scope(scope)?.notify(scope, clean)

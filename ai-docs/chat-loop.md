@@ -67,7 +67,7 @@ Strips `<think>...</think>` blocks (Gemma/QwQ-style). Returns `(thinking, clean)
 1. `big = get_provider(cfg.escalation_provider, model_override=cfg.escalation_model)`.
 2. `_chat_with_provider(big, messages, exclude_tools={"escalate_to_big_model"})`.
 
-The `escalate_to_big_model` tool itself (in `tools.py`) does **not** call `chat_via_escalation` — it directly calls `bot._chat_with_provider(big, sub_messages, exclude_tools=...)` with a snapshot of the active session. This avoids appending the escalation result into the active history; the model gets the answer back as a tool result.
+The `escalate_to_big_model` tool itself (in `tools/escalation.py`) does **not** call `chat_via_escalation` — it directly calls `chat_loop._chat_with_provider(big, sub_messages, exclude_tools=...)` with a snapshot of the active session. This avoids appending the escalation result into the active history; the model gets the answer back as a tool result.
 
 ## Tool-result formatting per provider
 

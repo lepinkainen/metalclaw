@@ -55,7 +55,7 @@ House rules — observed in code, enforce when editing.
 
 ## Naming
 
-- Private symbols start with `_`. Module-private + test-importable helpers (e.g. `_chat_with_provider`) are still re-exported via `bot.__all__` for tests.
+- Private symbols start with `_`. Module-private helpers used by tests (e.g. `_chat_with_provider`) are imported directly from their defining module (`from chat_loop import _chat_with_provider`); `bot.py` does not re-export.
 - Tool functions: snake_case, name = registry key.
 
 ## Tests

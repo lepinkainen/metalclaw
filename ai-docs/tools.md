@@ -84,7 +84,7 @@ Currently: `train`, `weather`, `mail`, `search`. CLI wires via `_make_tool_handl
 
 ## httpx client lifetime
 
-`_HTTP = httpx.Client(headers={...}, timeout=15.0)` at module level (`tools.py:27`). Reused across tool calls. Connection pool persists for daemon process. Don't add a `close()` — recreating per-call doubles latency.
+`_HTTP = httpx.Client(headers={...}, timeout=15.0)` at module level in `tools/_http.py`. Shared across all tool modules. Connection pool persists for daemon process. Don't add a `close()` — recreating per-call doubles latency.
 
 ## Fastmail session caching
 
@@ -94,9 +94,9 @@ Currently: `train`, `weather`, `mail`, `search`. CLI wires via `_make_tool_handl
 
 `escalate_to_big_model(query, reason)`:
 1. Disabled if `cfg.escalation_enabled=False` → returns `{status: disabled}`.
-2. Reads `bot._active_session_messages.get()` (ContextVar) for full conversation snapshot.
+2. Reads `chat_loop._active_session_messages.get()` (ContextVar) for full conversation snapshot.
 3. Builds `sub_messages = list(snapshot) + [{"role":"user","content": f"[escalation: {reason}] {query}"}]`.
-4. Calls `bot._chat_with_provider(big, sub_messages, exclude_tools={"escalate_to_big_model"})` — recursion-prevented.
+4. Calls `chat_loop._chat_with_provider(big, sub_messages, exclude_tools={"escalate_to_big_model"})` — recursion-prevented.
 5. Returns `{"status":"ok","model":"<provider>:<model>","reason","reply"}`.
 
 The local model sees `reply` as a tool result and produces user-facing text. The escalation reply is **not** appended to the active session history — only the synthesized response is.

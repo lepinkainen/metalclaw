@@ -1,6 +1,6 @@
 # ai-docs INDEX
 
-AI-only architecture docs. Dense, indexed, cross-referenced. No human-friendly prose. Use file:line refs (e.g. `bot.py:64`) — paths relative to repo root unless noted.
+AI-only architecture docs. Dense, indexed, cross-referenced. No human-friendly prose. Use file:line refs (e.g. `bot.py:33`) — paths relative to repo root unless noted.
 
 ## Files
 
@@ -23,34 +23,44 @@ AI-only architecture docs. Dense, indexed, cross-referenced. No human-friendly p
 ## Source map (line counts)
 
 ```
-bot.py            165   entrypoint, arg parse, async orchestration, re-exports
-chat_loop.py      202   chat(), chat_via_escalation(), system prompt, _parse_command
-registry.py        61   @tool decorator, TOOLS dict, pydantic→json-schema
+bot.py            134   entrypoint, arg parse, async orchestration
+chat_loop.py      301   chat(), chat_via_escalation(), run_turn, _parse_command, system prompt
+registry.py        63   @tool decorator, TOOLS dict, pydantic→json-schema
 channels.py        52   Channel Protocol, scope→channel registry
 config.py         180   pydantic Config, yaml load, env merge, lru_cache
 memory.py         381   Memory dataclass, parse/render, file lock, mutators, forget
-heartbeat.py      322   parse, schedule, run_tick, scope discovery
+heartbeat.py      324   parse, schedule, run_tick, scope discovery
 history.py         64   SQLiteHistory (prompt_toolkit subclass)
-self_change.py    173   spawn `claude -p`, gate via task lint/build/test, approve/reject
+self_change.py    183   spawn `claude -p`, gate via task lint/build/test, approve/reject
+live_tool.py      290   /add-tool: spawn `claude -p`, focused gates, async approval
 telegram_format.py 146  CommonMark→Telegram HTML
-tools.py          805   tool implementations + schemas
 vault_search.py   205   ripgrep wrapper + read_note
 providers/base.py  40   Protocol, AssistantMessage, ToolCall
 providers/__init__ 32   get_provider() factory
 providers/ollama  71
 providers/openai  65
 providers/anthropic 83
-frontends/cli.py  274
-frontends/common  337   shared parsers/formatters/runners + scope helpers
-frontends/discord 286
-frontends/telegram 265
+tools/__init__.py  38   re-exports per-domain modules so @tool fires on `import tools`
+tools/_http.py      8   shared httpx.Client
+tools/dice.py      18
+tools/escalation.py 51  escalate_to_big_model
+tools/mail.py     364   Fastmail JMAP list_emails / read_email
+tools/manual.py   181   manual page lookup
+tools/memory_tools 106   five memory mutator/reader tools
+tools/search.py    52   search_vault, read_note
+tools/trains.py   110   train_departures
+tools/weather.py  123
+frontends/cli.py  331
+frontends/common  448   shared parsers/formatters/runners + scope helpers
+frontends/discord 308
+frontends/telegram 287
 ```
 
 ## Lookup shortcuts
 
 - Tool registration sequence → `gotchas.md#tool-registration`
-- Why tests import `bot._foo` → `architecture.md#re-exports`
+- Where tests import private helpers from → `architecture.md#test-imports` (defining module, not `bot`)
 - Memory locking model → `memory.md#locking`
 - Discord vs Telegram message split → `frontends.md#message-splitting`
-- Escalation message-history snapshot → `chat-loop.md#escalation` and `tools.py:787`
+- Escalation message-history snapshot → `chat-loop.md#escalation` and `tools/escalation.py:33`
 - Heartbeat sentinel → `heartbeat.py:29` `SENTINEL = "HEARTBEAT_OK"`

@@ -50,7 +50,7 @@ def test_x(cfg_file, write_config):
 ## Heartbeat tests
 
 - Build `HeartbeatFile` directly or feed `parse_heartbeat_file(text)`.
-- For `run_tick`, monkeypatch `bot.chat` to return canned text. Assert state file updates and channel `notify` calls.
+- For `run_tick`, monkeypatch `chat_loop.chat` to return canned text. Assert state file updates and channel `notify` calls.
 
 ## Self-change tests
 
