@@ -247,7 +247,7 @@ def _append_to_init(repo_root: Path, slug: str, names: list[str]) -> None:
         if ln.startswith("from .") or ln.startswith("from tools."):
             insert_at = i + 1
     lines.insert(insert_at, import_line)
-    text = "\n".join(lines) + ("\n" if not text.endswith("\n") else "")
+    text = "\n".join(lines) + ("\n" if text.endswith("\n") else "")
 
     text = _merge_into_all(text, names)
     init_path.write_text(text)
@@ -271,7 +271,7 @@ def _merge_into_all(text: str, new_names: list[str]) -> str:
         start = node.lineno - 1
         end = node.end_lineno or start + 1
         lines[start:end] = new_block.splitlines()
-        return "\n".join(lines) + ("\n" if not text.endswith("\n") else "")
+        return "\n".join(lines) + ("\n" if text.endswith("\n") else "")
     return text
 
 
