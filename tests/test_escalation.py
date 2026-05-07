@@ -1,39 +1,16 @@
-import yaml
-import pytest
-
 import bot
-import config
 import tools
 from providers.base import AssistantMessage
 
 
-@pytest.fixture
-def cfg_file(tmp_path, monkeypatch):
-    path = tmp_path / "config.yaml"
-    monkeypatch.setenv("METALCLAW_CONFIG", str(path))
-    monkeypatch.delenv("FASTMAIL_API_TOKEN", raising=False)
-    monkeypatch.delenv("OLLAMA_URL", raising=False)
-    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
-    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
-    config.reset_cache()
-    yield path
-    config.reset_cache()
-
-
-def _write(path, **fields):
-    base = {"vault_path": str(path.parent / "vault")}
-    base.update(fields)
-    path.write_text(yaml.safe_dump(base))
-
-
-def test_escalate_returns_disabled_when_off(cfg_file):
-    _write(cfg_file, escalation_enabled=False)
+def test_escalate_returns_disabled_when_off(cfg_file, write_config):
+    write_config(cfg_file, escalation_enabled=False)
     out = tools.escalate_to_big_model(query="x", reason="y")
     assert out["status"] == "disabled"
 
 
-def test_escalate_routes_through_provider(cfg_file, monkeypatch):
-    _write(
+def test_escalate_routes_through_provider(cfg_file, write_config, monkeypatch):
+    write_config(
         cfg_file,
         escalation_enabled=True,
         escalation_provider="anthropic",
@@ -88,8 +65,8 @@ def test_escalate_routes_through_provider(cfg_file, monkeypatch):
     assert any("hard one" in c and "too hard" in c for c in user_contents)
 
 
-def test_escalate_with_no_active_session(cfg_file, monkeypatch):
-    _write(
+def test_escalate_with_no_active_session(cfg_file, write_config, monkeypatch):
+    write_config(
         cfg_file,
         escalation_enabled=True,
         escalation_provider="openai",

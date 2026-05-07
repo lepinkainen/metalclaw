@@ -4,7 +4,6 @@ from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 
 import pytest
-import yaml
 
 import channels
 import config
@@ -12,22 +11,17 @@ import heartbeat
 
 
 @pytest.fixture
-def cfg(tmp_path, monkeypatch):
+def cfg(tmp_path, monkeypatch, clear_env, write_config):
     cfg_path = tmp_path / "config.yaml"
-    cfg_path.write_text(
-        yaml.safe_dump(
-            {
-                "vault_path": str(tmp_path / "vault"),
-                "memory_subdir": "Mem",
-                "heartbeat_interval_seconds": 60,
-            }
-        )
+    write_config(
+        cfg_path,
+        vault_path=str(tmp_path / "vault"),
+        memory_subdir="Mem",
+        heartbeat_interval_seconds=60,
     )
     monkeypatch.setenv("METALCLAW_CONFIG", str(cfg_path))
     monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "cfgdir"))
-    monkeypatch.delenv("OLLAMA_URL", raising=False)
-    monkeypatch.delenv("FASTMAIL_API_TOKEN", raising=False)
     config.reset_cache()
     (tmp_path / "vault" / "Mem").mkdir(parents=True)
     yield config.get_config()

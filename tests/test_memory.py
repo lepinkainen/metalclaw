@@ -1,4 +1,3 @@
-import yaml
 import pytest
 
 import config
@@ -6,20 +5,17 @@ import memory
 
 
 @pytest.fixture
-def vault(tmp_path, monkeypatch):
+def vault(tmp_path, monkeypatch, clear_env, write_config):
     """Build a throwaway config + vault, point METALCLAW_CONFIG at it, clear caches."""
     vault_dir = tmp_path / "vault"
     cfg_path = tmp_path / "config.yaml"
-    cfg_path.write_text(
-        yaml.safe_dump({
-            "vault_path": str(vault_dir),
-            "memory_subdir": "Memory",
-            "fastmail_api_token": "test-token",
-        })
+    write_config(
+        cfg_path,
+        vault_path=str(vault_dir),
+        memory_subdir="Memory",
+        fastmail_api_token="test-token",
     )
     monkeypatch.setenv("METALCLAW_CONFIG", str(cfg_path))
-    monkeypatch.delenv("FASTMAIL_API_TOKEN", raising=False)
-    monkeypatch.delenv("OLLAMA_URL", raising=False)
     config.reset_cache()
     memory.current_scope.set("test")
     yield vault_dir / "Memory"
