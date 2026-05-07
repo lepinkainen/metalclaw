@@ -3,6 +3,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import httpx
+from pydantic import BaseModel, Field
 
 import memory
 import vault_search
@@ -10,18 +11,13 @@ from config import get_config
 from registry import tool
 
 
+class _RollDieArgs(BaseModel):
+    sides: int = Field(description="Number of sides on the die")
+
+
 @tool(
     description="Roll a die with the specified number of sides (e.g. 6 for a standard die, 20 for a d20).",
-    parameters={
-        "type": "object",
-        "properties": {
-            "sides": {
-                "type": "integer",
-                "description": "Number of sides on the die",
-            },
-        },
-        "required": ["sides"],
-    },
+    args=_RollDieArgs,
 )
 def roll_die(sides: int) -> str:
     result = random.randint(1, sides)
@@ -57,23 +53,28 @@ def _normalise_condition(symbol: str) -> str:
     return symbol.replace("_", " ").removesuffix(" day").removesuffix(" night")
 
 
+def _extract_symbol(data: dict[str, Any], periods: tuple[str, ...]) -> str | None:
+    """Return the first available ``symbol_code`` across ``periods``."""
+    for period in periods:
+        block = data.get(period)
+        if block and "summary" in block:
+            return block["summary"]["symbol_code"]
+    return None
+
+
 def _day_summary(entries: list[dict[str, Any]]) -> dict[str, Any]:
     """Summarise a list of timeseries entries for one day."""
     temps = [e["data"]["instant"]["details"]["air_temperature"] for e in entries]
     lo, hi = min(temps), max(temps)
 
-    # Pick the symbol from the noon entry (or closest available) with next_6_hours
+    # Prefer 6-hour outlook from noon (or closest fallback hour).
     symbol = "unknown"
     for target_hour in (12, 6, 18, 0):
         for e in entries:
-            t = e["time"]  # e.g. "2026-04-08T12:00:00Z"
-            if int(t[11:13]) == target_hour:
-                data = e["data"]
-                for period in ("next_6_hours", "next_1_hours"):
-                    if period in data and "summary" in data[period]:
-                        symbol = data[period]["summary"]["symbol_code"]
-                        break
-                if symbol != "unknown":
+            if int(e["time"][11:13]) == target_hour:
+                found = _extract_symbol(e["data"], ("next_6_hours", "next_1_hours"))
+                if found:
+                    symbol = found
                     break
         if symbol != "unknown":
             break
@@ -86,18 +87,13 @@ def _day_summary(entries: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
+class _WeatherArgs(BaseModel):
+    location: str = Field(description="City or place name (e.g. 'Tokyo', 'Oslo', 'New York')")
+
+
 @tool(
     description="Get the weather for a location: current conditions, today's forecast, and tomorrow's forecast. Accepts a city name or place.",
-    parameters={
-        "type": "object",
-        "properties": {
-            "location": {
-                "type": "string",
-                "description": "City or place name (e.g. 'Tokyo', 'Oslo', 'New York')",
-            },
-        },
-        "required": ["location"],
-    },
+    args=_WeatherArgs,
 )
 def weather(location: str) -> dict[str, Any]:
     lat, lon, display_name = _geocode(location)
@@ -117,16 +113,12 @@ def weather(location: str) -> dict[str, Any]:
     today_str = today.isoformat()
     tomorrow_str = tomorrow.isoformat()
 
-    # Current conditions
+    # Current conditions: prefer 1-hour outlook (more recent) over 6-hour fallback.
     now = timeseries[0]["data"]
     instant = now["instant"]["details"]
     temp = instant["air_temperature"]
     wind = instant["wind_speed"]
-    symbol = "unknown"
-    for period in ("next_1_hours", "next_6_hours"):
-        if period in now and "summary" in now[period]:
-            symbol = now[period]["summary"]["symbol_code"]
-            break
+    symbol = _extract_symbol(now, ("next_1_hours", "next_6_hours")) or "unknown"
 
     result: dict[str, Any] = {
         "source": {
@@ -171,26 +163,18 @@ def _find_station_code(name: str) -> tuple[str, str]:
     raise ValueError(f"No passenger station found matching: {name}")
 
 
+class _TrainDeparturesArgs(BaseModel):
+    station: str = Field(description="Station name or short code (e.g. 'Helsinki', 'Tampere', 'HKI')")
+    line: str | None = Field(
+        default=None,
+        description="Optional commuter line letter to filter by (e.g. 'R', 'I', 'K', 'Z')",
+    )
+    count: int = Field(default=5, description="Number of departures to return (default 5, max 20)")
+
+
 @tool(
     description="Get the next departing trains from a Finnish railway station by name. Can optionally filter by commuter line letter such as R, I, K, or Z.",
-    parameters={
-        "type": "object",
-        "properties": {
-            "station": {
-                "type": "string",
-                "description": "Station name or short code (e.g. 'Helsinki', 'Tampere', 'HKI')",
-            },
-            "line": {
-                "type": "string",
-                "description": "Optional commuter line letter to filter by (e.g. 'R', 'I', 'K', 'Z')",
-            },
-            "count": {
-                "type": "integer",
-                "description": "Number of departures to return (default 5, max 20)",
-            },
-        },
-        "required": ["station"],
-    },
+    args=_TrainDeparturesArgs,
 )
 def train_departures(station: str, count: int = 5, line: str | None = None) -> dict[str, Any]:
     count = min(max(1, count), 20)
@@ -337,6 +321,28 @@ def _fm_lookup_mailbox(name: str) -> dict[str, Any]:
     raise ValueError(f"mailbox '{name}' not found — try a role like 'inbox' or an exact label name")
 
 
+class _ListEmailsArgs(BaseModel):
+    mailbox: str = Field(
+        default="inbox",
+        description=(
+            "Mailbox to search. Accepts role names (inbox, sent, trash, drafts, archive, junk), "
+            "custom label/folder names, or 'all' for every folder (excluding trash/junk/drafts/sent). "
+            "Case-insensitive. Default: inbox"
+        ),
+    )
+    unread_only: bool = Field(
+        default=False, description="If true, return only unread (unseen) emails"
+    )
+    from_search: str | None = Field(
+        default=None,
+        description="Filter by sender name or email address (case-insensitive substring match)",
+    )
+    limit: int | None = Field(
+        default=None,
+        description="Maximum number of emails to return (1–50, default 10; default 50 when mailbox='all')",
+    )
+
+
 @tool(
     description=(
         "List and filter emails from Fastmail. Use to answer questions like 'what's in my inbox?', "
@@ -345,32 +351,7 @@ def _fm_lookup_mailbox(name: str) -> dict[str, Any]:
         "use this for cross-folder unread triage. Each result includes 'folders' so the caller can "
         "rank by source (e.g. Newsletters vs Work)."
     ),
-    parameters={
-        "type": "object",
-        "properties": {
-            "mailbox": {
-                "type": "string",
-                "description": (
-                    "Mailbox to search. Accepts role names (inbox, sent, trash, drafts, archive, junk), "
-                    "custom label/folder names, or 'all' for every folder (excluding trash/junk/drafts/sent). "
-                    "Case-insensitive. Default: inbox"
-                ),
-            },
-            "unread_only": {
-                "type": "boolean",
-                "description": "If true, return only unread (unseen) emails",
-            },
-            "from_search": {
-                "type": "string",
-                "description": "Filter by sender name or email address (case-insensitive substring match)",
-            },
-            "limit": {
-                "type": "integer",
-                "description": "Maximum number of emails to return (1–50, default 10; default 50 when mailbox='all')",
-            },
-        },
-        "required": [],
-    },
+    args=_ListEmailsArgs,
 )
 def list_emails(
     mailbox: str = "inbox",
@@ -504,6 +485,12 @@ def _html_to_text(html: str) -> str:
     return "\n".join(out).strip()
 
 
+class _ReadEmailArgs(BaseModel):
+    email_id: str = Field(
+        description="JMAP email id, as returned in the 'id' field of list_emails results."
+    )
+
+
 @tool(
     description=(
         "Read the full body of a single email by id. Use after list_emails when "
@@ -513,16 +500,7 @@ def _html_to_text(html: str) -> str:
         "attachment metadata, with image attachments listed separately under 'images' "
         "(name, type, size, blob_id, cid). Image bytes are not fetched."
     ),
-    parameters={
-        "type": "object",
-        "properties": {
-            "email_id": {
-                "type": "string",
-                "description": "JMAP email id, as returned in the 'id' field of list_emails results.",
-            },
-        },
-        "required": ["email_id"],
-    },
+    args=_ReadEmailArgs,
 )
 def read_email(email_id: str) -> dict[str, Any]:
     session = _fm_session()
@@ -630,30 +608,28 @@ def read_email(email_id: str) -> dict[str, Any]:
 # --- User memory ---
 
 
+class _SetUserPreferenceArgs(BaseModel):
+    key: str = Field(description="Short identifier, e.g. 'role', 'tone', 'interests'")
+    value: str = Field(
+        description="Value for this preference. May contain Obsidian [[wikilinks]]."
+    )
+
+
 @tool(
     description=(
         "Save a structured user preference (key/value) to long-term memory. "
         "Use for stable facts about how the user wants to be addressed or what "
         "they care about, e.g. role, tone, interests, timezone."
     ),
-    parameters={
-        "type": "object",
-        "properties": {
-            "key": {
-                "type": "string",
-                "description": "Short identifier, e.g. 'role', 'tone', 'interests'",
-            },
-            "value": {
-                "type": "string",
-                "description": "Value for this preference. May contain Obsidian [[wikilinks]].",
-            },
-        },
-        "required": ["key", "value"],
-    },
+    args=_SetUserPreferenceArgs,
 )
 def set_user_preference(key: str, value: str) -> dict[str, Any]:
     memory.set_preference(key, value)
     return {"status": "saved", "key": key, "value": value}
+
+
+class _AddUserFactArgs(BaseModel):
+    text: str = Field(description="The fact to remember. May contain Obsidian [[wikilinks]].")
 
 
 @tool(
@@ -661,20 +637,15 @@ def set_user_preference(key: str, value: str) -> dict[str, Any]:
         "Append a free-form fact about the user to long-term memory. "
         "Use for one-off facts that don't fit a key/value preference."
     ),
-    parameters={
-        "type": "object",
-        "properties": {
-            "text": {
-                "type": "string",
-                "description": "The fact to remember. May contain Obsidian [[wikilinks]].",
-            },
-        },
-        "required": ["text"],
-    },
+    args=_AddUserFactArgs,
 )
 def add_user_fact(text: str) -> dict[str, Any]:
     memory.add_fact(text)
     return {"status": "saved", "text": text}
+
+
+class _ForgetUserMemoryArgs(BaseModel):
+    matcher: str = Field(description="Substring to match against memory entries.")
 
 
 @tool(
@@ -682,16 +653,7 @@ def add_user_fact(text: str) -> dict[str, Any]:
         "Remove an entry from the user's long-term memory by substring match "
         "against the key, value, or fact text (case-insensitive)."
     ),
-    parameters={
-        "type": "object",
-        "properties": {
-            "matcher": {
-                "type": "string",
-                "description": "Substring to match against memory entries.",
-            },
-        },
-        "required": ["matcher"],
-    },
+    args=_ForgetUserMemoryArgs,
 )
 def forget_user_memory(matcher: str) -> dict[str, Any]:
     removed = memory.forget(matcher)
@@ -704,13 +666,23 @@ def forget_user_memory(matcher: str) -> dict[str, Any]:
         "Obsidian-flavoured markdown so you can reason about preferences, facts, "
         "and instructions stored across sessions."
     ),
-    parameters={"type": "object", "properties": {}, "required": []},
 )
 def get_user_memory() -> dict[str, Any]:
     return {"scope": memory.current_scope.get(), "markdown": memory.render_full()}
 
 
 # --- Obsidian vault search ---
+
+
+class _SearchVaultArgs(BaseModel):
+    query: str = Field(description="Ripgrep regex or literal text to search for.")
+    max_results: int = Field(
+        default=20, description="Maximum number of hits to return (default 20, max 200)."
+    )
+    context_lines: int = Field(
+        default=1,
+        description="Lines of context before and after each match (default 1, max 10).",
+    )
 
 
 @tool(
@@ -720,24 +692,7 @@ def get_user_memory() -> dict[str, Any]:
         "numbers. Use read_note afterwards to fetch the full body of a "
         "promising hit."
     ),
-    parameters={
-        "type": "object",
-        "properties": {
-            "query": {
-                "type": "string",
-                "description": "Ripgrep regex or literal text to search for.",
-            },
-            "max_results": {
-                "type": "integer",
-                "description": "Maximum number of hits to return (default 20, max 200).",
-            },
-            "context_lines": {
-                "type": "integer",
-                "description": "Lines of context before and after each match (default 1, max 10).",
-            },
-        },
-        "required": ["query"],
-    },
+    args=_SearchVaultArgs,
 )
 def search_vault(
     query: str,
@@ -747,28 +702,30 @@ def search_vault(
     return vault_search.search(query, max_results=max_results, context_lines=context_lines)
 
 
+class _ReadNoteArgs(BaseModel):
+    path: str = Field(
+        description="Path relative to the vault root, e.g. 'Projects/Metalclaw.md'."
+    )
+
+
 @tool(
     description=(
         "Read a markdown note from the user's Obsidian vault by path relative "
         "to the vault root (e.g. 'Projects/Metalclaw.md'). Refuses paths "
         "outside the vault and non-markdown files."
     ),
-    parameters={
-        "type": "object",
-        "properties": {
-            "path": {
-                "type": "string",
-                "description": "Path relative to the vault root, e.g. 'Projects/Metalclaw.md'.",
-            },
-        },
-        "required": ["path"],
-    },
+    args=_ReadNoteArgs,
 )
 def read_note(path: str) -> dict[str, Any]:
     return vault_search.read(path)
 
 
 # --- Escalation ---
+
+
+class _EscalateArgs(BaseModel):
+    query: str = Field(description="The user's question or task, restated.")
+    reason: str = Field(description="Why you are escalating instead of answering.")
 
 
 @tool(
@@ -778,20 +735,7 @@ def read_note(path: str) -> dict[str, Any]:
         "Pass the user's question and a brief reason. Do NOT use for trivial "
         "requests."
     ),
-    parameters={
-        "type": "object",
-        "properties": {
-            "query": {
-                "type": "string",
-                "description": "The user's question or task, restated.",
-            },
-            "reason": {
-                "type": "string",
-                "description": "Why you are escalating instead of answering.",
-            },
-        },
-        "required": ["query", "reason"],
-    },
+    args=_EscalateArgs,
 )
 def escalate_to_big_model(query: str, reason: str) -> dict[str, Any]:
     cfg = get_config()
