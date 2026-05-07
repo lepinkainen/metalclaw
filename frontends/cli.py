@@ -42,7 +42,6 @@ _COMMANDS = {
     "remember": "save a preference: /remember <key>=<value>",
     "forget": "remove a memory entry: /forget <matcher>",
     "memory": "show your stored long-term memory",
-    "onboard": "answer a few questions to seed long-term memory",
     "heartbeat": "show heartbeat config / run a tick now (/heartbeat run)",
     "big": "ask the escalation cloud model directly: /big <query>",
     "help": "show this help",
@@ -51,7 +50,6 @@ _COMMANDS = {
 _show_thinking = False
 _prompt_session: PromptSession | None = None
 _cli_messages: list[dict] | None = None
-_pending_onboarding: list[tuple[str, str]] = []
 
 
 def _print_help() -> None:
@@ -123,7 +121,7 @@ def _handle_big(args: str) -> None:
     if messages is None:
         console.print("internal error: no active CLI session")
         return
-    _refresh_system_prompt(messages, common.CLI_SCOPE)
+    _refresh_system_prompt(messages)
     messages.append({"role": "user", "content": query})
     try:
         with console.status("[dim]asking the big model…[/dim]", spinner="dots"):
@@ -154,20 +152,7 @@ def _handle_memory(_: str) -> None:
 
 
 async def _handle_heartbeat(args: str) -> None:
-    await common.run_heartbeat(_cli_send_dim, memory.current_scope.get(), args.strip())
-
-
-def _handle_onboard(_: str) -> None:
-    mem = memory.load()
-    if mem.preferences:
-        console.print(
-            "[dim]already onboarded — use /memory to inspect, /forget to remove entries[/dim]"
-        )
-        return
-    _pending_onboarding[:] = list(common.ONBOARDING_STEPS)
-    _, question = _pending_onboarding[0]
-    console.print("[dim]onboarding — answer briefly at the prompt, '-' to skip a step[/dim]")
-    console.print(f"[dim]{question}[/dim]")
+    await common.run_heartbeat(_cli_send_dim, "cli", args.strip())
 
 
 _COMMAND_HANDLERS = {
@@ -181,7 +166,6 @@ _COMMAND_HANDLERS = {
     "remember":  _handle_remember,
     "forget":    _handle_forget,
     "memory":    _handle_memory,
-    "onboard":   _handle_onboard,
     "heartbeat": _handle_heartbeat,
     "big":       _handle_big,
     "help":      _handle_help,
@@ -208,12 +192,11 @@ class _CLIChannel:
         run_in_terminal(_print)
 
     def active_scopes(self) -> Iterable[str]:
-        return (common.CLI_SCOPE,)
+        return ("cli",)
 
 
 async def run_cli_repl() -> None:
     global _prompt_session, _cli_messages
-    memory.current_scope.set(common.CLI_SCOPE)
     channels.register(_CLIChannel())
 
     now = datetime.now().strftime("%Y-%m-%d %H:%M")
@@ -224,7 +207,7 @@ async def run_cli_repl() -> None:
     messages: list[dict] = [
         {
             "role": "system",
-            "content": build_system_prompt(common.CLI_SCOPE, now),
+            "content": build_system_prompt(now),
         },
     ]
     _cli_messages = messages
@@ -270,19 +253,7 @@ async def run_cli_repl() -> None:
                     console.print(str(e))
                 continue
 
-            if _pending_onboarding:
-                key, _question = _pending_onboarding.pop(0)
-                if user_input != "-":
-                    value = common.format_interests(user_input) if key == "interests" else user_input
-                    memory.set_preference(key, value)
-                if _pending_onboarding:
-                    _, next_q = _pending_onboarding[0]
-                    console.print(f"[dim]{next_q}[/dim]")
-                else:
-                    console.print("[dim]done — restart for memory to enter the system prompt[/dim]")
-                continue
-
-            _refresh_system_prompt(messages, common.CLI_SCOPE)
+            _refresh_system_prompt(messages)
             messages.append({"role": "user", "content": user_input})
 
             try:

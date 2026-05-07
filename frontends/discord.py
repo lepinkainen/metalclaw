@@ -9,7 +9,6 @@ from datetime import datetime
 import discord
 
 import channels
-import memory
 from chat_loop import (
     _parse_command,
     _refresh_system_prompt,
@@ -22,7 +21,6 @@ from frontends import common
 from registry import TOOLS
 
 _discord_sessions: dict[int, list[dict]] = {}
-_discord_onboarding: dict[int, int] = {}
 _known_discord_channels: set[int] = set()
 
 _DISCORD_MAX_MESSAGE = 2000
@@ -132,11 +130,9 @@ class _DiscordChannel:
 
 def _get_discord_session(channel_id: int) -> list[dict]:
     if channel_id not in _discord_sessions:
-        scope = _discord_scope_for(channel_id)
-        memory.current_scope.set(scope)
         now = datetime.now().strftime("%Y-%m-%d %H:%M")
         _discord_sessions[channel_id] = [
-            {"role": "system", "content": build_system_prompt(scope, now)}
+            {"role": "system", "content": build_system_prompt(now)}
         ]
     return _discord_sessions[channel_id]
 
@@ -146,14 +142,12 @@ async def _discord_dispatch_command(
 ) -> None:
     channel_id = message.channel.id
     scope = _discord_scope_for(channel_id)
-    memory.current_scope.set(scope)
     send = _send_for(message.channel)
 
     if cmd == "help":
         await _discord_send(message.channel, _DISCORD_HELP_TEXT)
     elif cmd == "new":
         _discord_sessions.pop(channel_id, None)
-        _discord_onboarding.pop(channel_id, None)
         await _discord_send(message.channel, "Conversation reset.")
     elif cmd == "remember":
         await common.run_remember(send, args)
@@ -161,8 +155,6 @@ async def _discord_dispatch_command(
         await common.run_forget(send, args)
     elif cmd == "memory":
         await common.run_memory(send)
-    elif cmd == "onboard":
-        await common.run_onboard_start(send, _discord_onboarding, channel_id)
     elif cmd == "heartbeat":
         await common.run_heartbeat(
             send, scope, args.strip(), warn_no_discord_channel=True
@@ -172,7 +164,6 @@ async def _discord_dispatch_command(
             send,
             message.channel.typing(),
             _get_discord_session(channel_id),
-            scope,
             args.strip(),
         )
     elif cmd in common.TOOL_COMMANDS:
@@ -242,7 +233,6 @@ async def _discord_handle_message(
 
     channel_id = message.channel.id
     _known_discord_channels.add(channel_id)
-    memory.current_scope.set(_discord_scope_for(channel_id))
     messages = _get_discord_session(channel_id)
 
     if parsed is not None:
@@ -250,17 +240,7 @@ async def _discord_handle_message(
         await _discord_dispatch_command(message, cmd, args)
         return
 
-    if channel_id in _discord_onboarding:
-        await common.run_onboard_answer(
-            _send_for(message.channel),
-            _discord_onboarding,
-            _discord_sessions,
-            channel_id,
-            text,
-        )
-        return
-
-    _refresh_system_prompt(messages, _discord_scope_for(channel_id))
+    _refresh_system_prompt(messages)
     messages.append({"role": "user", "content": text})
     loop = asyncio.get_running_loop()
     try:

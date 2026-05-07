@@ -13,7 +13,6 @@ from telegram.constants import ChatAction
 from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters
 
 import channels
-import memory
 import telegram_format
 from chat_loop import (
     _parse_command,
@@ -27,7 +26,6 @@ from frontends import common
 from registry import TOOLS
 
 _telegram_sessions: dict[int, list[dict]] = {}
-_telegram_onboarding: dict[int, int] = {}
 _known_chats: set[int] = set()
 
 
@@ -129,11 +127,9 @@ class _TelegramChannel:
 
 def _get_telegram_session(chat_id: int) -> list[dict]:
     if chat_id not in _telegram_sessions:
-        scope = _telegram_scope_for(chat_id)
-        memory.current_scope.set(scope)
         now = datetime.now().strftime("%Y-%m-%d %H:%M")
         _telegram_sessions[chat_id] = [
-            {"role": "system", "content": build_system_prompt(scope, now)}
+            {"role": "system", "content": build_system_prompt(now)}
         ]
     return _telegram_sessions[chat_id]
 
@@ -147,7 +143,6 @@ _TELEGRAM_BOT_COMMANDS: list[tuple[str, str]] = [
     ("remember",  "save a preference: <key>=<value>"),
     ("forget",    "remove a memory entry"),
     ("memory",    "show stored long-term memory"),
-    ("onboard",   "seed memory by answering a few questions"),
     ("heartbeat", "show heartbeat config (or 'run' to fire now)"),
     ("big",       "ask the escalation cloud model directly"),
     ("new",       "reset this conversation"),
@@ -161,14 +156,12 @@ async def _telegram_dispatch_command(
 ) -> None:
     chat_id = update.effective_chat.id
     scope = _telegram_scope_for(chat_id)
-    memory.current_scope.set(scope)
     send = _send_for(update)
 
     if cmd == "help":
         await _tg_reply(update, _TELEGRAM_HELP_TEXT)
     elif cmd == "new":
         _telegram_sessions.pop(chat_id, None)
-        _telegram_onboarding.pop(chat_id, None)
         await _tg_reply(update, "Conversation reset.")
     elif cmd == "remember":
         await common.run_remember(send, args)
@@ -176,14 +169,12 @@ async def _telegram_dispatch_command(
         await common.run_forget(send, args)
     elif cmd == "memory":
         await common.run_memory(send)
-    elif cmd == "onboard":
-        await common.run_onboard_start(send, _telegram_onboarding, chat_id)
     elif cmd == "heartbeat":
         await common.run_heartbeat(send, scope, args.strip())
     elif cmd == "big":
         typing_ctx = _typing(chat_id, bot) if bot is not None else nullcontext()
         await common.run_big(
-            send, typing_ctx, _get_telegram_session(chat_id), scope, args.strip()
+            send, typing_ctx, _get_telegram_session(chat_id), args.strip()
         )
     elif cmd in common.TOOL_COMMANDS:
         tool_name, parser, formatter = common.TOOL_COMMANDS[cmd]
@@ -215,7 +206,6 @@ async def _telegram_handle_message(update: Update, context: ContextTypes.DEFAULT
     text = update.message.text.strip()
     chat_id = update.effective_chat.id
     _remember_chat(chat_id)
-    memory.current_scope.set(_telegram_scope_for(chat_id))
     messages = _get_telegram_session(chat_id)
 
     parsed = _parse_command(text)
@@ -224,13 +214,7 @@ async def _telegram_handle_message(update: Update, context: ContextTypes.DEFAULT
         await _telegram_dispatch_command(update, cmd, args, context.bot)
         return
 
-    if chat_id in _telegram_onboarding:
-        await common.run_onboard_answer(
-            _send_for(update), _telegram_onboarding, _telegram_sessions, chat_id, text
-        )
-        return
-
-    _refresh_system_prompt(messages, _telegram_scope_for(chat_id))
+    _refresh_system_prompt(messages)
     messages.append({"role": "user", "content": text})
     loop = asyncio.get_running_loop()
     try:

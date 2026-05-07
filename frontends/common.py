@@ -1,14 +1,14 @@
 """Frontend-agnostic helpers shared by CLI, Telegram, and Discord.
 
 Currently exposes:
-- scope-string helpers (so per-frontend scope construction has a single source)
-- the onboarding question list and the interests formatter
+- heartbeat-scope-string helpers (used by ``heartbeat.py`` to route alerts back
+  to the right frontend; memory itself has no scope)
 - argparse-based parsers and plain-string formatters for the tool slash commands
   (``/train``, ``/weather``, ``/mail``, ``/search``) and a ``TOOL_COMMANDS``
   registry mapping slash name → ``(tool_name, parser, formatter)``
 
-The ``run_*`` slash-command helpers (remember/forget/memory/heartbeat/big/onboard)
-are added later by callers — they take ``send`` callbacks so each frontend keeps
+The ``run_*`` slash-command helpers (remember/forget/memory/heartbeat/big) are
+added later by callers — they take ``send`` callbacks so each frontend keeps
 its own reply mechanism.
 """
 
@@ -25,7 +25,6 @@ from config import get_config
 
 SendFn = Callable[[str], Awaitable[None]]
 
-CLI_SCOPE = "cli"
 TELEGRAM_SCOPE_PREFIX = "telegram-"
 DISCORD_SCOPE_PREFIX = "discord-"
 
@@ -39,7 +38,6 @@ HELP_LINES: list[str] = [
     "/remember <key>=<value> — save a preference",
     "/forget <substring> — remove a memory entry",
     "/memory — show stored memory",
-    "/onboard — answer a few questions to seed memory",
     "/heartbeat — show heartbeat config; /heartbeat run to fire now",
     "/big <query> — ask the escalation cloud model directly",
     "/new — reset this conversation",
@@ -71,20 +69,6 @@ def parse_discord_scope(scope: str) -> int | None:
         return int(scope[len(DISCORD_SCOPE_PREFIX):])
     except ValueError:
         return None
-
-
-ONBOARDING_STEPS: list[tuple[str, str]] = [
-    ("role", "What's your role / what do you work on?"),
-    ("interests", "What topics matter to you? (comma-separated)"),
-    ("tone", "Preferred tone? (e.g. terse, friendly, formal)"),
-    ("location", "Timezone or city?"),
-]
-
-
-def format_interests(raw: str) -> str:
-    """Wrap comma-separated interests in Obsidian wikilinks."""
-    items = [s.strip() for s in raw.split(",") if s.strip()]
-    return ", ".join(f"[[{i}]]" for i in items) if items else raw
 
 
 # --- Tool slash commands (parsers + formatters) ---
@@ -272,8 +256,14 @@ async def run_forget(send: SendFn, args: str) -> None:
     if not matcher:
         await send("usage: /forget <substring>")
         return
-    if memory.forget(matcher):
-        await send(f"forgot entry matching '{matcher}'")
+    res = memory.forget(matcher)
+    if res.status == "removed":
+        await send(f"forgot: {res.entry}")
+    elif res.status == "ambiguous":
+        lines = [f"'{matcher}' matches {len(res.matches)} entries:"]
+        lines.extend(f"  {i}. {m}" for i, m in enumerate(res.matches, 1))
+        lines.append("forget is final — refine matcher to hit exactly one entry.")
+        await send("\n".join(lines))
     else:
         await send(f"no entry matched '{matcher}'")
 
@@ -317,7 +307,6 @@ async def run_big(
     send: SendFn,
     typing_ctx,
     messages: list[dict],
-    scope: str,
     query: str,
 ) -> None:
     """Run an escalation turn. ``typing_ctx`` is an async context manager
@@ -330,7 +319,7 @@ async def run_big(
     if not cfg.escalation_enabled:
         await send("escalation disabled — set escalation_enabled: true in config.yaml")
         return
-    _refresh_system_prompt(messages, scope)
+    _refresh_system_prompt(messages)
     messages.append({"role": "user", "content": query})
     loop = asyncio.get_running_loop()
     try:
@@ -347,39 +336,3 @@ async def run_big(
     await send(clean_reply)
 
 
-async def run_onboard_start(
-    send: SendFn, onboarding_state: dict[int, int], scope_id: int
-) -> None:
-    """Begin the onboarding Q&A. Caller must have set memory.current_scope first."""
-    if memory.load().preferences:
-        await send("Already onboarded. Use /memory to inspect or /forget to remove entries.")
-        return
-    onboarding_state[scope_id] = 0
-    _, question = ONBOARDING_STEPS[0]
-    await send(f"Onboarding — answer briefly, send '-' to skip.\n\n{question}")
-
-
-async def run_onboard_answer(
-    send: SendFn,
-    onboarding_state: dict[int, int],
-    sessions: dict[int, list[dict]],
-    scope_id: int,
-    text: str,
-) -> None:
-    """Advance one onboarding step (or finish). Caller must have set memory.current_scope."""
-    step = onboarding_state[scope_id]
-    key, _ = ONBOARDING_STEPS[step]
-    if text != "-" and text.strip():
-        value = format_interests(text) if key == "interests" else text.strip()
-        memory.set_preference(key, value)
-
-    next_step = step + 1
-    if next_step >= len(ONBOARDING_STEPS):
-        del onboarding_state[scope_id]
-        sessions.pop(scope_id, None)
-        await send("Onboarding done. Memory will enter the system prompt on next message.")
-        return
-
-    onboarding_state[scope_id] = next_step
-    _, question = ONBOARDING_STEPS[next_step]
-    await send(question)
