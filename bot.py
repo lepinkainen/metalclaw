@@ -17,13 +17,10 @@ from chat_loop import (
     _active_session_messages,
     _chat_with_provider,
     _parse_command,
-    _refresh_system_prompt,
     _run_tool,
     _split_system,
-    _split_thinking,
     build_system_prompt,
     chat,
-    chat_via_escalation,
 )
 from config import get_config
 from frontends import telegram as _telegram
@@ -42,7 +39,8 @@ from frontends.telegram import (
     stop_telegram as _stop_telegram,
 )
 
-# Re-exports retained so existing tests can keep importing these as ``bot._foo``.
+# Re-exports retained so existing tests can keep importing these as ``bot._foo``,
+# plus ``bot.chat`` / ``bot.build_system_prompt`` consumed by heartbeat.run_tick.
 __all__ = [
     "_DISCORD_MAX_MESSAGE",
     "_DiscordChannel",
@@ -50,15 +48,12 @@ __all__ = [
     "_chat_with_provider",
     "_discord_scope_for",
     "_parse_command",
-    "_refresh_system_prompt",
     "_run_tool",
     "_split_for_discord",
     "_split_system",
-    "_split_thinking",
     "_strip_bot_mention",
     "build_system_prompt",
     "chat",
-    "chat_via_escalation",
 ]
 
 
