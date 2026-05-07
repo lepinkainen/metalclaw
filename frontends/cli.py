@@ -123,7 +123,9 @@ async def _handle_big(args: str) -> None:
     try:
         with console.status("[dim]asking the big model…[/dim]", spinner="dots"):
             _, _, clean_reply = await run_turn(
-                messages, query, lambda: chat_via_escalation(messages)
+                messages,
+                query,
+                lambda: chat_via_escalation(messages, on_tool_call=_cli_tool_log),
             )
     except Exception as e:
         console.print(f"\n[bold]bot>[/bold] Error: {e}\n")

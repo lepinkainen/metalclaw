@@ -214,14 +214,20 @@ def chat(
     return _chat_with_provider(provider, messages, on_tool_call=on_tool_call)
 
 
-def chat_via_escalation(messages: list[dict]) -> str:
+def chat_via_escalation(
+    messages: list[dict],
+    on_tool_call: Callable[[str, dict, str], None] | None = None,
+) -> str:
     """Run a chat turn through the escalation provider, no recursion into itself."""
     cfg = get_config()
     if not cfg.escalation_enabled:
         raise RuntimeError("escalation is disabled in config")
     big = get_provider(cfg.escalation_provider, model_override=cfg.escalation_model)
     return _chat_with_provider(
-        big, messages, exclude_tools={"escalate_to_big_model"}
+        big,
+        messages,
+        on_tool_call=on_tool_call,
+        exclude_tools={"escalate_to_big_model"},
     )
 
 
