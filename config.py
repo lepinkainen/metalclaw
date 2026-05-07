@@ -63,6 +63,7 @@ class Config(BaseModel):
     heartbeat_interval_seconds: int = 1800
     heartbeat_active_hours: tuple[int, int] | None = None
     vault_search_excludes: tuple[str, ...] = ()
+    allow_self_modification: bool = True
 
     @property
     def memory_dir(self) -> Path:

@@ -396,6 +396,11 @@ async def run_add_tool(send: SendFn, request: str, scope: str) -> None:
     if not request.strip():
         await send("usage: /add-tool <description of the tool to add>")
         return
+    if not get_config().allow_self_modification:
+        await send(
+            "self-modification is disabled (allow_self_modification: false in config.yaml)"
+        )
+        return
     if scope in _pending_self_change:
         await send(
             "a self-change is already pending — /approve, /approve_force, /reject, or /diff first"

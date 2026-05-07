@@ -72,6 +72,13 @@ heartbeat_interval_seconds: 1800
 # Optional [start_hour, end_hour] (24h local time). Outside this window, ticks are skipped.
 # heartbeat_active_hours: [8, 22]
 
+# Allow `/add-tool` (live) and `/self-edit` (CLI) to spawn `claude -p` and
+# mutate the bot's own source. Default true. Set to false on deployments
+# where Telegram or Discord might be reachable by anyone other than you —
+# `/add-tool` is reachable from those frontends and registers arbitrary new
+# Python in `tools/<slug>.py`. CLI `/self-edit` is gated by the same flag.
+allow_self_modification: true
+
 # Glob patterns (relative to vault_path) excluded from /search and the
 # search_vault tool. Defaults to empty — full vault is searched. ripgrep
 # already skips hidden dirs (.obsidian, .trash) and respects .gitignore, so

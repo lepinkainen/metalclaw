@@ -106,6 +106,12 @@ async def _handle_diff(_: str) -> None:
 
 
 def _handle_self_edit(args: str) -> None:
+    if not get_config().allow_self_modification:
+        console.print(
+            "[red]self-modification is disabled[/red] "
+            "(allow_self_modification: false in config.yaml)"
+        )
+        return
     result = self_change.run_self_change(args, REPO_ROOT)
     status = "approved" if result.approved else "rejected"
     console.print(f"\n[dim][self-change {status}][/dim]\n")

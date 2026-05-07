@@ -85,6 +85,8 @@ Two paths, both shell out to `claude -p`:
 - **`/add-tool <description>`** (live, CLI/Telegram/Discord) → `live_tool.run_add_tool_live` → constrained Claude run (one new `tools/<slug>.py`, no other edits) → focused gates (ruff + import + schema sanity) → async approval. The model registers immediately because importing the new module fires the `@tool` decorator; on `/approve` the import is also persisted to `tools/__init__.py`. On `/reject` the file is unlinked and the new keys are popped from `registry.TOOLS`.
 - **`/self-edit <description>`** (CLI-only, restart-tied) → `self_change.run_self_change` → unconstrained Claude run anywhere in the repo → `task lint/build/test` gates → interactive approve/reject. `approve!` overrides failing gates. Reject uses `git checkout --` for tracked changes and unlinks new untracked files (only those Claude introduced).
 
+Both `/add-tool` and `/self-edit` are gated on `allow_self_modification` in `config.yaml` (default `true`). Set it to `false` on any deployment where Telegram or Discord could be reached by anyone other than the operator — `/add-tool` is reachable from those frontends and registers arbitrary new Python under `tools/<slug>.py`.
+
 Approval commands (slash form only — bare-word would collide with chatting "approve, looks good" to the model):
 
 - `/approve` — accept if all gates passed.
