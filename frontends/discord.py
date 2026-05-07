@@ -15,6 +15,7 @@ from chat_loop import (
     chat,
     forget_session_provider,
     run_turn,
+    scoped_chat,
 )
 from config import get_config
 from frontends import common
@@ -179,6 +180,7 @@ async def _discord_dispatch_command(
             message.channel.typing(),
             _get_discord_session(channel_id),
             args.strip(),
+            scope=scope,
         )
     elif canon == "add-tool":
         await common.run_add_tool(send, args, scope)
@@ -269,7 +271,11 @@ async def _discord_handle_message(
         try:
             async with message.channel.typing():
                 _, _, clean_reply = await run_turn(
-                    messages, text, lambda: chat(messages)
+                    messages,
+                    text,
+                    lambda: scoped_chat(
+                        _discord_scope_for(channel_id), lambda: chat(messages)
+                    ),
                 )
         except Exception as e:  # noqa: BLE001
             await _discord_send(message.channel, f"Error: {e}")

@@ -13,6 +13,7 @@ from datetime import datetime
 
 from pydantic import ValidationError
 
+import heartbeat
 import memory
 from config import get_config
 from providers import Provider, get_provider
@@ -29,8 +30,10 @@ __all__ = [
     "build_system_prompt",
     "chat",
     "chat_via_escalation",
+    "current_scope",
     "forget_session_provider",
     "run_turn",
+    "scoped_chat",
 ]
 
 _THINK_RE = re.compile(r"<think>(.*?)</think>", re.DOTALL)
@@ -66,6 +69,11 @@ _SYSTEM_PROMPT_BASE = (
     "user; call get_user_memory to read the full file. "
     "If a request needs more info, check memory first before asking the user. "
     "When the user gives information, store it in memory if relevant. "
+    "For reminders, scheduled checks, or watch-this-for-me requests, schedule a "
+    "heartbeat action with create_heartbeat_action (kind='at' for one-shots, "
+    "'cron' for weekday schedules, 'every' for interval polling). Use "
+    "list_heartbeat_actions to inspect what's scheduled and "
+    "cancel_heartbeat_action to remove one. Do not store reminders in memory. "
     "When asked about your own features, slash commands, memory, heartbeat, "
     "escalation, self-modification, or frontends, call read_manual rather "
     "than guessing."
@@ -85,9 +93,12 @@ def build_system_prompt(now: str) -> str:
     cfg = get_config()
     if cfg.escalation_enabled and cfg.provider == "ollama":
         base += "\n\n" + _ESCALATION_HINT
-    summary = memory.summary()
-    if summary:
-        base += f"\n\nKnown about user:\n{summary}"
+    mem_summary = memory.summary()
+    if mem_summary:
+        base += f"\n\nKnown about user:\n{mem_summary}"
+    hb_summary = heartbeat.summary()
+    if hb_summary:
+        base += f"\n\nActive heartbeat actions:\n{hb_summary}"
     return base
 
 
@@ -107,6 +118,8 @@ _MEMORY_MUTATORS = frozenset(
         "add_user_fact",
         "add_user_instruction",
         "forget_user_memory",
+        "create_heartbeat_action",
+        "cancel_heartbeat_action",
     }
 )
 
@@ -120,6 +133,29 @@ def _tool_result_json(result: object) -> str:
 _active_session_messages: ContextVar[list[dict] | None] = ContextVar(
     "active_session_messages", default=None
 )
+
+
+# Channel scope of the current chat turn — set by each frontend before chat()
+# runs (CLI: "cli"; Telegram: "telegram-<chat_id>"; Discord: "discord-<id>").
+# Tools that need to know which user-facing surface produced the call
+# (notably create_heartbeat_action) read it. None during heartbeat ticks and
+# in tests.
+current_scope: ContextVar[str | None] = ContextVar("current_scope", default=None)
+
+
+def scoped_chat(scope: str | None, fn: Callable[[], str]) -> str:
+    """Run ``fn`` (a chat-call thunk) with ``current_scope`` set to ``scope``.
+
+    Use this at every frontend's executor boundary so synchronous tool code
+    invoked inside ``chat()`` can read the active scope. ``scope`` is allowed
+    to be ``None`` (e.g. background ticks) — the var is then explicitly
+    cleared rather than inherited from whatever ran before.
+    """
+    token = current_scope.set(scope)
+    try:
+        return fn()
+    finally:
+        current_scope.reset(token)
 
 
 def _split_system(messages: list[dict]) -> tuple[str, list[dict]]:

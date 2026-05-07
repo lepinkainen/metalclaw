@@ -20,6 +20,7 @@ from chat_loop import (
     chat,
     forget_session_provider,
     run_turn,
+    scoped_chat,
 )
 from config import xdg_data_dir
 from frontends import common
@@ -167,7 +168,11 @@ async def _telegram_dispatch_command(
     elif canon == "big":
         typing_ctx = _typing(chat_id, bot) if bot is not None else nullcontext()
         await common.run_big(
-            send, typing_ctx, _get_telegram_session(chat_id), args.strip()
+            send,
+            typing_ctx,
+            _get_telegram_session(chat_id),
+            args.strip(),
+            scope=scope,
         )
     elif canon == "add-tool":
         await common.run_add_tool(send, args, scope)
@@ -220,7 +225,11 @@ async def _telegram_handle_message(update: Update, context: ContextTypes.DEFAULT
     try:
         async with _typing(chat_id, context.bot):
             _, _, clean_reply = await run_turn(
-                messages, text, lambda: chat(messages)
+                messages,
+                text,
+                lambda: scoped_chat(
+                    _telegram_scope_for(chat_id), lambda: chat(messages)
+                ),
             )
     except Exception as e:
         await _tg_reply(update, f"Error: {e}")

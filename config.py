@@ -62,6 +62,7 @@ class Config(BaseModel):
     heartbeat_enabled: bool = True
     heartbeat_interval_seconds: int = 1800
     heartbeat_active_hours: tuple[int, int] | None = None
+    heartbeat_default_channel: str | None = None
     vault_search_excludes: tuple[str, ...] = ()
     allow_self_modification: bool = True
 

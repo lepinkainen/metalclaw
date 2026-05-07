@@ -22,6 +22,7 @@ from chat_loop import (
     chat,
     chat_via_escalation,
     run_turn,
+    scoped_chat,
 )
 from config import get_config
 from frontends import common
@@ -154,7 +155,10 @@ async def _handle_big(args: str) -> None:
             _, _, clean_reply = await run_turn(
                 messages,
                 query,
-                lambda: chat_via_escalation(messages, on_tool_call=_cli_tool_log),
+                lambda: scoped_chat(
+                    "cli",
+                    lambda: chat_via_escalation(messages, on_tool_call=_cli_tool_log),
+                ),
             )
     except Exception as e:
         console.print(f"\n[bold]bot>[/bold] Error: {e}\n")
@@ -308,7 +312,10 @@ async def run_cli_repl() -> None:
                     reply, thinking, clean_reply = await run_turn(
                         messages,
                         user_input,
-                        lambda: chat(messages, on_tool_call=_cli_tool_log),
+                        lambda: scoped_chat(
+                            "cli",
+                            lambda: chat(messages, on_tool_call=_cli_tool_log),
+                        ),
                     )
             except Exception as e:
                 console.print(f"\n[bold]bot>[/bold] Error: {e}\n")

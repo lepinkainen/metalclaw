@@ -65,12 +65,19 @@ escalation_enabled: false
 escalation_provider: anthropic
 escalation_model: claude-opus-4-7
 
-# Heartbeat — proactive scheduled checks. Drop a heartbeat-<scope>.md file in
-# <vault_path>/<memory_subdir>/ to opt that scope in.
+# Heartbeat — proactive scheduled checks driven by tool calls. Actions are
+# stored in <vault_path>/<memory_subdir>/heartbeat.yaml and managed by the
+# model via create_heartbeat_action / list_heartbeat_actions /
+# cancel_heartbeat_action.
 heartbeat_enabled: true
 heartbeat_interval_seconds: 1800
 # Optional [start_hour, end_hour] (24h local time). Outside this window, ticks are skipped.
 # heartbeat_active_hours: [8, 22]
+# Channel that receives heartbeat notifications when an action does not pin
+# its own. Format: "cli", "telegram-<chat_id>", "discord-<channel_id>". When
+# unset and an action is created without an explicit channel, the action
+# inherits the scope it was created from (CLI/Telegram chat/Discord channel).
+# heartbeat_default_channel: cli
 
 # Allow `/add-tool` (live) and `/self-edit` (CLI) to spawn `claude -p` and
 # mutate the bot's own source. Default true. Set to false on deployments

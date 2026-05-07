@@ -7,6 +7,11 @@ populate the global ``registry.TOOLS`` dict before any provider runs.
 
 from .dice import roll_die
 from .escalation import escalate_to_big_model
+from .heartbeat_tools import (
+    cancel_heartbeat_action,
+    create_heartbeat_action,
+    list_heartbeat_actions,
+)
 from .mail import list_emails, read_email
 from .manual import read_manual
 from .memory_tools import (
@@ -23,10 +28,13 @@ from .weather import weather
 __all__ = [
     "add_user_fact",
     "add_user_instruction",
+    "cancel_heartbeat_action",
+    "create_heartbeat_action",
     "escalate_to_big_model",
     "forget_user_memory",
     "get_user_memory",
     "list_emails",
+    "list_heartbeat_actions",
     "read_email",
     "read_manual",
     "read_note",

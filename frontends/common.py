@@ -23,7 +23,7 @@ from typing import NoReturn
 import heartbeat
 import live_tool
 import memory
-from chat_loop import chat_via_escalation, run_turn
+from chat_loop import chat_via_escalation, run_turn, scoped_chat
 from config import get_config
 
 SendFn = Callable[[str], Awaitable[None]]
@@ -392,34 +392,60 @@ async def run_manual(send: SendFn, args: str) -> None:
     await send(body)
 
 
+def _format_action_line(action: heartbeat.HeartbeatAction) -> str:
+    if action.kind == heartbeat.ActionKind.AT:
+        when = f"at {action.at}"
+    elif action.kind == heartbeat.ActionKind.CRON and action.schedule is not None:
+        when = (
+            f"{','.join(action.schedule.days)} {action.schedule.time} "
+            f"({action.schedule.timezone})"
+        )
+    elif action.kind == heartbeat.ActionKind.EVERY:
+        when = f"every {action.every}s"
+    else:
+        when = "(unscheduled)"
+    return f"  • {action.id} [{action.kind}] → {action.channel} | {when} | {action.prompt}"
+
+
 async def run_heartbeat(
     send: SendFn, scope: str, sub: str, *, warn_no_discord_channel: bool = False
 ) -> None:
-    path = heartbeat.heartbeat_path_for(scope)
     if sub == "run":
         asyncio.create_task(heartbeat.run_tick())
         await send("heartbeat tick fired")
         return
+
     cfg = get_config()
     lines = [
-        f"heartbeat enabled={cfg.heartbeat_enabled} interval={cfg.heartbeat_interval_seconds}s",
-        f"checklist: {path}",
+        f"heartbeat enabled={cfg.heartbeat_enabled} "
+        f"interval={cfg.heartbeat_interval_seconds}s "
+        f"default_channel={cfg.heartbeat_default_channel or '(unset)'}",
     ]
     if warn_no_discord_channel and cfg.discord_heartbeat_channel is None:
-        lines.append("(no discord_heartbeat_channel configured — replies will drop)")
-    if path.exists():
-        try:
-            hb = heartbeat.parse_heartbeat_file(path.read_text(encoding="utf-8"))
-        except ValueError as e:
-            lines.append(f"parse error: {e}")
-        else:
-            if hb.tasks:
-                for t in hb.tasks:
-                    lines.append(f"  • {t.name}  every {t.interval_seconds}s")
-            else:
-                lines.append("(free-form body only, no tasks)")
+        lines.append("(no discord_heartbeat_channel configured — discord replies will drop)")
+
+    try:
+        ledger = heartbeat.load_ledger()
+    except Exception as e:
+        await send("\n".join([*lines, f"ledger read failed: {e}"]))
+        return
+
+    if ledger.actions:
+        lines.append("active actions:")
+        lines.extend(_format_action_line(a) for a in ledger.actions)
     else:
-        lines.append("no checklist — copy heartbeat.example.md (in repo root) to the path above")
+        lines.append("no active actions — ask the bot to schedule one")
+
+    if ledger.completed:
+        recent = ledger.completed[-5:]
+        lines.append(f"recent completed (last {len(recent)}):")
+        for c in recent:
+            done_at = c.get("completed_at", "?")
+            kind = c.get("kind", "?")
+            cid = c.get("id", "?")
+            prompt = str(c.get("prompt", ""))[:60]
+            lines.append(f"  • {cid} [{kind}] @ {done_at} | {prompt}")
+
     await send("\n".join(lines))
 
 
@@ -428,10 +454,13 @@ async def run_big(
     typing_ctx,
     messages: list[dict],
     query: str,
+    scope: str | None = None,
 ) -> None:
     """Run an escalation turn. ``typing_ctx`` is an async context manager
     (e.g. Telegram's typing pulser, Discord's ``channel.typing()``, or
-    ``contextlib.nullcontext()``) shown while the call blocks."""
+    ``contextlib.nullcontext()``) shown while the call blocks. ``scope``
+    pins ``chat_loop.current_scope`` for the duration of the turn so any
+    tool the big model calls can resolve the active surface."""
     if not query:
         await send("usage: /big <query>")
         return
@@ -442,7 +471,9 @@ async def run_big(
     try:
         async with typing_ctx:
             _, _, clean_reply = await run_turn(
-                messages, query, lambda: chat_via_escalation(messages)
+                messages,
+                query,
+                lambda: scoped_chat(scope, lambda: chat_via_escalation(messages)),
             )
     except Exception as e:
         await send(f"Error: {e}")
