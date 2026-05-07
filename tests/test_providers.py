@@ -130,3 +130,78 @@ def test_run_tool_returns_error_for_unknown_name():
 def test_run_tool_executes_registered_tool():
     out = bot._run_tool("roll_die", {"sides": 6})
     assert "Rolled" in str(out)
+
+
+def test_add_user_instruction_tool_routes_to_memory_and_refreshes(tmp_path, monkeypatch):
+    import config as _config
+
+    cfg_path = tmp_path / "config.yaml"
+    cfg_path.write_text(
+        "vault_path: " + str(tmp_path / "vault") + "\n"
+        "memory_subdir: Memory\n"
+        "fastmail_api_token: t\n"
+    )
+    monkeypatch.setenv("METALCLAW_CONFIG", str(cfg_path))
+    for var in ("FASTMAIL_API_TOKEN", "OLLAMA_URL"):
+        monkeypatch.delenv(var, raising=False)
+    _config.reset_cache()
+    try:
+        call = ToolCall(
+            id="c1", name="add_user_instruction",
+            arguments={"text": "Reply in Finnish."},
+        )
+        provider = FakeProvider([
+            AssistantMessage(text="", tool_calls=[call],
+                             raw={"role": "assistant", "tool_calls": [{"id": "c1"}]}),
+            AssistantMessage(text="ok", tool_calls=[],
+                             raw={"role": "assistant", "content": "ok"}),
+        ])
+        messages = [
+            {"role": "system", "content": "old-system"},
+            {"role": "user", "content": "from now on Finnish"},
+        ]
+        bot._chat_with_provider(provider, messages)
+        import memory as _memory
+        assert _memory.load().instructions == ["Reply in Finnish."]
+        second_system = provider.calls[1][2]
+        assert "Reply in Finnish." in second_system
+    finally:
+        _config.reset_cache()
+
+
+def test_memory_mutator_refreshes_system_prompt_mid_loop(tmp_path, monkeypatch):
+    """After a memory-mutating tool runs, the next chat_once must see the new memory in `system`."""
+    import config as _config
+
+    cfg_path = tmp_path / "config.yaml"
+    cfg_path.write_text(
+        "vault_path: " + str(tmp_path / "vault") + "\n"
+        "memory_subdir: Memory\n"
+        "fastmail_api_token: t\n"
+    )
+    monkeypatch.setenv("METALCLAW_CONFIG", str(cfg_path))
+    for var in ("FASTMAIL_API_TOKEN", "OLLAMA_URL"):
+        monkeypatch.delenv(var, raising=False)
+    _config.reset_cache()
+    try:
+        call = ToolCall(
+            id="c1", name="set_user_preference",
+            arguments={"key": "tone", "value": "terse"},
+        )
+        provider = FakeProvider([
+            AssistantMessage(text="", tool_calls=[call],
+                             raw={"role": "assistant", "tool_calls": [{"id": "c1"}]}),
+            AssistantMessage(text="ok", tool_calls=[],
+                             raw={"role": "assistant", "content": "ok"}),
+        ])
+        messages = [
+            {"role": "system", "content": "old-system"},
+            {"role": "user", "content": "remember tone=terse"},
+        ]
+        bot._chat_with_provider(provider, messages)
+        first_system = provider.calls[0][2]
+        second_system = provider.calls[1][2]
+        assert first_system == "old-system"
+        assert "tone=terse" in second_system
+    finally:
+        _config.reset_cache()

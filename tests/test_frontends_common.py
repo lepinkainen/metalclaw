@@ -25,7 +25,6 @@ def vault(tmp_path, monkeypatch, clear_env, write_config):
     monkeypatch.setenv("METALCLAW_CONFIG", str(cfg_path))
     config.reset_cache()
     (vault_dir / "Mem").mkdir(parents=True)
-    memory.current_scope.set("test-scope")
     yield vault_dir / "Mem"
     config.reset_cache()
 
@@ -45,7 +44,6 @@ def vault_with_escalation(tmp_path, monkeypatch, clear_env, write_config):
     monkeypatch.setenv("METALCLAW_CONFIG", str(cfg_path))
     config.reset_cache()
     (vault_dir / "Mem").mkdir(parents=True)
-    memory.current_scope.set("test-scope")
     yield vault_dir / "Mem"
     config.reset_cache()
 
@@ -87,12 +85,28 @@ def test_run_forget_no_match(vault):
     assert captured == ["no entry matched 'missing'"]
 
 
-def test_run_forget_match_removes_entry(vault):
+def test_run_forget_unique_match_removes_and_echoes_entry(vault):
     memory.set_preference("tone", "terse")
     send, captured = _send_capture()
     asyncio.run(common.run_forget(send, "tone"))
-    assert captured == ["forgot entry matching 'tone'"]
+    assert captured == ["forgot: [pref] **tone**: terse"]
     assert memory.load().preferences == {}
+
+
+def test_run_forget_ambiguous_lists_candidates_and_keeps_all(vault):
+    memory.set_preference("role", "engineer")
+    memory.set_preference("tone", "terse")
+    memory.add_fact("drinks coffee")
+    send, captured = _send_capture()
+    asyncio.run(common.run_forget(send, "e"))
+    assert len(captured) == 1
+    out = captured[0]
+    assert "matches" in out
+    assert "[pref] **role**: engineer" in out
+    assert "refine matcher" in out
+    mem = memory.load()
+    assert mem.preferences == {"role": "engineer", "tone": "terse"}
+    assert mem.facts == ["drinks coffee"]
 
 
 def test_run_forget_empty_args_shows_usage(vault):
@@ -173,7 +187,7 @@ def test_run_heartbeat_parse_error_reported(vault):
 def test_run_big_empty_query(vault):
     send, captured = _send_capture()
     asyncio.run(
-        common.run_big(send, contextlib.nullcontext(), [], "test-scope", "")
+        common.run_big(send, contextlib.nullcontext(), [], "")
     )
     assert captured == ["usage: /big <query>"]
 
@@ -181,7 +195,7 @@ def test_run_big_empty_query(vault):
 def test_run_big_disabled_when_escalation_off(vault):
     send, captured = _send_capture()
     asyncio.run(
-        common.run_big(send, contextlib.nullcontext(), [], "test-scope", "hi")
+        common.run_big(send, contextlib.nullcontext(), [], "hi")
     )
     assert any("escalation disabled" in c for c in captured)
 
@@ -192,9 +206,7 @@ def test_run_big_routes_through_escalation(vault_with_escalation, monkeypatch):
     messages: list[dict] = [{"role": "system", "content": "x"}]
     send, captured = _send_capture()
     asyncio.run(
-        common.run_big(
-            send, contextlib.nullcontext(), messages, "test-scope", "hi"
-        )
+        common.run_big(send, contextlib.nullcontext(), messages, "hi")
     )
 
     assert messages[-2] == {"role": "user", "content": "hi"}
@@ -211,79 +223,8 @@ def test_run_big_rolls_back_on_exception(vault_with_escalation, monkeypatch):
     messages: list[dict] = [{"role": "system", "content": "x"}]
     send, captured = _send_capture()
     asyncio.run(
-        common.run_big(
-            send, contextlib.nullcontext(), messages, "test-scope", "hi"
-        )
+        common.run_big(send, contextlib.nullcontext(), messages, "hi")
     )
 
     assert all(m.get("role") != "user" for m in messages)
     assert any("Error: boom" in c for c in captured)
-
-
-# --- run_onboard_start / run_onboard_answer ---
-
-
-def test_run_onboard_start_fresh(vault):
-    state: dict[int, int] = {}
-    send, captured = _send_capture()
-    asyncio.run(common.run_onboard_start(send, state, 42))
-    assert state == {42: 0}
-    first_question = common.ONBOARDING_STEPS[0][1]
-    assert any(first_question in c for c in captured)
-
-
-def test_run_onboard_start_already_onboarded(vault):
-    memory.set_preference("role", "engineer")
-    state: dict[int, int] = {}
-    send, captured = _send_capture()
-    asyncio.run(common.run_onboard_start(send, state, 42))
-    assert state == {}
-    assert any("Already onboarded" in c for c in captured)
-
-
-def test_run_onboard_answer_advances_step(vault):
-    state = {42: 0}
-    sessions: dict[int, list[dict]] = {}
-    send, captured = _send_capture()
-    asyncio.run(
-        common.run_onboard_answer(send, state, sessions, 42, "engineer")
-    )
-    assert state == {42: 1}
-    assert memory.load().preferences == {"role": "engineer"}
-
-
-def test_run_onboard_answer_skip_advances_without_saving(vault):
-    state = {42: 0}
-    sessions: dict[int, list[dict]] = {}
-    send, captured = _send_capture()
-    asyncio.run(common.run_onboard_answer(send, state, sessions, 42, "-"))
-    assert state == {42: 1}
-    assert memory.load().preferences == {}
-
-
-def test_run_onboard_answer_interests_wrapped_in_wikilinks(vault):
-    interests_step = next(
-        i for i, (k, _) in enumerate(common.ONBOARDING_STEPS) if k == "interests"
-    )
-    state = {42: interests_step}
-    sessions: dict[int, list[dict]] = {}
-    send, captured = _send_capture()
-    asyncio.run(
-        common.run_onboard_answer(send, state, sessions, 42, "python, rust")
-    )
-    saved = memory.load().preferences["interests"]
-    assert "[[python]]" in saved
-    assert "[[rust]]" in saved
-
-
-def test_run_onboard_answer_finishes_and_clears_session(vault):
-    last_step = len(common.ONBOARDING_STEPS) - 1
-    state = {42: last_step}
-    sessions: dict[int, list[dict]] = {42: [{"role": "system", "content": "x"}]}
-    send, captured = _send_capture()
-    asyncio.run(
-        common.run_onboard_answer(send, state, sessions, 42, "Helsinki")
-    )
-    assert 42 not in state
-    assert 42 not in sessions
-    assert any("Onboarding done" in c for c in captured)
