@@ -33,8 +33,9 @@ discord_chat_channels: []
 # server channel ID for shared visibility, or to a DM channel ID for private.
 # discord_heartbeat_channel: 1000000000000000000
 
-# Which LLM provider drives the bot. One of: ollama | openai | anthropic.
-# Default: ollama (local). Use openai or anthropic for VPS deployments.
+# Which LLM provider drives the bot. One of: ollama | litellm.
+# Default: ollama (local). Use litellm to route through any cloud provider
+# (Bedrock, OpenAI, Anthropic, Gemini, ...).
 provider: ollama
 
 # --- Ollama (local) ---
@@ -43,27 +44,31 @@ ollama_url: http://localhost:11434/api/chat
 # Ollama model name. Used only when provider == ollama.
 model: gemma4:latest
 
-# --- OpenAI ---
-# Used only when provider == openai (or as escalation target). Env
-# OPENAI_API_KEY takes precedence over the yaml value.
-openai_api_key: sk-...
-openai_model: gpt-4o-mini
-
-# --- Anthropic ---
-# Used only when provider == anthropic (or as escalation target). Env
-# ANTHROPIC_API_KEY takes precedence.
-anthropic_api_key: sk-ant-...
-anthropic_model: claude-haiku-4-5
+# --- litellm (cloud, multi-provider) ---
+# Used when provider == litellm or as the escalation target. Model strings
+# follow litellm's prefix convention:
+#   bedrock/anthropic.claude-haiku-4-5
+#   bedrock/amazon.nova-pro-v1:0
+#   bedrock/meta.llama3-70b-instruct-v1:0
+#   openai/gpt-4o
+#   anthropic/claude-haiku-4-5
+#   gemini/gemini-1.5-pro
+# AWS credentials use boto3's standard chain (env vars
+# AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY, ~/.aws/credentials, IAM role).
+# OpenAI/Anthropic/Gemini use OPENAI_API_KEY / ANTHROPIC_API_KEY /
+# GEMINI_API_KEY env vars (read directly by litellm).
+litellm_model: bedrock/anthropic.claude-haiku-4-5
+aws_region: us-east-1
+# aws_profile: my-profile  # optional, otherwise default credential chain
 
 # --- Escalation: refer hard questions to a Big Boy cloud model ---
 # When enabled and the active provider is local, the model can call the
 # `escalate_to_big_model` tool, and the user can type `/big <query>` to
-# bypass the local model entirely. The escalation provider needs its key
-# set (above). escalation_model defaults to the configured per-provider
-# model if omitted.
+# bypass the local model entirely. escalation_model defaults to
+# litellm_model when escalation_provider == litellm and not set.
 escalation_enabled: false
-escalation_provider: anthropic
-escalation_model: claude-opus-4-7
+escalation_provider: litellm
+escalation_model: bedrock/anthropic.claude-opus-4-7
 
 # Heartbeat — proactive scheduled checks driven by tool calls. Actions are
 # stored in <vault_path>/<memory_subdir>/heartbeat.yaml and managed by the

@@ -32,11 +32,9 @@ _ENV_OVERRIDES = {
     "TELEGRAM_BOT_TOKEN": "telegram_bot_token",
     "DISCORD_BOT_TOKEN": "discord_bot_token",
     "OLLAMA_URL": "ollama_url",
-    "OPENAI_API_KEY": "openai_api_key",
-    "ANTHROPIC_API_KEY": "anthropic_api_key",
 }
 
-Provider = Literal["ollama", "openai", "anthropic"]
+Provider = Literal["ollama", "litellm"]
 
 
 class Config(BaseModel):
@@ -52,12 +50,11 @@ class Config(BaseModel):
     ollama_url: str = "http://localhost:11434/api/chat"
     model: str = "gemma4:latest"
     provider: Provider = "ollama"
-    openai_api_key: str | None = None
-    openai_model: str = "gpt-4o-mini"
-    anthropic_api_key: str | None = None
-    anthropic_model: str = "claude-haiku-4-5"
+    litellm_model: str = "bedrock/anthropic.claude-haiku-4-5"
+    aws_region: str | None = None
+    aws_profile: str | None = None
     escalation_enabled: bool = False
-    escalation_provider: Provider = "anthropic"
+    escalation_provider: Provider = "litellm"
     escalation_model: str | None = None
     heartbeat_enabled: bool = True
     heartbeat_interval_seconds: int = 1800
@@ -119,26 +116,8 @@ class Config(BaseModel):
     def _resolve_and_check(self) -> "Config":
         provider_models = {
             "ollama": self.model,
-            "openai": self.openai_model,
-            "anthropic": self.anthropic_model,
+            "litellm": self.litellm_model,
         }
-        provider_keys = {
-            "openai": self.openai_api_key,
-            "anthropic": self.anthropic_api_key,
-        }
-
-        def _missing(p: str) -> str:
-            return (
-                f"{p}_api_key missing — set {p.upper()}_API_KEY env or "
-                f"{p}_api_key in config.yaml"
-            )
-
-        if self.provider in provider_keys and not provider_keys[self.provider]:
-            raise ValueError(_missing(self.provider))
-        if self.escalation_enabled:
-            if self.escalation_provider in provider_keys and not provider_keys[self.escalation_provider]:
-                raise ValueError(_missing(self.escalation_provider))
-
         if self.escalation_model is None:
             return self.model_copy(update={"escalation_model": provider_models[self.escalation_provider]})
         return self

@@ -278,10 +278,8 @@ async def run_cli_repl() -> None:
     cfg = get_config()
     if cfg.provider == "ollama":
         model_label = cfg.model
-    elif cfg.provider == "openai":
-        model_label = cfg.openai_model
     else:
-        model_label = cfg.anthropic_model
+        model_label = cfg.litellm_model
     console.print(
         f"metalclaw bot ({cfg.provider}: {model_label}) — type 'quit' to exit"
     )

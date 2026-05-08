@@ -244,8 +244,9 @@ def _chat_with_provider(
 
 
 # Session -> provider name. Each call to `chat()` stamps the session so we can
-# detect a mid-session config switch (different providers' tool-call wire
-# formats are incompatible — Anthropic vs OpenAI vs Ollama).
+# detect a mid-session config switch (Ollama and litellm both produce
+# OpenAI-shaped envelopes, but tool-call ids and message-result formats still
+# differ enough that history must be reset on a swap).
 _session_providers: dict[int, str] = {}
 
 
