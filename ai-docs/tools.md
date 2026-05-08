@@ -28,7 +28,7 @@ The function `__name__` is the registry key — also what providers see as the t
 }
 ```
 
-OpenAI/Ollama consume this directly. Anthropic provider translates via `_to_anthropic_tools` (`providers/anthropic_provider.py:9`) into `{name, description, input_schema}`.
+Ollama and litellm consume this directly (litellm normalises to per-backend formats internally — Anthropic's `input_schema`, etc.).
 
 ## Catalog
 

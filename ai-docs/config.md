@@ -8,7 +8,7 @@
 2. `./config.yaml` in cwd (dev convenience; gitignored).
 3. `$XDG_CONFIG_HOME/metalclaw/config.yaml` or `~/.config/metalclaw/config.yaml`.
 
-`get_config()` is `@lru_cache(maxsize=1)`. Tests must call `config.reset_cache()` after mutating env (`tests/conftest.py:26`).
+`get_config()` is `@lru_cache(maxsize=1)`. Tests must call `config.reset_cache()` after mutating env (`tests/conftest.py:24`).
 
 ## Fields
 
@@ -21,15 +21,14 @@
 | `discord_bot_token` | `str?` | None | `DISCORD_BOT_TOKEN` env. Frontend skipped if unset. |
 | `discord_chat_channels` | `tuple[int, ...]` | `()` | Channels with always-respond behavior. |
 | `discord_heartbeat_channel` | `int?` | None | Single dest for all `discord-*` heartbeats. |
-| `provider` | `"ollama"\|"openai"\|"anthropic"` | `"ollama"` | Active LLM provider. |
+| `provider` | `"ollama"\|"litellm"` | `"ollama"` | Active LLM provider. |
 | `ollama_url` | `str` | `"http://localhost:11434/api/chat"` | `OLLAMA_URL` env. |
 | `model` | `str` | `"gemma4:latest"` | Ollama model. |
-| `openai_api_key` | `str?` | None | `OPENAI_API_KEY` env. |
-| `openai_model` | `str` | `"gpt-4o-mini"` | |
-| `anthropic_api_key` | `str?` | None | `ANTHROPIC_API_KEY` env. |
-| `anthropic_model` | `str` | `"claude-haiku-4-5"` | |
+| `litellm_model` | `str` | `"bedrock/anthropic.claude-haiku-4-5"` | litellm-prefixed model id. |
+| `aws_region` | `str?` | None | Threaded to litellm as `aws_region_name`. |
+| `aws_profile` | `str?` | None | Threaded to litellm as `aws_profile_name`. |
 | `escalation_enabled` | `bool` | `False` | Gates `escalate_to_big_model` + `/big`. |
-| `escalation_provider` | provider literal | `"anthropic"` | |
+| `escalation_provider` | provider literal | `"litellm"` | |
 | `escalation_model` | `str?` | None | Defaults to per-provider model in `_resolve_and_check`. |
 | `heartbeat_enabled` | `bool` | `True` | |
 | `heartbeat_interval_seconds` | `int` | `1800` | Clamped to `>=30` in `run()`. |
@@ -44,12 +43,10 @@ _ENV_OVERRIDES = {
     "TELEGRAM_BOT_TOKEN": "telegram_bot_token",
     "DISCORD_BOT_TOKEN": "discord_bot_token",
     "OLLAMA_URL": "ollama_url",
-    "OPENAI_API_KEY": "openai_api_key",
-    "ANTHROPIC_API_KEY": "anthropic_api_key",
 }
 ```
 
-Env wins over yaml when set + non-empty.
+Env wins over yaml when set + non-empty. Cloud LLM credentials (`AWS_*`, `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GEMINI_API_KEY`, …) are **not** in this map — litellm/boto3 read them directly.
 
 ## Validators
 
@@ -59,9 +56,8 @@ Env wins over yaml when set + non-empty.
 - `_coerce_excludes` — tuple of strings.
 - `_coerce_active_hours` — pair → `(int, int)`.
 - `_resolve_and_check` (model-level):
-  - Active provider needs its api key (openai/anthropic).
-  - If `escalation_enabled`, escalation provider also needs its key.
-  - `escalation_model = None` → fill with provider's default model.
+  - `escalation_model = None` → fill with the per-provider default (`model` for ollama, `litellm_model` for litellm).
+  - No api-key checks: cloud credentials live outside metalclaw's config.
 
 ## Path helpers
 
@@ -81,3 +77,4 @@ Env wins over yaml when set + non-empty.
 
 - Missing `vault_path` → `ValueError(f"vault_path missing from {path}. ...")`.
 - `extra="ignore"` swallows typos silently — careful when adding fields. Tests should assert defaults aren't accidentally renamed.
+- Bedrock model strings without AWS creds in the boto3 chain fail at first `litellm.completion()` call, not at config load — no eager validation.

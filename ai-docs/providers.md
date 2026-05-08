@@ -18,7 +18,7 @@ class Provider(Protocol):
     def format_tool_results(results: list[tuple[ToolCall, str]]) -> list[dict]: ...
 ```
 
-`raw` shape is provider-specific. The chat loop treats history as opaque — only the active provider parses it.
+`raw` shape is provider-specific. The chat loop treats history as opaque — only the active provider parses it. `chat_loop._session_providers` stamps each session and drops tainted history when the active provider switches mid-session (`chat_loop.py:248-277`).
 
 ## Factory (`providers/__init__.py:4`)
 
@@ -26,10 +26,12 @@ class Provider(Protocol):
 get_provider(name, *, model_override=None) -> Provider
 ```
 
-- `"ollama"` → reads `cfg.ollama_url`, `cfg.model` (or override).
-- `"openai"` → requires `cfg.openai_api_key`; uses `cfg.openai_model`.
-- `"anthropic"` → requires `cfg.anthropic_api_key`; uses `cfg.anthropic_model`.
-- Raises `ValueError` on unknown name or missing api key.
+Two branches:
+
+- `"ollama"` → `OllamaProvider(url=cfg.ollama_url, model=model_override or cfg.model)`.
+- `"litellm"` → `LiteLLMProvider(model=model_override or cfg.litellm_model, aws_region=cfg.aws_region, aws_profile=cfg.aws_profile)`.
+
+Raises `ValueError` on unknown name.
 
 ## OllamaProvider (`providers/ollama.py`)
 
@@ -40,27 +42,29 @@ get_provider(name, *, model_override=None) -> Provider
 - `raw` = the entire `message` dict.
 - `format_tool_results` → `[{"role":"tool", "name": call.name, "content": result_json}, ...]`.
 
-## OpenAIProvider (`providers/openai_provider.py`)
+## LiteLLMProvider (`providers/litellm_provider.py`)
 
-- Uses official `openai.OpenAI(api_key=...)` SDK.
-- `chat.completions.create(model, messages, tools=tools or omitted)`.
-- Reconstructs `raw["tool_calls"]` with stringified `arguments` to round-trip cleanly.
-- `format_tool_results` → `{"role":"tool", "tool_call_id": call.id, "content": result_json}` per result.
+- Uses `litellm.completion()` — OpenAI-shaped request/response across all backends.
+- `litellm.drop_params = True` (module-level): unsupported kwargs per underlying model are silently dropped, so the same provider class fronts a heterogeneous catalog (Bedrock Claude/Nova/Llama/Mistral, OpenAI GPT, Anthropic, Gemini).
+- Model strings carry the routing prefix: `bedrock/anthropic.claude-haiku-4-5`, `openai/gpt-4o`, `anthropic/claude-haiku-4-5`, `gemini/gemini-1.5-pro`, etc.
+- `aws_region` / `aws_profile` (optional) → threaded into completion kwargs as `aws_region_name` / `aws_profile_name`. AWS auth otherwise via boto3's standard credential chain (env, `~/.aws/credentials`, IAM role).
+- Cloud LLM API keys (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GEMINI_API_KEY`, …) read directly by litellm — not declared in `config.py`.
+- `num_retries=2` covers transient `ThrottlingException` on Bedrock.
+- `chat_once`:
+  - System prompt placed as the first message in the list (litellm normalises Anthropic's separate-kwarg shape internally).
+  - Tools passed through as-is (registry already in OpenAI tool-schema shape).
+  - Tool-call `arguments` come back as JSON strings → parsed defensively (`json.loads`, falls back to `{}` on JSONDecodeError).
+  - `raw` shape mirrors `OllamaProvider` / OpenAI envelope: `{"role": "assistant", "content": ..., "tool_calls": [...]?}`.
+- `format_tool_results` → `[{"role":"tool", "tool_call_id": call.id, "content": result_json}, ...]` (OpenAI envelope).
 
-## AnthropicProvider (`providers/anthropic_provider.py`)
+## Adding a model
 
-- Uses official `anthropic.Anthropic(api_key=...)` SDK.
-- `_MAX_TOKENS = 4096`.
-- `_to_anthropic_tools` translates registry schema (`type=function, function={...}`) to Anthropic's `{name, description, input_schema}`.
-- `system` is a **separate kwarg**, not in `messages`.
-- Response blocks: iterates `resp.content`; collects `text` and `tool_use` blocks. `raw = {"role":"assistant","content": raw_blocks}`.
-- `format_tool_results` returns a **single** entry: `[{"role":"user", "content": [{"type":"tool_result","tool_use_id","content"}, ...]}]`. **Different shape** from Ollama/OpenAI.
+No code change. Set `litellm_model` in `config.yaml` (or `escalation_model`) to any litellm-supported string. Verify the underlying model supports tool calling before promoting it to a working slot — Bedrock Llama variants, e.g., have partial/no tool-call support.
 
-## Adding a provider
+## Adding a non-litellm provider
 
 1. Create `providers/<name>.py` exposing class with `.name` and the two methods.
-2. Add config fields (`<name>_api_key`, `<name>_model`).
+2. Add config field if a non-credential knob is needed (model name typically lives in `provider`-specific yaml field or as an extra method param).
 3. Add branch in `get_provider`.
-4. Update `Config._resolve_and_check` provider key/model maps if the provider needs an api key.
-5. Update `Provider` Literal in `config.py:39`.
-6. Add tests in `tests/test_providers.py`.
+4. Update `Provider` Literal in `config.py:38`.
+5. Add tests in `tests/`.

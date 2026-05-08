@@ -13,7 +13,8 @@ tests/
   test_frontends_common.py    parsers, formatters, run_remember/forget/memory
   test_heartbeat.py           parse_heartbeat_file, is_due, run_tick, sentinel handling
   test_memory.py              parse/render, mutators, forget statuses, migration
-  test_providers.py           ollama, openai, anthropic — request shape + raw round-trip
+  test_providers.py           chat-loop tool dispatch + session-provider stamping
+  test_litellm_provider.py    LiteLLMProvider request/response shape, tool-call extraction
   test_registry_schema.py     @tool schema generation, Optional collapsing
   test_routing.py             /help, /train, /weather slash dispatch
   test_self_change.py         run_self_change orchestration (mocked subprocess)
@@ -24,7 +25,7 @@ tests/
 
 ## Fixtures (`tests/conftest.py`)
 
-- `clear_env(monkeypatch)` — unsets all `_ENV_VARS` (Fastmail/Ollama/OpenAI/Anthropic/Discord/Telegram).
+- `clear_env(monkeypatch)` — unsets all `_ENV_VARS` (Fastmail/Ollama/Discord/Telegram).
 - `cfg_file(tmp_path, monkeypatch, clear_env)` — sets `METALCLAW_CONFIG=<tmp>/config.yaml`, calls `config.reset_cache()` before+after. Yields the path.
 - `write_config()` — factory: `write_config(path, **fields)` writes yaml with `vault_path: <tmp>/vault` baseline.
 
@@ -38,7 +39,7 @@ def test_x(cfg_file, write_config):
 
 ## Provider tests
 
-- Mock the client: monkeypatch `providers.ollama._CLIENT.post`, `openai_provider.OpenAI`, `anthropic_provider.Anthropic`.
+- Mock the client: monkeypatch `providers.ollama._CLIENT.post`, `providers.litellm_provider.litellm.completion`.
 - Assert request shape (model, messages, tools, system position).
 - Assert `AssistantMessage.raw` round-trips through `format_tool_results` correctly.
 

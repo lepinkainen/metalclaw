@@ -83,10 +83,9 @@ Per-module symbol map. `→` = imports. `←` = imported by.
 ## providers/
 
 - `base.py` — `Provider` Protocol, `AssistantMessage(text, tool_calls, raw)`, `ToolCall(id, name, arguments)`.
-- `__init__.py` — `get_provider(name, *, model_override=None)` factory.
+- `__init__.py` — `get_provider(name, *, model_override=None)` factory. 2-branch: `ollama` | `litellm`.
 - `ollama.py` — `OllamaProvider(url, model)`. Native tool-calls dict shape; `format_tool_results` → `role=tool` per result.
-- `openai_provider.py` — `OpenAIProvider(api_key, model)`. Uses official `openai` SDK. Stringifies tool args back into `raw["tool_calls"][i]["function"]["arguments"]` for fidelity.
-- `anthropic_provider.py` — `AnthropicProvider(api_key, model)`. Translates registry schema → `input_schema`. `format_tool_results` returns single `role=user` containing `tool_result` blocks.
+- `litellm_provider.py` — `LiteLLMProvider(model, *, aws_region=None, aws_profile=None, num_retries=2)`. Uses `litellm.completion()` (OpenAI-shaped envelope across all backends). Module-level `litellm.drop_params=True` strips per-model unsupported kwargs. Tool-arg JSON parsed defensively. `format_tool_results` uses `tool_call_id` envelope.
 
 ## frontends/
 

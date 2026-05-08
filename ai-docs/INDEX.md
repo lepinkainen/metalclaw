@@ -38,8 +38,7 @@ vault_search.py   205   ripgrep wrapper + read_note
 providers/base.py  40   Protocol, AssistantMessage, ToolCall
 providers/__init__ 32   get_provider() factory
 providers/ollama  71
-providers/openai  65
-providers/anthropic 83
+providers/litellm 87
 tools/__init__.py  38   re-exports per-domain modules so @tool fires on `import tools`
 tools/_http.py      8   shared httpx.Client
 tools/dice.py      18
