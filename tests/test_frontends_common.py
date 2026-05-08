@@ -38,8 +38,8 @@ def vault_with_escalation(tmp_path, monkeypatch, clear_env, write_config):
         vault_path=str(vault_dir),
         memory_subdir="Mem",
         escalation_enabled=True,
-        escalation_provider="anthropic",
-        anthropic_api_key="sk-ant-test",
+        escalation_provider="litellm",
+        litellm_model="bedrock/anthropic.claude-opus-4-7",
     )
     monkeypatch.setenv("METALCLAW_CONFIG", str(cfg_path))
     config.reset_cache()

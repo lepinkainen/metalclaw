@@ -13,8 +13,8 @@ def test_escalate_routes_through_provider(cfg_file, write_config, monkeypatch):
     write_config(
         cfg_file,
         escalation_enabled=True,
-        escalation_provider="anthropic",
-        anthropic_api_key="sk-ant-test",
+        escalation_provider="litellm",
+        litellm_model="bedrock/anthropic.claude-opus-4-7",
     )
 
     captured = {}
@@ -54,7 +54,8 @@ def test_escalate_routes_through_provider(cfg_file, write_config, monkeypatch):
 
     assert out["status"] == "ok"
     assert out["reply"] == "cloud says hi"
-    assert captured["provider_name"] == "anthropic"
+    assert captured["provider_name"] == "litellm"
+    assert captured["model_override"] == "bedrock/anthropic.claude-opus-4-7"
 
     tool_names = {t["function"]["name"] for t in captured["tools"]}
     assert "escalate_to_big_model" not in tool_names, "recursion guard failed"
@@ -69,8 +70,8 @@ def test_escalate_with_no_active_session(cfg_file, write_config, monkeypatch):
     write_config(
         cfg_file,
         escalation_enabled=True,
-        escalation_provider="openai",
-        openai_api_key="sk-test",
+        escalation_provider="litellm",
+        litellm_model="bedrock/anthropic.claude-haiku-4-5",
     )
 
     class StubProvider:

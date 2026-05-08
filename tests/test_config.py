@@ -14,12 +14,11 @@ def test_loads_vault_path_and_defaults(tmp_path, cfg_file, write_config):
     assert cfg.fastmail_api_token is None
     assert cfg.vault_search_excludes == ()
     assert cfg.provider == "ollama"
-    assert cfg.openai_api_key is None
-    assert cfg.openai_model == "gpt-4o-mini"
-    assert cfg.anthropic_api_key is None
-    assert cfg.anthropic_model == "claude-haiku-4-5"
+    assert cfg.litellm_model == "bedrock/anthropic.claude-haiku-4-5"
+    assert cfg.aws_region is None
+    assert cfg.aws_profile is None
     assert cfg.escalation_enabled is False
-    assert cfg.escalation_provider == "anthropic"
+    assert cfg.escalation_provider == "litellm"
 
 
 def test_provider_invalid_raises(tmp_path, cfg_file, write_config):
@@ -28,52 +27,25 @@ def test_provider_invalid_raises(tmp_path, cfg_file, write_config):
         config.get_config()
 
 
-def test_provider_openai_requires_key(tmp_path, cfg_file, write_config):
-    write_config(cfg_file, vault_path=str(tmp_path / "vault"), provider="openai")
-    with pytest.raises(ValueError, match="openai_api_key"):
-        config.get_config()
+def test_provider_litellm_accepted(tmp_path, cfg_file, write_config):
+    write_config(cfg_file, vault_path=str(tmp_path / "vault"), provider="litellm")
+    cfg = config.get_config()
+    assert cfg.provider == "litellm"
 
 
-def test_provider_anthropic_requires_key(tmp_path, cfg_file, write_config):
-    write_config(cfg_file, vault_path=str(tmp_path / "vault"), provider="anthropic")
-    with pytest.raises(ValueError, match="anthropic_api_key"):
-        config.get_config()
-
-
-def test_env_openai_key_wins_over_yaml(tmp_path, cfg_file, write_config, monkeypatch):
+def test_litellm_model_yaml_round_trip(tmp_path, cfg_file, write_config):
     write_config(
         cfg_file,
         vault_path=str(tmp_path / "vault"),
-        provider="openai",
-        openai_api_key="from-yaml",
+        provider="litellm",
+        litellm_model="bedrock/amazon.nova-pro-v1:0",
+        aws_region="eu-west-1",
+        aws_profile="dev",
     )
-    monkeypatch.setenv("OPENAI_API_KEY", "from-env")
-    config.reset_cache()
-    assert config.get_config().openai_api_key == "from-env"
-
-
-def test_env_anthropic_key_wins_over_yaml(tmp_path, cfg_file, write_config, monkeypatch):
-    write_config(
-        cfg_file,
-        vault_path=str(tmp_path / "vault"),
-        provider="anthropic",
-        anthropic_api_key="from-yaml",
-    )
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "from-env")
-    config.reset_cache()
-    assert config.get_config().anthropic_api_key == "from-env"
-
-
-def test_escalation_enabled_requires_target_key(tmp_path, cfg_file, write_config):
-    write_config(
-        cfg_file,
-        vault_path=str(tmp_path / "vault"),
-        provider="ollama",
-        escalation_enabled=True,
-        escalation_provider="anthropic",
-    )
-    with pytest.raises(ValueError, match="anthropic_api_key"):
-        config.get_config()
+    cfg = config.get_config()
+    assert cfg.litellm_model == "bedrock/amazon.nova-pro-v1:0"
+    assert cfg.aws_region == "eu-west-1"
+    assert cfg.aws_profile == "dev"
 
 
 def test_escalation_model_defaults_to_provider_model(tmp_path, cfg_file, write_config):
@@ -81,12 +53,11 @@ def test_escalation_model_defaults_to_provider_model(tmp_path, cfg_file, write_c
         cfg_file,
         vault_path=str(tmp_path / "vault"),
         escalation_enabled=True,
-        escalation_provider="anthropic",
-        anthropic_api_key="sk-ant",
-        anthropic_model="claude-haiku-4-5",
+        escalation_provider="litellm",
+        litellm_model="bedrock/anthropic.claude-haiku-4-5",
     )
     cfg = config.get_config()
-    assert cfg.escalation_model == "claude-haiku-4-5"
+    assert cfg.escalation_model == "bedrock/anthropic.claude-haiku-4-5"
 
 
 def test_escalation_model_explicit_wins(tmp_path, cfg_file, write_config):
@@ -94,12 +65,24 @@ def test_escalation_model_explicit_wins(tmp_path, cfg_file, write_config):
         cfg_file,
         vault_path=str(tmp_path / "vault"),
         escalation_enabled=True,
-        escalation_provider="anthropic",
-        anthropic_api_key="sk-ant",
-        escalation_model="claude-opus-4-7",
+        escalation_provider="litellm",
+        escalation_model="bedrock/anthropic.claude-opus-4-7",
     )
     cfg = config.get_config()
-    assert cfg.escalation_model == "claude-opus-4-7"
+    assert cfg.escalation_model == "bedrock/anthropic.claude-opus-4-7"
+
+
+def test_escalation_provider_ollama_defaults_to_ollama_model(tmp_path, cfg_file, write_config):
+    write_config(
+        cfg_file,
+        vault_path=str(tmp_path / "vault"),
+        provider="litellm",
+        escalation_enabled=True,
+        escalation_provider="ollama",
+        model="local-fallback",
+    )
+    cfg = config.get_config()
+    assert cfg.escalation_model == "local-fallback"
 
 
 def test_discord_defaults(tmp_path, cfg_file, write_config):

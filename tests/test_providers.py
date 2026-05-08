@@ -238,7 +238,7 @@ def test_chat_resets_session_when_provider_switches_mid_session(monkeypatch):
     assert any(m.get("role") == "tool" for m in messages)
 
     # Switch provider in config and call again.
-    fake_cfg.provider = "openai"
+    fake_cfg.provider = "litellm"
     messages.append({"role": "user", "content": "third"})
     chat_loop.chat(messages)
 
@@ -250,7 +250,7 @@ def test_chat_resets_session_when_provider_switches_mid_session(monkeypatch):
     assert any(
         m.get("role") == "user" and m.get("content") == "third" for m in messages
     )
-    assert providers_built == ["ollama", "openai"]
+    assert providers_built == ["ollama", "litellm"]
     chat_loop.forget_session_provider(messages)
 
 

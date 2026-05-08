@@ -6,8 +6,6 @@ import config
 _ENV_VARS = (
     "FASTMAIL_API_TOKEN",
     "OLLAMA_URL",
-    "OPENAI_API_KEY",
-    "ANTHROPIC_API_KEY",
     "DISCORD_BOT_TOKEN",
     "TELEGRAM_BOT_TOKEN",
 )
