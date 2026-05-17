@@ -49,6 +49,9 @@ class Config(BaseModel):
     discord_heartbeat_channel: int | None = None
     ollama_url: str = "http://localhost:11434/api/chat"
     model: str = "gemma4:latest"
+    ollama_temperature: float | None = None
+    ollama_top_p: float | None = None
+    ollama_top_k: int | None = None
     provider: Provider = "ollama"
     litellm_model: str = "bedrock/anthropic.claude-haiku-4-5"
     aws_region: str | None = None

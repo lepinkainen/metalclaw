@@ -283,6 +283,29 @@ async def run_cli_repl() -> None:
     console.print(
         f"metalclaw bot ({cfg.provider}: {model_label}) — type 'quit' to exit"
     )
+    if cfg.provider == "ollama":
+        from providers.ollama import fetch_model_defaults
+
+        need_query = (
+            cfg.ollama_temperature is None
+            or cfg.ollama_top_p is None
+            or cfg.ollama_top_k is None
+        )
+        defaults = fetch_model_defaults(cfg.ollama_url, cfg.model) if need_query else {}
+
+        def _fmt(cfg_val: float | int | None, default_val: float | int | None) -> str:
+            if cfg_val is not None:
+                return f"{cfg_val}"
+            if default_val is not None:
+                return f"{default_val} (model)"
+            return "?"
+
+        temp = _fmt(cfg.ollama_temperature, defaults.get("temperature"))
+        top_p = _fmt(cfg.ollama_top_p, defaults.get("top_p"))
+        top_k = _fmt(cfg.ollama_top_k, defaults.get("top_k"))
+        console.print(
+            f"[dim]sampling: temperature={temp}  top_p={top_p}  top_k={top_k}[/dim]"
+        )
     if cfg.escalation_enabled and cfg.provider == "ollama":
         console.print(
             f"[dim]escalation: {cfg.escalation_provider}: {cfg.escalation_model}[/dim]"

@@ -12,7 +12,13 @@ def get_provider(name: str, *, model_override: str | None = None) -> Provider:
     cfg = get_config()
     if name == "ollama":
         from providers.ollama import OllamaProvider
-        return OllamaProvider(url=cfg.ollama_url, model=model_override or cfg.model)
+        return OllamaProvider(
+            url=cfg.ollama_url,
+            model=model_override or cfg.model,
+            temperature=cfg.ollama_temperature,
+            top_p=cfg.ollama_top_p,
+            top_k=cfg.ollama_top_k,
+        )
     if name == "litellm":
         from providers.litellm_provider import LiteLLMProvider
         return LiteLLMProvider(

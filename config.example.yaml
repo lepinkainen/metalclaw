@@ -43,6 +43,14 @@ provider: ollama
 ollama_url: http://localhost:11434/api/chat
 # Ollama model name. Used only when provider == ollama.
 model: gemma4:latest
+# Sampling for Ollama. Small local models (Gemma 3n, Llama 3.1 8B, Qwen3 8B)
+# default to temperature ~1.0 / top_p 0.95 / top_k 64 from the modelfile,
+# which makes tool selection erratic — they pick the wrong tool or hallucinate
+# arguments. The values below keep replies coherent without going fully
+# deterministic. Comment out / set null to inherit the model's own default.
+ollama_temperature: 0.2
+ollama_top_p: 0.9
+ollama_top_k: 40
 
 # --- litellm (cloud, multi-provider) ---
 # Used when provider == litellm or as the escalation target. Model strings
