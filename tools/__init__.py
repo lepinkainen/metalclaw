@@ -12,7 +12,15 @@ from .heartbeat_tools import (
     create_heartbeat_action,
     list_heartbeat_actions,
 )
-from .mail import list_emails, read_email
+from .mail import (
+    add_email_label,
+    check_new_mail,
+    list_email_labels,
+    list_emails,
+    mark_emails_reported,
+    read_email,
+    remove_email_label,
+)
 from .manual import read_manual
 from .memory_tools import (
     add_user_fact,
@@ -26,18 +34,23 @@ from .trains import train_departures
 from .weather import weather
 
 __all__ = [
+    "add_email_label",
     "add_user_fact",
     "add_user_instruction",
     "cancel_heartbeat_action",
+    "check_new_mail",
     "create_heartbeat_action",
     "escalate_to_big_model",
     "forget_user_memory",
     "get_user_memory",
+    "list_email_labels",
     "list_emails",
     "list_heartbeat_actions",
+    "mark_emails_reported",
     "read_email",
     "read_manual",
     "read_note",
+    "remove_email_label",
     "roll_die",
     "search_vault",
     "set_user_preference",

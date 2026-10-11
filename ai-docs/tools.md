@@ -39,6 +39,11 @@ Ollama and litellm consume this directly (litellm normalises to per-backend form
 | `train_departures` | `tools.py:175` | `station: str, line?: str, count: int=5` | `dict` | Digitraffic Finnish rail. Filters by commuter line letter. |
 | `list_emails` | `tools.py:346` | `mailbox="inbox", unread_only=False, from_search?, limit?` | `dict` | Fastmail JMAP. `mailbox="all"` sweeps everywhere except trash/junk/drafts/sent. |
 | `read_email` | `tools.py:494` | `email_id: str` | `dict` | Body + attachments. Truncates at 20000 chars. HTML→markdown via `markdownify`. |
+| `check_new_mail` | `tools/mail.py` | — | `dict` | Unread-anywhere or flagged-Inbox emails (limit 50) minus SQLite ledger (`mail_reported.sqlite3`). Stores ids in `_last_candidates`. |
+| `mark_emails_reported` | `tools/mail.py` | `ids: list[str]` | `dict` | Records ids from last `check_new_mail` into ledger; others → `rejected`. Never mutates mailbox. |
+| `list_email_labels` | `tools/mail.py` | — | `list[dict]` | All mailboxes as `{path, role, total, unread}` sorted by path. Read-only. |
+| `add_email_label` | `tools/mail.py` | `email_ids: list[str]` (1-50), `label: str` | `dict` | Label must start with `bot/` (enforced by `_validate_bot_label`); missing `bot/...` mailboxes are created. `Email/set` patches `mailboxIds/<id>: true`. Returns `{label, updated, failed}`. |
+| `remove_email_label` | `tools/mail.py` | same | `dict` | Same `bot/` restriction; errors if label missing (never creates). Patches `mailboxIds/<id>: null`. |
 | `set_user_preference` | `tools.py:618` | `key, value` | `dict` | → `memory.set_preference`. |
 | `add_user_fact` | `tools.py:635` | `text` | `dict` | → `memory.add_fact`. |
 | `add_user_instruction` | `tools.py:658` | `text` | `dict` | → `memory.add_instruction`. Behavioural rule. |
@@ -88,7 +93,7 @@ Currently: `train`, `weather`, `mail`, `search`. CLI wires via `_make_tool_handl
 
 ## Fastmail session caching
 
-`_FM_SESSION` and `_FM_MAILBOXES` are lazily populated module-level globals. Reset them by restarting the bot (no invalidation API). If Fastmail rotates the token, restart.
+`_FM_SESSION` and `_FM_MAILBOXES` are lazily populated module-level globals. Reset them by restarting the bot (`_fm_invalidate_mailboxes()` clears the mailbox cache after label creation). Label writes need a Fastmail API token with mail write access; read-only tokens fail with forbidden/accountReadOnly. If Fastmail rotates the token, restart.
 
 ## Escalation tool details
 
