@@ -66,12 +66,17 @@ class LiteLLMProvider:
             )
             raise
         usage = getattr(resp, "usage", None)
+        try:
+            cost = litellm.completion_cost(completion_response=resp)
+        except Exception:  # noqa: BLE001
+            cost = None  # model missing from litellm's price map
         log.info(
-            "litellm response latency=%.2fs finish_reason=%s prompt_tokens=%s completion_tokens=%s",
+            "litellm response latency=%.2fs finish_reason=%s prompt_tokens=%s completion_tokens=%s cost_usd=%s",
             time.monotonic() - t0,
             getattr(resp.choices[0], "finish_reason", None),
             getattr(usage, "prompt_tokens", None),
             getattr(usage, "completion_tokens", None),
+            f"{cost:.6f}" if cost is not None else None,
         )
         log.debug("litellm raw response: %.500s", resp)
         msg = resp.choices[0].message
