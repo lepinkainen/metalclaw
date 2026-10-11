@@ -12,8 +12,12 @@ Scope convention:
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Iterable
 from typing import Protocol, runtime_checkable
+
+
+log = logging.getLogger(__name__)
 
 
 @runtime_checkable
@@ -30,19 +34,23 @@ CHANNELS: dict[str, Channel] = {}
 
 def register(channel: Channel) -> None:
     CHANNELS[channel.name] = channel
+    log.info("channel registered name=%s (active=%s)", channel.name, sorted(CHANNELS))
 
 
 def unregister(name: str) -> None:
-    CHANNELS.pop(name, None)
+    removed = CHANNELS.pop(name, None)
+    log.info("channel unregistered name=%s found=%s", name, removed is not None)
 
 
 def for_scope(scope: str) -> Channel | None:
     if scope == "cli":
-        return CHANNELS.get("cli")
-    if scope.startswith("telegram-"):
-        return CHANNELS.get("telegram")
-    prefix = scope.split("-", 1)[0]
-    return CHANNELS.get(prefix)
+        ch = CHANNELS.get("cli")
+    elif scope.startswith("telegram-"):
+        ch = CHANNELS.get("telegram")
+    else:
+        ch = CHANNELS.get(scope.split("-", 1)[0])
+    log.debug("channel for_scope scope=%s -> %s", scope, ch.name if ch else None)
+    return ch
 
 
 def all_active_scopes() -> list[str]:

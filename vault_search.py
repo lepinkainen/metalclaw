@@ -6,13 +6,16 @@ markdown note by path relative to the vault root, with a path-traversal guard.
 """
 
 import json
+import logging
 import shutil
 import subprocess
+import time
 from pathlib import Path
 from typing import Any
 
 from config import get_config
 
+log = logging.getLogger(__name__)
 
 _LINE_CHAR_LIMIT = 300
 _BODY_CHAR_LIMIT = 50_000
@@ -65,6 +68,7 @@ def search(
         raise ValueError("query is required")
     rg = shutil.which("rg")
     if rg is None:
+        log.error("vault_search: ripgrep not found on PATH")
         raise RuntimeError("ripgrep (rg) not found on PATH")
 
     max_results = max(1, min(int(max_results), 200))
@@ -87,6 +91,8 @@ def search(
     # (e.g. "Notion Export/**") anchor relative to the vault, not cwd.
     cmd.extend(["--", query, "."])
 
+    log.debug("vault_search: running %s (cwd=%s)", cmd, vault)
+    t0 = time.monotonic()
     proc = subprocess.run(
         cmd,
         capture_output=True,
@@ -96,6 +102,7 @@ def search(
     )
     # rg exits 0 on matches, 1 on no matches, 2 on real error.
     if proc.returncode not in (0, 1):
+        log.error("vault_search: rg exit %d: %.500s", proc.returncode, proc.stderr.strip())
         raise RuntimeError(f"rg failed (exit {proc.returncode}): {proc.stderr.strip()}")
 
     hits: list[dict[str, Any]] = []
@@ -164,6 +171,11 @@ def search(
             last_match_idx[current_path] = len(hits) - 1
             pending_before.setdefault(current_path, [])
 
+    log.info(
+        "vault_search: query=%r rg_exit=%d hits=%d truncated=%s excludes=%d latency=%.2fs",
+        query, proc.returncode, len(hits), truncated, len(cfg.vault_search_excludes),
+        time.monotonic() - t0,
+    )
     return {
         "query": query,
         "vault": str(vault),
@@ -184,6 +196,7 @@ def read(path: str) -> dict[str, Any]:
     vault = _vault_root()
     candidate = (vault / path).resolve()
     if not candidate.is_relative_to(vault):
+        log.warning("vault_search: refused path outside vault: %r", path)
         raise ValueError(f"path '{path}' resolves outside the vault")
     if candidate.suffix.lower() != ".md":
         raise ValueError(f"only markdown notes can be read (got '{candidate.suffix}')")
@@ -197,6 +210,7 @@ def read(path: str) -> dict[str, Any]:
         truncated = True
 
     rel = str(candidate.relative_to(vault))
+    log.info("vault_search: read %s (%d chars, truncated=%s)", rel, len(body), truncated)
     return {
         "path": rel,
         "body": body,

@@ -1,8 +1,12 @@
 import json
+import logging
 import subprocess
+import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
+
+log = logging.getLogger(__name__)
 
 
 @dataclass
@@ -34,11 +38,22 @@ def _read_tools_package(repo_root: Path) -> str:
 
 
 def _run(cmd: list[str], cwd: Path, timeout: int = 60) -> tuple[int, str, str]:
+    # Don't log the full argv: the claude -p prompt embeds whole source files.
+    label = " ".join(cmd[:2]) if cmd and cmd[0] == "claude" else " ".join(cmd)
+    log.info("subprocess start: %.200s (cwd=%s timeout=%ds)", label, cwd, timeout)
+    t0 = time.monotonic()
     try:
         r = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, timeout=timeout)
-        return r.returncode, r.stdout, r.stderr
     except subprocess.TimeoutExpired:
+        log.error("subprocess timed out after %ds: %.200s", timeout, label)
         return -1, "", f"timed out after {timeout}s"
+    log.info(
+        "subprocess exit=%d duration=%.2fs stdout=%d chars stderr=%d chars: %.200s",
+        r.returncode, time.monotonic() - t0, len(r.stdout), len(r.stderr), label,
+    )
+    if r.returncode != 0:
+        log.debug("subprocess stderr: %.500s", r.stderr)
+    return r.returncode, r.stdout, r.stderr
 
 
 def _dirty_tracked(repo_root: Path) -> set[str]:
@@ -59,6 +74,10 @@ def run_self_change(request: str, repo_root: Path) -> SelfChangeResult:
     # Snapshot pre-existing dirty state so reject only reverts Claude's changes
     pre_tracked = _dirty_tracked(repo_root)
     pre_untracked = _untracked(repo_root)
+    log.info(
+        "self-change start request=%.200r pre_dirty=%d pre_untracked=%d",
+        request, len(pre_tracked), len(pre_untracked),
+    )
 
     prompt = f"""You are acting as a coding assistant for the Metalclaw bot project.
 Repo root: {repo_root}
@@ -96,6 +115,7 @@ Make the minimal changes needed to fulfil the request. Edit existing files or cr
     new_tracked = _dirty_tracked(repo_root) - pre_tracked
     new_untracked = _untracked(repo_root) - pre_untracked
     files_changed = sorted(new_tracked | new_untracked)
+    log.info("self-change claude rc=%d files_changed=%s", rc, files_changed)
 
     checks_run: list[str] = ["lint", "build", "test"]
     check_results: dict[str, bool] = {}
@@ -128,6 +148,7 @@ Make the minimal changes needed to fulfil the request. Edit existing files or cr
     )
 
     all_checks_passed = rc == 0 and all(check_results.values())
+    log.info("self-change gates=%s all_passed=%s", check_results, all_checks_passed)
 
     print("\n--- self-change summary ---")
     print(f"files changed: {', '.join(files_changed) or 'none'}")
@@ -142,16 +163,19 @@ Make the minimal changes needed to fulfil the request. Edit existing files or cr
 
         if choice == "approve":
             if not all_checks_passed:
+                log.info("self-change approve refused: gates failed")
                 print("validation failed — use 'approve!' to override")
             else:
                 result.approved = True
                 _log_change(repo_root, result)
                 break
         elif choice == "approve!":
+            log.warning("self-change approve! (forced) gates=%s", check_results)
             result.approved = True
             _log_change(repo_root, result)
             break
         elif choice == "reject":
+            log.info("self-change rejected; reverting %d tracked, %d untracked", len(new_tracked), len(new_untracked))
             result.approved = False
             if new_tracked:
                 _run(["git", "checkout", "--"] + sorted(new_tracked), repo_root)
@@ -181,3 +205,4 @@ def _log_change(repo_root: Path, result: SelfChangeResult) -> None:
     }
     with log_path.open("a") as f:
         f.write(json.dumps(entry) + "\n")
+    log.info("self-change logged approved=%s to %s", result.approved, log_path)

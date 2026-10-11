@@ -16,6 +16,7 @@ import os
 import re
 import tempfile
 import threading
+import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -169,6 +170,7 @@ def _write_locked(mem: Memory) -> None:
         with os.fdopen(fd, "w", encoding="utf-8") as f:
             f.write(text)
         os.replace(tmp, path)
+        log.debug("memory file written: %s (%d chars)", path, len(text))
     except Exception:
         with contextlib.suppress(OSError):
             os.unlink(tmp)
@@ -182,9 +184,15 @@ def _locked():
     cfg = get_config()
     cfg.memory_dir.mkdir(parents=True, exist_ok=True)
     lock_path = cfg.memory_dir / f"{_FILENAME}.lock"
+    t0 = time.monotonic()
     with _PROCESS_LOCK:
         with open(lock_path, "w") as lock_file:
             fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+            waited = time.monotonic() - t0
+            if waited > 0.05:
+                log.warning("memory lock waited %.3fs", waited)
+            else:
+                log.debug("memory lock acquired in %.3fs", waited)
             try:
                 yield
             finally:
@@ -219,7 +227,9 @@ def load(*, copy: bool = True) -> Memory:
             return _read_locked() if not copy else _copy(_read_locked())
     with _CACHE_LOCK:
         if _CACHE is not None and _CACHE[0] == mtime:
+            log.debug("memory cache hit")
             return _copy(_CACHE[1]) if copy else _CACHE[1]
+    log.debug("memory cache miss; reading %s", path)
     with _locked():
         mem = _read_locked()
         try:

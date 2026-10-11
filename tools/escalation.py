@@ -1,9 +1,12 @@
+import logging
 from typing import Any
 
 from pydantic import BaseModel, Field
 
 from config import get_config
 from registry import tool
+
+log = logging.getLogger(__name__)
 
 
 class _EscalateArgs(BaseModel):
@@ -22,7 +25,9 @@ class _EscalateArgs(BaseModel):
 )
 def escalate_to_big_model(query: str, reason: str) -> dict[str, Any]:
     cfg = get_config()
+    log.info("escalate_to_big_model reason=%.200s query=%.200s", reason, query)
     if not cfg.escalation_enabled:
+        log.warning("escalate_to_big_model called but escalation disabled")
         return {"status": "disabled", "message": "Escalation disabled in config."}
 
     # Lazy import: chat_loop -> registry -> tools (this package) is a cycle
@@ -40,9 +45,14 @@ def escalate_to_big_model(query: str, reason: str) -> dict[str, Any]:
         )
 
     big = get_provider(cfg.escalation_provider, model_override=cfg.escalation_model)
+    log.info(
+        "escalate_to_big_model -> %s:%s (snapshot=%s, %d messages)",
+        cfg.escalation_provider, cfg.escalation_model, snapshot is not None, len(sub_messages),
+    )
     reply = chat_loop._chat_with_provider(
         big, sub_messages, exclude_tools={"escalate_to_big_model"}
     )
+    log.info("escalate_to_big_model done reply=%d chars", len(reply))
     return {
         "status": "ok",
         "model": f"{cfg.escalation_provider}:{cfg.escalation_model}",

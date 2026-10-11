@@ -1,9 +1,12 @@
+import logging
 from typing import Any
 
 from pydantic import BaseModel, Field
 
 import vault_search
 from registry import tool
+
+log = logging.getLogger(__name__)
 
 
 class _SearchVaultArgs(BaseModel):
@@ -31,7 +34,10 @@ def search_vault(
     max_results: int = 20,
     context_lines: int = 1,
 ) -> dict[str, Any]:
-    return vault_search.search(query, max_results=max_results, context_lines=context_lines)
+    log.info("search_vault query=%r max_results=%d context=%d", query, max_results, context_lines)
+    out = vault_search.search(query, max_results=max_results, context_lines=context_lines)
+    log.info("search_vault done keys=%s", sorted(out) if isinstance(out, dict) else type(out).__name__)
+    return out
 
 
 class _ReadNoteArgs(BaseModel):
@@ -49,4 +55,7 @@ class _ReadNoteArgs(BaseModel):
     args=_ReadNoteArgs,
 )
 def read_note(path: str) -> dict[str, Any]:
-    return vault_search.read(path)
+    log.info("read_note path=%r", path)
+    out = vault_search.read(path)
+    log.info("read_note done keys=%s", sorted(out) if isinstance(out, dict) else type(out).__name__)
+    return out

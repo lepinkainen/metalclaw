@@ -3,6 +3,7 @@ appendix derived from ``registry.TOOLS`` and ``frontends.common.HELP_LINES``."""
 
 from __future__ import annotations
 
+import logging
 import re
 import shutil
 from pathlib import Path
@@ -12,6 +13,8 @@ from pydantic import BaseModel, Field
 
 from config import get_config
 from registry import TOOLS, tool
+
+log = logging.getLogger(__name__)
 
 _TEMPLATE_PATH = Path(__file__).resolve().parent.parent / "assets" / "manual_template.md"
 _VAULT_FILENAME = "manual.md"
@@ -123,8 +126,10 @@ def init_manual() -> dict[str, Any]:
     dest = _manual_path()
     dest.parent.mkdir(parents=True, exist_ok=True)
     if dest.exists():
+        log.info("init_manual: already exists at %s", dest)
         return {"status": "exists", "path": str(dest)}
     shutil.copyfile(_TEMPLATE_PATH, dest)
+    log.info("init_manual: created %s", dest)
     return {"status": "created", "path": str(dest)}
 
 
@@ -152,8 +157,10 @@ class _ReadManualArgs(BaseModel):
     args=_ReadManualArgs,
 )
 def read_manual(section: str | None = None) -> dict[str, Any]:
+    log.info("read_manual section=%r", section)
     md = _load_manual()
     if md is None:
+        log.warning("read_manual: manual not initialised")
         return {
             "error": "manual_not_initialised",
             "hint": "Run /manual init to copy the manual template into your vault.",
@@ -173,9 +180,11 @@ def read_manual(section: str | None = None) -> dict[str, Any]:
 
     slug = _resolve_section(sections, section)
     if slug is None:
+        log.warning("read_manual: unknown section %r", section)
         return {
             "error": "unknown_section",
             "requested": section,
             "available": available,
         }
+    log.info("read_manual resolved slug=%s (%d chars)", slug, len(sections[slug]))
     return {"section": slug, "markdown": sections[slug]}

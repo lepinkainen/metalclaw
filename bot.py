@@ -8,6 +8,9 @@ provider is invoked.
 import argparse
 import asyncio
 import logging
+import logging.handlers
+import os
+from pathlib import Path
 
 import discord
 from telegram.ext import Application
@@ -27,6 +30,79 @@ from frontends.telegram import (
 )
 
 
+log = logging.getLogger(__name__)
+
+_LOG_FORMAT = "%(asctime)s %(levelname)-7s %(name)s: %(message)s"
+
+
+class _NoTraceback(logging.Formatter):
+    """Console formatter: one-line errors; full tracebacks go to the log file only."""
+
+    def formatException(self, ei) -> str:  # noqa: N802
+        return ""
+
+
+def _log_file_path() -> Path:
+    state = os.environ.get("XDG_STATE_HOME") or str(Path.home() / ".local" / "state")
+    return Path(state) / "metalclaw" / "metalclaw.log"
+
+
+def _setup_logging(args: argparse.Namespace) -> Path:
+    """DEBUG rotating file log (always) + console handler (INFO daemon / WARNING REPL).
+
+    Console level can be overridden with METALCLAW_LOG_LEVEL. Returns the log path.
+    """
+    path = _log_file_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fmt = logging.Formatter(_LOG_FORMAT)
+    file_h = logging.handlers.RotatingFileHandler(
+        path, maxBytes=5 * 1024 * 1024, backupCount=5, encoding="utf-8"
+    )
+    file_h.setLevel(logging.DEBUG)
+    file_h.setFormatter(fmt)
+    console_level = os.environ.get("METALCLAW_LOG_LEVEL", "").upper() or (
+        "INFO" if args.daemon else "WARNING"
+    )
+    console_h = logging.StreamHandler()
+    console_h.setLevel(getattr(logging, console_level, logging.WARNING))
+    console_h.setFormatter(_NoTraceback(_LOG_FORMAT))
+    root = logging.getLogger()
+    for h in list(root.handlers):
+        root.removeHandler(h)
+    root.setLevel(logging.DEBUG)
+    root.addHandler(file_h)
+    root.addHandler(console_h)
+    for name in ("httpx", "httpcore", "telegram", "discord", "litellm", "LiteLLM", "asyncio", "markdown_it"):
+        logging.getLogger(name).setLevel(logging.WARNING)
+    return path
+
+
+def _log_startup(cfg, args: argparse.Namespace, log_path: Path) -> None:
+    from config import _config_path
+
+    log.info("startup: pid=%d daemon=%s log_file=%s", os.getpid(), args.daemon, log_path)
+    log.info("startup: config=%s", _config_path())
+    log.info(
+        "startup: provider=%s model=%s",
+        cfg.provider,
+        cfg.model if cfg.provider == "ollama" else cfg.litellm_model,
+    )
+    log.info(
+        "startup: escalation enabled=%s provider=%s model=%s",
+        cfg.escalation_enabled, cfg.escalation_provider, cfg.escalation_model,
+    )
+    log.info(
+        "startup: heartbeat enabled=%s interval=%s active_hours=%s",
+        cfg.heartbeat_enabled, cfg.heartbeat_interval_seconds, cfg.heartbeat_active_hours,
+    )
+    log.info(
+        "startup: frontends telegram=%s discord=%s cli=%s",
+        (not args.no_telegram) and bool(cfg.telegram_bot_token),
+        (not args.no_discord) and bool(cfg.discord_bot_token),
+        not args.daemon,
+    )
+
+
 async def _async_main(
     *, daemon: bool, with_telegram: bool, with_discord: bool
 ) -> None:
@@ -35,7 +111,7 @@ async def _async_main(
     cfg = get_config()
     migrated = memory.migrate_legacy_scopes()
     if migrated:
-        logging.info(
+        log.info(
             "memory: migrated %d legacy scope file(s) into memory.md (%s); originals renamed to *.bak",
             len(migrated),
             ", ".join(migrated),
@@ -109,14 +185,12 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    logging.basicConfig(level=logging.INFO if args.daemon else logging.WARNING)
-    logging.getLogger("httpx").setLevel(logging.WARNING)
-    logging.getLogger("telegram").setLevel(logging.WARNING)
-    logging.getLogger("telegram.ext").setLevel(logging.WARNING)
-    logging.getLogger("discord").setLevel(logging.WARNING)
-    logging.getLogger("discord.client").setLevel(logging.WARNING)
-    logging.getLogger("discord.gateway").setLevel(logging.WARNING)
-    logging.getLogger("discord.http").setLevel(logging.WARNING)
+    log_path = _setup_logging(args)
+
+    try:
+        _log_startup(get_config(), args, log_path)
+    except Exception:
+        log.exception("startup summary failed")
 
     try:
         asyncio.run(

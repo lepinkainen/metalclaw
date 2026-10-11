@@ -33,9 +33,12 @@ House rules — observed in code, enforce when editing.
 
 ## Logging
 
-- `logging.getLogger("metalclaw.<area>")` — namespaced loggers.
-- `log.info("memory write op=%s key=%s", op, key)` — structured-ish lazy formatting; never f-strings inside `log.*`.
-- Noisy libs silenced in `bot.main()`: `httpx`, `telegram*`, `discord*`.
+- Every module: `log = logging.getLogger(__name__)` (heartbeat/memory use `metalclaw.*` names; both reach the root handlers).
+- Lazy %-formatting only (`log.info("x=%s", x)`), never f-strings. Truncate big payloads with `%.500s`.
+- Levels: INFO = decisions/outcomes/one-line summaries (turn start/end, tool call + duration, HTTP latency); DEBUG = payload detail (args, raw responses, cache hits); WARNING = recoverable oddities (validation refusals, fallbacks); `log.exception` in every `except` that swallows or converts an error.
+- NEVER log secrets: Fastmail token, bot tokens, API keys, Authorization headers. Message text / email subjects are fine. Log env-override *names*, not values.
+- `bot._setup_logging`: root at DEBUG; rotating file `$XDG_STATE_HOME/metalclaw/metalclaw.log` (default `~/.local/state/metalclaw/metalclaw.log`, 5 MB x 5) always on at DEBUG; console INFO in `--daemon`, WARNING in REPL, override via `METALCLAW_LOG_LEVEL`. Console shows one-line errors (no tracebacks); tracebacks are file-only.
+- Noisy libs (`httpx`, `httpcore`, `telegram`, `discord`, `litellm`, `asyncio`) pinned to WARNING in `_setup_logging`.
 
 ## Comments
 

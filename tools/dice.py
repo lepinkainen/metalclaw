@@ -1,8 +1,11 @@
+import logging
 import random
 
 from pydantic import BaseModel, Field
 
 from registry import tool
+
+log = logging.getLogger(__name__)
 
 
 class _RollDieArgs(BaseModel):
@@ -15,4 +18,5 @@ class _RollDieArgs(BaseModel):
 )
 def roll_die(sides: int) -> str:
     result = random.randint(1, sides)
+    log.info("roll_die sides=%d result=%d", sides, result)
     return f"Rolled a d{sides}: {result}"

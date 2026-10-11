@@ -13,6 +13,7 @@ from __future__ import annotations
 import ast
 import importlib
 import json
+import logging
 import re
 import sys
 from dataclasses import dataclass
@@ -21,6 +22,8 @@ from pathlib import Path
 
 import registry
 from self_change import _dirty_tracked, _read_file, _run, _untracked
+
+log = logging.getLogger(__name__)
 
 _SLUG_RE = re.compile(r"[^a-z0-9_]")
 
@@ -52,6 +55,7 @@ def run_add_tool_live(request: str, repo_root: Path) -> LiveAddState:
     pre_tracked = _dirty_tracked(repo_root)
     pre_untracked = _untracked(repo_root)
     pre_keys = set(registry.TOOLS)
+    log.info("add-tool start request=%.200r", request)
 
     prompt = _build_prompt(request, repo_root)
     rc, stdout, stderr = _run(
@@ -66,6 +70,7 @@ def run_add_tool_live(request: str, repo_root: Path) -> LiveAddState:
     new_tracked = _dirty_tracked(repo_root) - pre_tracked
     new_untracked = _untracked(repo_root) - pre_untracked
     files_changed = sorted(new_tracked | new_untracked)
+    log.info("add-tool claude rc=%d files_changed=%s", rc, files_changed)
 
     state = LiveAddState(
         request=request,
@@ -82,6 +87,7 @@ def run_add_tool_live(request: str, repo_root: Path) -> LiveAddState:
     abort = _validate_delta(files_changed, new_tracked)
     if abort:
         state.aborted = abort
+        log.warning("add-tool aborted: %s (reverting)", abort)
         _revert_changes(repo_root, new_tracked, new_untracked)
         return state
 
@@ -92,6 +98,10 @@ def run_add_tool_live(request: str, repo_root: Path) -> LiveAddState:
     _, state.diff, _ = _run(["git", "diff", "--no-index", "/dev/null", new_file_rel], repo_root)
 
     _run_gates(state, pre_keys)
+    log.info(
+        "add-tool slug=%s gates=%s registered=%s",
+        state.slug, state.gate_results, state.registered_names,
+    )
     return state
 
 
@@ -104,6 +114,7 @@ def finalise_add_tool_live(state: LiveAddState, choice: str) -> ApprovalResult:
         return ApprovalResult(choice, False, "no pending tool")
 
     norm = choice.strip().lower().lstrip("/").replace("-", "_")
+    log.info("add-tool finalise slug=%s choice=%s", state.slug, norm)
 
     if norm == "diff":
         return ApprovalResult(choice, True, "diff", diff=state.diff or "(no diff)")
@@ -111,12 +122,14 @@ def finalise_add_tool_live(state: LiveAddState, choice: str) -> ApprovalResult:
     if norm in {"approve", "approve_force"}:
         all_passed = all(state.gate_results.values())
         if norm == "approve" and not all_passed:
+            log.info("add-tool approve refused: gates failed %s", state.gate_results)
             return ApprovalResult(
                 choice,
                 False,
                 "validation failed — use /approve-force to override",
             )
         _append_to_init(state.repo_root, state.slug, state.registered_names)
+        log.info("add-tool approved slug=%s names=%s persisted to tools/__init__.py", state.slug, state.registered_names)
         _log_change(state.repo_root, state, approved=True)
         state.finalised = True
         return ApprovalResult(
@@ -131,6 +144,7 @@ def finalise_add_tool_live(state: LiveAddState, choice: str) -> ApprovalResult:
         sys.modules.pop(f"tools.{state.slug}", None)
         if state.new_file.exists():
             state.new_file.unlink()
+        log.info("add-tool rejected slug=%s removed names=%s", state.slug, state.registered_names)
         _log_change(state.repo_root, state, approved=False)
         state.finalised = True
         return ApprovalResult(choice, True, f"rejected — {state.slug} removed")
@@ -216,6 +230,7 @@ def _run_gates(state: LiveAddState, pre_keys: set[str]) -> None:
     except Exception as exc:  # noqa: BLE001
         state.gate_results["import"] = False
         state.gate_messages["import"] = f"{type(exc).__name__}: {exc}"
+        log.exception("add-tool import gate failed for tools.%s", state.slug)
 
     schema_ok = True
     schema_msgs: list[str] = []

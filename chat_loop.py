@@ -6,7 +6,9 @@ and by tests directly.
 
 import asyncio
 import json
+import logging
 import re
+import time
 from collections.abc import Callable
 from contextvars import ContextVar
 from datetime import datetime
@@ -18,6 +20,8 @@ import memory
 from config import get_config
 from providers import Provider, get_provider
 from registry import TOOLS
+
+log = logging.getLogger(__name__)
 
 __all__ = [
     "_active_session_messages",
@@ -43,6 +47,11 @@ def _split_thinking(text: str) -> tuple[str, str]:
     """Return (thinking_content, reply_without_think_tags)."""
     thinking_parts = _THINK_RE.findall(text)
     clean = _THINK_RE.sub("", text).strip()
+    if thinking_parts:
+        log.debug(
+            "think-strip: %d block(s), removed %d chars, reply %d -> %d chars",
+            len(thinking_parts), len(text) - len(clean), len(text), len(clean),
+        )
     return "\n".join(thinking_parts).strip(), clean
 
 
@@ -113,6 +122,7 @@ def _refresh_system_prompt(messages: list[dict]) -> None:
         messages[0] = {"role": "system", "content": prompt}
     else:
         messages.insert(0, {"role": "system", "content": prompt})
+    log.debug("system prompt refreshed (%d chars, %d messages)", len(prompt), len(messages))
 
 
 _MEMORY_MUTATORS = frozenset(
@@ -170,11 +180,13 @@ def _split_system(messages: list[dict]) -> tuple[str, list[dict]]:
 def _run_tool(name: str, args: dict) -> object:
     tool_obj = TOOLS.get(name)
     if tool_obj is None:
+        log.warning("tool call: unknown tool %r args=%.500s", name, args)
         return f"Error: unknown tool '{name}'"
     if tool_obj.args_model is not None:
         try:
             validated = tool_obj.args_model.model_validate(args)
         except ValidationError as e:
+            log.warning("tool call: invalid arguments for %s: %.500s", name, e.errors())
             return {
                 "error": "invalid_arguments",
                 "tool": name,
@@ -190,10 +202,14 @@ def _run_tool(name: str, args: dict) -> object:
         call_args = validated.model_dump()
     else:
         call_args = args
+    t0 = time.monotonic()
     try:
-        return tool_obj.func(**call_args)
+        result = tool_obj.func(**call_args)
     except Exception as e:
+        log.exception("tool call: %s raised after %.2fs", name, time.monotonic() - t0)
         return f"Error: {e}"
+    log.debug("tool call: %s ok in %.2fs", name, time.monotonic() - t0)
+    return result
 
 
 def _chat_with_provider(
@@ -209,9 +225,27 @@ def _chat_with_provider(
     ]
     system, history = _split_system(messages)
     token = _active_session_messages.set(messages)
+    pname = getattr(provider, "name", type(provider).__name__)
+    pmodel = getattr(provider, "model", None)
+    turn_t0 = time.monotonic()
+    log.info(
+        "turn start provider=%s model=%s scope=%s history=%d messages tools=%d system=%d chars",
+        pname, pmodel, current_scope.get(), len(history), len(tool_schemas), len(system),
+    )
+    iteration = 0
     try:
         while True:
-            am = provider.chat_once(history, tool_schemas, system)
+            iteration += 1
+            call_t0 = time.monotonic()
+            try:
+                am = provider.chat_once(history, tool_schemas, system)
+            except Exception:
+                log.exception("provider call failed provider=%s model=%s iteration=%d", pname, pmodel, iteration)
+                raise
+            log.info(
+                "provider call #%d provider=%s latency=%.2fs text=%d chars tool_calls=%d",
+                iteration, pname, time.monotonic() - call_t0, len(am.text), len(am.tool_calls),
+            )
             raw = am.raw
             if isinstance(raw, list):
                 history.extend(raw)
@@ -219,6 +253,11 @@ def _chat_with_provider(
                 history.append(raw)
 
             if not am.tool_calls:
+                log.info(
+                    "turn end provider=%s iterations=%d duration=%.2fs reply=%d chars",
+                    pname, iteration, time.monotonic() - turn_t0, len(am.text),
+                )
+                log.debug("turn reply: %.500s", am.text)
                 messages[:] = (
                     [{"role": "system", "content": system}] if system else []
                 ) + history
@@ -227,8 +266,19 @@ def _chat_with_provider(
             results: list[tuple] = []
             memory_dirty = False
             for tc in am.tool_calls:
+                log.debug("tool call: %s args=%.500s", tc.name, tc.arguments)
+                tool_t0 = time.monotonic()
                 result = _run_tool(tc.name, tc.arguments)
                 result_json = _tool_result_json(result)
+                failed = isinstance(result, str) and result.startswith("Error:") or (
+                    isinstance(result, dict) and "error" in result
+                )
+                log.info(
+                    "tool %s %s in %.2fs result=%d chars",
+                    tc.name, "FAILED" if failed else "ok",
+                    time.monotonic() - tool_t0, len(result_json),
+                )
+                log.debug("tool %s result: %.500s", tc.name, result_json)
                 if on_tool_call:
                     on_tool_call(tc.name, tc.arguments, result_json)
                 results.append((tc, result_json))
@@ -239,6 +289,7 @@ def _chat_with_provider(
             if memory_dirty:
                 now = datetime.now().strftime("%Y-%m-%d %H:%M")
                 system = build_system_prompt(now)
+                log.info("system prompt rebuilt mid-loop after memory/heartbeat mutator (%d chars)", len(system))
     finally:
         _active_session_messages.reset(token)
 
@@ -274,6 +325,10 @@ def _check_session_provider(messages: list[dict], provider_name: str) -> bool:
         not kept or messages[-1] is not kept[0]
     ):
         kept.append(messages[-1])
+    log.warning(
+        "provider switch %s -> %s: dropped history %d -> %d messages",
+        stamped, provider_name, len(messages), len(kept),
+    )
     messages[:] = kept
     return True
 
@@ -305,12 +360,23 @@ def chat_via_escalation(
     if not cfg.escalation_enabled:
         raise RuntimeError("escalation is disabled in config")
     big = get_provider(cfg.escalation_provider, model_override=cfg.escalation_model)
-    return _chat_with_provider(
-        big,
-        messages,
-        on_tool_call=on_tool_call,
-        exclude_tools={"escalate_to_big_model"},
+    log.info(
+        "escalation start provider=%s model=%s messages=%d",
+        cfg.escalation_provider, cfg.escalation_model, len(messages),
     )
+    t0 = time.monotonic()
+    try:
+        out = _chat_with_provider(
+            big,
+            messages,
+            on_tool_call=on_tool_call,
+            exclude_tools={"escalate_to_big_model"},
+        )
+    except Exception:
+        log.exception("escalation failed after %.2fs", time.monotonic() - t0)
+        raise
+    log.info("escalation end duration=%.2fs reply=%d chars", time.monotonic() - t0, len(out))
+    return out
 
 
 async def run_turn(
@@ -331,10 +397,16 @@ async def run_turn(
     """
     _refresh_system_prompt(messages)
     messages.append({"role": "user", "content": user_text})
+    log.info(
+        "run_turn scope=%s session=%d messages user_text=%d chars",
+        current_scope.get(), len(messages), len(user_text),
+    )
+    log.debug("run_turn user text: %.500s", user_text)
     loop = asyncio.get_running_loop()
     try:
         reply = await loop.run_in_executor(None, chat_call)
     except Exception:
+        log.exception("run_turn failed; reverting user message")
         messages.pop()
         raise
     thinking, clean_reply = _split_thinking(reply)

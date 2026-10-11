@@ -1,4 +1,6 @@
 import json
+import logging
+import time
 
 import litellm
 
@@ -8,6 +10,8 @@ from providers.base import AssistantMessage, ToolCall
 # Silently strip kwargs the underlying model does not understand. Lets one
 # provider module front a heterogeneous Bedrock catalog (Claude, Nova, Llama,
 # Mistral) without per-model branching here.
+log = logging.getLogger(__name__)
+
 litellm.drop_params = True
 
 
@@ -50,7 +54,27 @@ class LiteLLMProvider:
         if tools:
             kwargs["tools"] = tools
 
-        resp = litellm.completion(**kwargs)
+        log.info(
+            "litellm request model=%s messages=%d tools=%d retries=%d",
+            self.model, len(payload), len(tools), self.num_retries,
+        )
+        t0 = time.monotonic()
+        try:
+            resp = litellm.completion(**kwargs)
+        except Exception:
+            log.exception(
+                "litellm request failed after %.2fs model=%s", time.monotonic() - t0, self.model
+            )
+            raise
+        usage = getattr(resp, "usage", None)
+        log.info(
+            "litellm response latency=%.2fs finish_reason=%s prompt_tokens=%s completion_tokens=%s",
+            time.monotonic() - t0,
+            getattr(resp.choices[0], "finish_reason", None),
+            getattr(usage, "prompt_tokens", None),
+            getattr(usage, "completion_tokens", None),
+        )
+        log.debug("litellm raw response: %.500s", resp)
         msg = resp.choices[0].message
 
         tool_calls: list[ToolCall] = []
@@ -60,6 +84,7 @@ class LiteLLMProvider:
             try:
                 args = json.loads(args_str) if args_str else {}
             except json.JSONDecodeError:
+                log.warning("litellm: bad tool-call JSON for %s: %.200s", tc.function.name, args_str)
                 args = {}
             tool_calls.append(ToolCall(id=tc.id, name=tc.function.name, arguments=args))
             raw_tool_calls.append({

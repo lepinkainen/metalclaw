@@ -1,9 +1,12 @@
+import logging
 from typing import Any
 
 from pydantic import BaseModel, Field
 
 import memory
 from registry import tool
+
+log = logging.getLogger(__name__)
 
 
 class _SetUserPreferenceArgs(BaseModel):
@@ -22,6 +25,7 @@ class _SetUserPreferenceArgs(BaseModel):
     args=_SetUserPreferenceArgs,
 )
 def set_user_preference(key: str, value: str) -> dict[str, Any]:
+    log.info("set_user_preference key=%r value=%.200s", key, value)
     memory.set_preference(key, value)
     return {"status": "saved", "key": key, "value": value}
 
@@ -38,6 +42,7 @@ class _AddUserFactArgs(BaseModel):
     args=_AddUserFactArgs,
 )
 def add_user_fact(text: str) -> dict[str, Any]:
+    log.info("add_user_fact text=%.200s", text)
     memory.add_fact(text)
     return {"status": "saved", "text": text}
 
@@ -65,6 +70,7 @@ class _AddUserInstructionArgs(BaseModel):
     args=_AddUserInstructionArgs,
 )
 def add_user_instruction(text: str) -> dict[str, Any]:
+    log.info("add_user_instruction text=%.200s", text)
     memory.add_instruction(text)
     return {"status": "saved", "text": text}
 
@@ -86,7 +92,9 @@ class _ForgetUserMemoryArgs(BaseModel):
     args=_ForgetUserMemoryArgs,
 )
 def forget_user_memory(matcher: str) -> dict[str, Any]:
+    log.info("forget_user_memory matcher=%r", matcher)
     res = memory.forget(matcher)
+    log.info("forget_user_memory status=%s matches=%d", res.status, len(res.matches or []))
     out: dict[str, Any] = {"status": res.status, "matcher": matcher}
     if res.entry is not None:
         out["entry"] = res.entry
@@ -103,4 +111,6 @@ def forget_user_memory(matcher: str) -> dict[str, Any]:
     ),
 )
 def get_user_memory() -> dict[str, Any]:
-    return {"markdown": memory.render_full()}
+    md = memory.render_full()
+    log.info("get_user_memory %d chars", len(md))
+    return {"markdown": md}

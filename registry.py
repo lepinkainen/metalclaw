@@ -1,7 +1,10 @@
+import logging
 from dataclasses import dataclass
 from typing import Any, Callable
 
 from pydantic import BaseModel
+
+log = logging.getLogger(__name__)
 
 _EMPTY_PARAMETERS: dict[str, Any] = {"type": "object", "properties": {}, "required": []}
 
@@ -58,6 +61,7 @@ def tool(
             },
             args_model=args,
         )
+        log.debug("registry: tool registered name=%s (total=%d)", func.__name__, len(TOOLS))
         return func
 
     return decorator

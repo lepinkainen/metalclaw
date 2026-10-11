@@ -1,3 +1,4 @@
+import logging
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -6,6 +7,8 @@ from pydantic import BaseModel, Field
 from registry import tool
 
 from ._http import HTTP
+
+log = logging.getLogger(__name__)
 
 _NOMINATIM = "https://nominatim.openstreetmap.org/search"
 _METNO = "https://api.met.no/weatherapi/locationforecast/2.0/compact"
@@ -16,7 +19,9 @@ def _geocode(location: str) -> tuple[float, float, str]:
     resp = HTTP.get(_NOMINATIM, params={"q": location, "format": "json", "limit": 1})
     resp.raise_for_status()
     results = resp.json()
+    log.debug("weather: geocode %r -> %d hit(s) status=%s", location, len(results), getattr(resp, "status_code", None))
     if not results:
+        log.warning("weather: could not geocode %r", location)
         raise ValueError(f"Could not find location: {location}")
     hit = results[0]
     return round(float(hit["lat"]), 4), round(float(hit["lon"]), 4), hit["display_name"]
@@ -69,11 +74,13 @@ class _WeatherArgs(BaseModel):
     args=_WeatherArgs,
 )
 def weather(location: str) -> dict[str, Any]:
+    log.info("weather location=%r", location)
     lat, lon, display_name = _geocode(location)
 
     resp = HTTP.get(_METNO, params={"lat": lat, "lon": lon})
     resp.raise_for_status()
     timeseries = resp.json()["properties"]["timeseries"]
+    log.debug("weather: met.no status=%s entries=%d", getattr(resp, "status_code", None), len(timeseries))
 
     today = datetime.now(timezone.utc).date()
     tomorrow = today + timedelta(days=1)
@@ -120,4 +127,8 @@ def weather(location: str) -> dict[str, Any]:
     if tomorrow_str in by_day:
         result["tomorrow"] = _day_summary(by_day[tomorrow_str])
 
+    log.info(
+        "weather done place=%r temp=%s today=%s tomorrow=%s",
+        display_name, temp, result["today"] is not None, result["tomorrow"] is not None,
+    )
     return result

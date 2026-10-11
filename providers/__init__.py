@@ -1,4 +1,8 @@
+import logging
+
 from providers.base import AssistantMessage, Provider, ToolCall
+
+log = logging.getLogger(__name__)
 
 
 def get_provider(name: str, *, model_override: str | None = None) -> Provider:
@@ -12,6 +16,7 @@ def get_provider(name: str, *, model_override: str | None = None) -> Provider:
     cfg = get_config()
     if name == "ollama":
         from providers.ollama import OllamaProvider
+        log.debug("provider: building ollama model=%s", model_override or cfg.model)
         return OllamaProvider(
             url=cfg.ollama_url,
             model=model_override or cfg.model,
@@ -21,11 +26,13 @@ def get_provider(name: str, *, model_override: str | None = None) -> Provider:
         )
     if name == "litellm":
         from providers.litellm_provider import LiteLLMProvider
+        log.debug("provider: building litellm model=%s", model_override or cfg.litellm_model)
         return LiteLLMProvider(
             model=model_override or cfg.litellm_model,
             aws_region=cfg.aws_region,
             aws_profile=cfg.aws_profile,
         )
+    log.error("provider: unknown provider %r", name)
     raise ValueError(f"unknown provider: {name!r}")
 
 

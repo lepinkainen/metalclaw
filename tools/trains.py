@@ -1,3 +1,4 @@
+import logging
 from typing import Any
 
 from pydantic import BaseModel, Field
@@ -5,6 +6,8 @@ from pydantic import BaseModel, Field
 from registry import tool
 
 from ._http import HTTP
+
+log = logging.getLogger(__name__)
 
 _DIGITRAFFIC = "https://rata.digitraffic.fi/api/v1"
 
@@ -14,11 +17,13 @@ def _find_station_code(name: str) -> tuple[str, str]:
     resp = HTTP.get(f"{_DIGITRAFFIC}/metadata/stations")
     resp.raise_for_status()
     needle = name.lower()
+    log.debug("trains: stations lookup status=%s", getattr(resp, "status_code", None))
     for s in resp.json():
         if not s.get("passengerTraffic"):
             continue
         if needle in s["stationName"].lower() or needle == s["stationShortCode"].lower():
             return s["stationShortCode"], s["stationName"]
+    log.warning("trains: no station matching %r", name)
     raise ValueError(f"No passenger station found matching: {name}")
 
 
@@ -37,7 +42,9 @@ class _TrainDeparturesArgs(BaseModel):
 )
 def train_departures(station: str, count: int = 5, line: str | None = None) -> dict[str, Any]:
     count = min(max(1, count), 20)
+    log.info("train_departures station=%r line=%r count=%d", station, line, count)
     code, full_name = _find_station_code(station)
+    log.debug("trains: resolved %r -> %s (%s)", station, code, full_name)
     line = line.strip().upper() if line else None
 
     params = {
@@ -55,6 +62,7 @@ def train_departures(station: str, count: int = 5, line: str | None = None) -> d
     )
     resp.raise_for_status()
     trains = resp.json()
+    log.debug("trains: digitraffic status=%s trains=%d", getattr(resp, "status_code", None), len(trains))
 
     if line:
         trains = [t for t in trains if (t.get("commuterLineID") or "").upper() == line]
@@ -93,6 +101,7 @@ def train_departures(station: str, count: int = 5, line: str | None = None) -> d
         if len(departures) >= count:
             break
 
+    log.info("train_departures done station=%s departures=%d", code, len(departures))
     return {
         "source": {
             "name": "Digitraffic Rail",

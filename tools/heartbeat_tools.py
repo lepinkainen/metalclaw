@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field
@@ -10,6 +11,8 @@ import chat_loop
 import heartbeat
 from config import get_config
 from registry import tool
+
+log = logging.getLogger(__name__)
 
 
 class _CronScheduleArgs(BaseModel):
@@ -100,14 +103,20 @@ def create_heartbeat_action(
     every: int | None = None,
     channel: str | None = None,
 ) -> dict[str, Any]:
+    log.info(
+        "create_heartbeat_action kind=%s channel=%r at=%r every=%r schedule=%s prompt=%.200s",
+        kind, channel, at, every, schedule, prompt,
+    )
     try:
         action_kind = heartbeat.ActionKind(kind)
     except ValueError as e:
+        log.warning("create_heartbeat_action invalid kind: %s", e)
         return {"error": "invalid_kind", "message": str(e)}
 
     cron: heartbeat.CronSchedule | None = None
     if action_kind == heartbeat.ActionKind.CRON:
         if not schedule:
+            log.warning("create_heartbeat_action cron without schedule")
             return {"error": "missing_schedule", "message": "kind=cron requires schedule"}
         try:
             cron = heartbeat.CronSchedule(
@@ -116,11 +125,13 @@ def create_heartbeat_action(
                 timezone=heartbeat.validate_timezone(str(schedule.get("timezone", ""))),
             )
         except ValueError as e:
+            log.warning("create_heartbeat_action invalid schedule: %s", e)
             return {"error": "invalid_schedule", "message": str(e)}
 
     try:
         resolved_channel = _resolve_channel(channel)
     except ValueError as e:
+        log.warning("create_heartbeat_action no channel: %s", e)
         return {"error": "no_channel", "message": str(e)}
 
     scope = chat_loop.current_scope.get()
@@ -135,7 +146,9 @@ def create_heartbeat_action(
             every=every,
         )
     except ValueError as e:
+        log.warning("create_heartbeat_action rejected: %s", e)
         return {"error": "invalid_arguments", "message": str(e)}
+    log.info("create_heartbeat_action created id=%s channel=%s", action.id, resolved_channel)
     return {"status": "created", "action": action.to_dict()}
 
 
@@ -155,6 +168,10 @@ class _ListHeartbeatActionsArgs(BaseModel):
 )
 def list_heartbeat_actions(include_completed: bool = False) -> dict[str, Any]:
     ledger = heartbeat.load_ledger()
+    log.info(
+        "list_heartbeat_actions active=%d completed=%d include_completed=%s",
+        len(ledger.actions), len(ledger.completed), include_completed,
+    )
     out: dict[str, Any] = {"active": [a.to_dict() for a in ledger.actions]}
     if include_completed:
         out["completed"] = list(ledger.completed)
@@ -174,6 +191,7 @@ class _CancelHeartbeatActionArgs(BaseModel):
 )
 def cancel_heartbeat_action(action_id: str) -> dict[str, Any]:
     removed = heartbeat.cancel(action_id.strip())
+    log.info("cancel_heartbeat_action id=%r found=%s", action_id, removed is not None)
     if removed is None:
         return {"status": "not_found", "action_id": action_id}
     return {"status": "cancelled", "action": removed.to_dict()}

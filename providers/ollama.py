@@ -1,3 +1,5 @@
+import logging
+import time
 import uuid
 from typing import Any
 
@@ -5,6 +7,7 @@ import httpx
 
 from providers.base import AssistantMessage, ToolCall
 
+log = logging.getLogger(__name__)
 
 _CLIENT = httpx.Client(timeout=120.0)
 
@@ -53,9 +56,29 @@ class OllamaProvider:
         if options:
             payload["options"] = options
 
-        response = _CLIENT.post(self.url, json=payload)
-        response.raise_for_status()
-        msg = response.json()["message"]
+        log.info(
+            "ollama request model=%s messages=%d tools=%d options=%s",
+            self.model, len(payload_messages), len(tools), options or None,
+        )
+        t0 = time.monotonic()
+        try:
+            response = _CLIENT.post(self.url, json=payload)
+            response.raise_for_status()
+        except httpx.HTTPError as e:
+            log.exception(
+                "ollama request failed after %.2fs model=%s status=%s",
+                time.monotonic() - t0, self.model,
+                getattr(getattr(e, "response", None), "status_code", None),
+            )
+            raise
+        body = response.json()
+        msg = body["message"]
+        log.info(
+            "ollama response status=%s latency=%.2fs done_reason=%s prompt_tokens=%s eval_tokens=%s",
+            getattr(response, "status_code", None), time.monotonic() - t0, body.get("done_reason"),
+            body.get("prompt_eval_count"), body.get("eval_count"),
+        )
+        log.debug("ollama raw response: %.500s", body)
 
         tool_calls: list[ToolCall] = []
         for tc in msg.get("tool_calls") or []:
@@ -101,6 +124,7 @@ def fetch_model_defaults(chat_url: str, model: str) -> dict[str, Any]:
         r.raise_for_status()
         params_text = r.json().get("parameters", "") or ""
     except Exception:
+        log.exception("ollama: fetch_model_defaults failed url=%s model=%s", show_url, model)
         return {}
     out: dict[str, Any] = {}
     for line in params_text.splitlines():
@@ -118,4 +142,5 @@ def fetch_model_defaults(chat_url: str, model: str) -> dict[str, Any]:
                 out[key] = int(val)
             except ValueError:
                 pass
+    log.debug("ollama: model defaults model=%s %s", model, out)
     return out
