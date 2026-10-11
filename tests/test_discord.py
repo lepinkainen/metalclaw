@@ -4,12 +4,11 @@ import channels as channels_mod
 from frontends import discord as discord_frontend
 from frontends.discord import (
     _DISCORD_MAX_MESSAGE,
-    _DiscordChannel,
     _discord_scope_for,
+    _DiscordChannel,
     _split_for_discord,
     _strip_bot_mention,
 )
-
 
 # --- scope helper ---
 

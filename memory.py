@@ -19,7 +19,7 @@ import threading
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 from config import get_config
@@ -33,7 +33,7 @@ _BULLET_LINE = re.compile(r"^-\s+(.+)$")
 
 _PROCESS_LOCK = threading.Lock()
 _CACHE_LOCK = threading.Lock()
-_CACHE: "tuple[int, Memory] | None" = None
+_CACHE: tuple[int, Memory] | None = None
 
 
 class ForgetStatus(enum.StrEnum):
@@ -78,7 +78,7 @@ def _path() -> Path:
 
 
 def _now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+    return datetime.now(UTC).isoformat(timespec="seconds")
 
 
 def _parse(text: str) -> Memory:
@@ -185,18 +185,17 @@ def _locked():
     cfg.memory_dir.mkdir(parents=True, exist_ok=True)
     lock_path = cfg.memory_dir / f"{_FILENAME}.lock"
     t0 = time.monotonic()
-    with _PROCESS_LOCK:
-        with open(lock_path, "w") as lock_file:
-            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
-            waited = time.monotonic() - t0
-            if waited > 0.05:
-                log.warning("memory lock waited %.3fs", waited)
-            else:
-                log.debug("memory lock acquired in %.3fs", waited)
-            try:
-                yield
-            finally:
-                fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+    with _PROCESS_LOCK, open(lock_path, "w") as lock_file:
+        fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+        waited = time.monotonic() - t0
+        if waited > 0.05:
+            log.warning("memory lock waited %.3fs", waited)
+        else:
+            log.debug("memory lock acquired in %.3fs", waited)
+        try:
+            yield
+        finally:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
 
 
 def _copy(mem: Memory) -> Memory:

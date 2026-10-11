@@ -10,7 +10,13 @@ from pathlib import Path
 
 from telegram import BotCommand, Update
 from telegram.constants import ChatAction
-from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters
+from telegram.ext import (
+    Application,
+    CommandHandler,
+    ContextTypes,
+    MessageHandler,
+    filters,
+)
 
 import channels
 import telegram_format
@@ -109,7 +115,7 @@ async def _typing(chat_id: int, bot):
         try:
             await task
         except (asyncio.CancelledError, Exception):
-            pass
+            log.debug("telegram: background task ended with error", exc_info=True)
 
 
 class _TelegramChannel:
@@ -320,7 +326,7 @@ async def start_telegram(token: str) -> Application:
         await app.bot.set_my_commands(
             [BotCommand(cmd, desc) for cmd, desc in _TELEGRAM_BOT_COMMANDS]
         )
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         log.warning("failed to register Telegram bot commands: %s", e)
     await app.start()
     await app.updater.start_polling(allowed_updates=Update.ALL_TYPES)

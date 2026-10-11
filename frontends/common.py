@@ -428,9 +428,11 @@ async def run_heartbeat(
 
     cfg = get_config()
     lines = [
-        f"heartbeat enabled={cfg.heartbeat_enabled} "
-        f"interval={cfg.heartbeat_interval_seconds}s "
-        f"default_channel={cfg.heartbeat_default_channel or '(unset)'}",
+        (
+            f"heartbeat enabled={cfg.heartbeat_enabled} "
+            f"interval={cfg.heartbeat_interval_seconds}s "
+            f"default_channel={cfg.heartbeat_default_channel or '(unset)'}"
+        ),
     ]
     if warn_no_discord_channel and cfg.discord_heartbeat_channel is None:
         lines.append("(no discord_heartbeat_channel configured — discord replies will drop)")

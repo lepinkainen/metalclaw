@@ -6,7 +6,6 @@ import litellm
 
 from providers.base import AssistantMessage, ToolCall
 
-
 # Silently strip kwargs the underlying model does not understand. Lets one
 # provider module front a heterogeneous Bedrock catalog (Claude, Nova, Llama,
 # Mistral) without per-model branching here.

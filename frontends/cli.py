@@ -317,7 +317,7 @@ async def run_cli_repl() -> None:
         )
         defaults = fetch_model_defaults(cfg.ollama_url, cfg.model) if need_query else {}
 
-        def _fmt(cfg_val: float | int | None, default_val: float | int | None) -> str:
+        def _fmt(cfg_val: float | None, default_val: float | None) -> str:
             if cfg_val is not None:
                 return f"{cfg_val}"
             if default_val is not None:

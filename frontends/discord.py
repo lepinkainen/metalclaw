@@ -91,7 +91,7 @@ def _split_for_discord(text: str, limit: int = _DISCORD_MAX_MESSAGE) -> list[str
     return fixed
 
 
-async def _discord_send(channel: "discord.abc.Messageable", text: str) -> None:
+async def _discord_send(channel: discord.abc.Messageable, text: str) -> None:
     """Send text to a Discord channel, splitting if it exceeds the 2000-char limit."""
     if not text:
         return
@@ -100,12 +100,12 @@ async def _discord_send(channel: "discord.abc.Messageable", text: str) -> None:
     for chunk in chunks:
         try:
             await channel.send(chunk)
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             log.warning("discord send failed: %s", e, exc_info=True)
             return
 
 
-def _send_for(channel: "discord.abc.Messageable") -> common.SendFn:
+def _send_for(channel: discord.abc.Messageable) -> common.SendFn:
     async def _send(text: str) -> None:
         await _discord_send(channel, text)
     return _send
@@ -173,7 +173,7 @@ def _tool_status_for(channel) -> common.ToolStatusReporter | None:
 
 
 async def _discord_dispatch_command(
-    message: "discord.Message", cmd: str, args: str
+    message: discord.Message, cmd: str, args: str
 ) -> None:
     channel_id = message.channel.id
     scope = _discord_scope_for(channel_id)
@@ -245,7 +245,7 @@ async def _discord_dispatch_command(
                 result = await loop.run_in_executor(
                     None, lambda: tool_obj.func(**params)
                 )
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             log.exception("discord: tool command /%s failed", cmd)
             await _discord_send(message.channel, f"Error: {e}")
             return
@@ -256,7 +256,7 @@ async def _discord_dispatch_command(
 
 
 def _discord_should_respond(
-    message: "discord.Message", bot_user: "discord.ClientUser | None"
+    message: discord.Message, bot_user: discord.ClientUser | None
 ) -> bool:
     """Decide whether to handle a non-command message based on channel context."""
     cid = message.channel.id
@@ -284,7 +284,7 @@ def _discord_should_respond(
 
 
 async def _discord_handle_message(
-    client: discord.Client, message: "discord.Message"
+    client: discord.Client, message: discord.Message
 ) -> None:
     if message.author.bot:
         return
@@ -328,7 +328,7 @@ async def _discord_handle_message(
                         lambda: chat(messages, on_tool_call=on_tool),
                     ),
                 )
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             log.exception("discord: turn failed channel_id=%d", channel_id)
             await _discord_send(message.channel, f"Error: {e}")
             return
@@ -342,7 +342,7 @@ class _MetalclawDiscordClient(discord.Client):
     async def on_ready(self) -> None:
         log.info("discord ready as %s", self.user)
 
-    async def on_message(self, message: "discord.Message") -> None:
+    async def on_message(self, message: discord.Message) -> None:
         try:
             await _discord_handle_message(self, message)
         except Exception:
@@ -370,5 +370,5 @@ async def stop_discord(client: discord.Client, task: asyncio.Task) -> None:
         log.exception("discord client close failed")
     try:
         await asyncio.wait_for(task, timeout=5)
-    except (asyncio.TimeoutError, asyncio.CancelledError):
+    except (TimeoutError, asyncio.CancelledError):
         task.cancel()

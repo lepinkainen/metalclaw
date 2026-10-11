@@ -37,7 +37,7 @@ import tempfile
 import threading
 import time
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -179,7 +179,7 @@ def parse_iso(text: str) -> datetime:
     """Parse an ISO-8601 timestamp; tz-naive treated as UTC."""
     dt = datetime.fromisoformat(text)
     if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=timezone.utc)
+        dt = dt.replace(tzinfo=UTC)
     return dt
 
 
@@ -202,13 +202,12 @@ def _lock_path() -> Path:
 def _ledger_lock():
     """Process + cross-process exclusive lock on the ledger sidecar."""
     lp = _lock_path()
-    with _LEDGER_PROCESS_LOCK:
-        with open(lp, "w") as f:
-            fcntl.flock(f.fileno(), fcntl.LOCK_EX)
-            try:
-                yield
-            finally:
-                fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+    with _LEDGER_PROCESS_LOCK, open(lp, "w") as f:
+        fcntl.flock(f.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(f.fileno(), fcntl.LOCK_UN)
 
 
 def _action_from_dict(raw: dict[str, Any]) -> HeartbeatAction:
@@ -242,7 +241,7 @@ def _parse_ledger(text: str) -> HeartbeatLedger:
     except yaml.YAMLError as e:
         raise ValueError(f"heartbeat.yaml parse error: {e}") from e
     if not isinstance(data, dict):
-        raise ValueError("heartbeat.yaml top-level must be a mapping")
+        raise ValueError("heartbeat.yaml top-level must be a mapping")  # noqa: TRY004 callers catch ValueError
     raw_actions = data.get("actions") or []
     raw_completed = data.get("completed") or []
     actions = [_action_from_dict(a) for a in raw_actions if isinstance(a, dict)]
@@ -290,7 +289,7 @@ def load_ledger() -> HeartbeatLedger:
 
 
 def _now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+    return datetime.now(UTC).isoformat(timespec="seconds")
 
 
 def _generate_id(existing: set[str]) -> str:
@@ -536,7 +535,7 @@ async def run_tick(*, now: datetime | None = None) -> dict[str, str]:
     """
     import chat_loop  # local to avoid circular import at module load
 
-    now = now or datetime.now(timezone.utc)
+    now = now or datetime.now(UTC)
     cfg = get_config()
     tick_t0 = time.monotonic()
     if not _within_active_hours(now.astimezone(), cfg.heartbeat_active_hours):
@@ -572,8 +571,8 @@ async def run_tick(*, now: datetime | None = None) -> dict[str, str]:
 
         try:
             reply = await _run_action(action, now, chat_loop.chat, chat_loop.build_system_prompt)
-        except Exception as e:
-            log.exception("heartbeat action %s: chat turn failed: %s", action.id, e)
+        except Exception:
+            log.exception("heartbeat action %s: chat turn failed", action.id)
             n_failed += 1
             continue
         n_ran += 1
@@ -616,10 +615,10 @@ async def run_tick(*, now: datetime | None = None) -> dict[str, str]:
 
         try:
             await channel.notify(target_scope or "", clean)
-        except Exception as e:
+        except Exception:
             log.exception(
-                "heartbeat action %s: channel notify failed: %s — keeping active",
-                action.id, e,
+                "heartbeat action %s: channel notify failed — keeping active",
+                action.id,
             )
             n_failed += 1
             continue
@@ -660,7 +659,7 @@ def summary(max_chars: int = 400) -> str:
     """Compact summary of active actions for system-prompt injection."""
     try:
         actions = list_active()
-    except Exception:
+    except Exception:  # noqa: BLE001
         return ""
     if not actions:
         return ""
@@ -697,10 +696,10 @@ async def run(stop: asyncio.Event) -> None:
     while not stop.is_set():
         try:
             await run_tick()
-        except Exception as e:
-            log.exception("heartbeat tick crashed: %s", e)
+        except Exception:
+            log.exception("heartbeat tick crashed")
         try:
             await asyncio.wait_for(stop.wait(), timeout=interval)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             pass
     log.info("heartbeat loop stopped")

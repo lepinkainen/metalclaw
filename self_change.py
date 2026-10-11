@@ -3,7 +3,7 @@ import logging
 import subprocess
 import time
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 log = logging.getLogger(__name__)
@@ -43,7 +43,7 @@ def _run(cmd: list[str], cwd: Path, timeout: int = 60) -> tuple[int, str, str]:
     log.info("subprocess start: %.200s (cwd=%s timeout=%ds)", label, cwd, timeout)
     t0 = time.monotonic()
     try:
-        r = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, timeout=timeout)
+        r = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, timeout=timeout, check=False)
     except subprocess.TimeoutExpired:
         log.error("subprocess timed out after %ds: %.200s", timeout, label)
         return -1, "", f"timed out after {timeout}s"
@@ -195,7 +195,7 @@ Make the minimal changes needed to fulfil the request. Edit existing files or cr
 def _log_change(repo_root: Path, result: SelfChangeResult) -> None:
     log_path = repo_root / "changes.jsonl"
     entry = {
-        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "timestamp": datetime.now(UTC).isoformat(),
         "request": result.request,
         "files_changed": result.files_changed,
         "checks_run": result.checks_run,

@@ -1,6 +1,6 @@
 import asyncio
 import json
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from unittest.mock import patch
 from zoneinfo import ZoneInfo
 
@@ -228,33 +228,33 @@ def _cron(days=("mon",), time="07:00", tz="UTC", action_id="abc123"):
 
 
 def test_at_due_after_target():
-    now = datetime(2026, 5, 8, 12, 0, tzinfo=timezone.utc)
+    now = datetime(2026, 5, 8, 12, 0, tzinfo=UTC)
     assert heartbeat.is_action_due(_at(at_iso="2026-05-08T11:00:00+00:00"), None, now)
 
 
 def test_at_not_due_before_target():
-    now = datetime(2026, 5, 8, 10, 0, tzinfo=timezone.utc)
+    now = datetime(2026, 5, 8, 10, 0, tzinfo=UTC)
     assert not heartbeat.is_action_due(_at(at_iso="2026-05-08T11:00:00+00:00"), None, now)
 
 
 def test_at_already_fired_skips():
-    now = datetime(2026, 5, 8, 12, 0, tzinfo=timezone.utc)
+    now = datetime(2026, 5, 8, 12, 0, tzinfo=UTC)
     last = "2026-05-08T11:30:00+00:00"
     assert not heartbeat.is_action_due(_at(at_iso="2026-05-08T11:00:00+00:00"), last, now)
 
 
 def test_every_first_run_due():
-    assert heartbeat.is_action_due(_every(60), None, datetime.now(timezone.utc))
+    assert heartbeat.is_action_due(_every(60), None, datetime.now(UTC))
 
 
 def test_every_within_interval_skips():
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     last = (now - timedelta(seconds=10)).isoformat()
     assert not heartbeat.is_action_due(_every(60), last, now)
 
 
 def test_every_after_interval_due():
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     last = (now - timedelta(seconds=120)).isoformat()
     assert heartbeat.is_action_due(_every(60), last, now)
 
@@ -262,7 +262,7 @@ def test_every_after_interval_due():
 def test_cron_helsinki_monday_morning_due():
     tz = ZoneInfo("Europe/Helsinki")
     helsinki_mon_0700 = datetime(2026, 5, 11, 7, 0, tzinfo=tz)
-    now_utc = helsinki_mon_0700.astimezone(timezone.utc)
+    now_utc = helsinki_mon_0700.astimezone(UTC)
     action = _cron(days=("mon", "thu"), time="07:00", tz="Europe/Helsinki")
     assert heartbeat.is_action_due(action, None, now_utc)
 
@@ -270,7 +270,7 @@ def test_cron_helsinki_monday_morning_due():
 def test_cron_skipped_on_other_weekday():
     tz = ZoneInfo("Europe/Helsinki")
     helsinki_tue_0700 = datetime(2026, 5, 12, 7, 0, tzinfo=tz)
-    now_utc = helsinki_tue_0700.astimezone(timezone.utc)
+    now_utc = helsinki_tue_0700.astimezone(UTC)
     action = _cron(days=("mon", "thu"), time="07:00", tz="Europe/Helsinki")
     assert not heartbeat.is_action_due(action, None, now_utc)
 
@@ -278,7 +278,7 @@ def test_cron_skipped_on_other_weekday():
 def test_cron_skipped_before_schedule_time():
     tz = ZoneInfo("Europe/Helsinki")
     helsinki_mon_0600 = datetime(2026, 5, 11, 6, 0, tzinfo=tz)
-    now_utc = helsinki_mon_0600.astimezone(timezone.utc)
+    now_utc = helsinki_mon_0600.astimezone(UTC)
     action = _cron(days=("mon",), time="07:00", tz="Europe/Helsinki")
     assert not heartbeat.is_action_due(action, None, now_utc)
 
@@ -286,8 +286,8 @@ def test_cron_skipped_before_schedule_time():
 def test_cron_skipped_when_already_run_today():
     tz = ZoneInfo("Europe/Helsinki")
     helsinki_mon_0800 = datetime(2026, 5, 11, 8, 0, tzinfo=tz)
-    now_utc = helsinki_mon_0800.astimezone(timezone.utc)
-    last_run = datetime(2026, 5, 11, 7, 5, tzinfo=tz).astimezone(timezone.utc).isoformat()
+    now_utc = helsinki_mon_0800.astimezone(UTC)
+    last_run = datetime(2026, 5, 11, 7, 5, tzinfo=tz).astimezone(UTC).isoformat()
     action = _cron(days=("mon",), time="07:00", tz="Europe/Helsinki")
     assert not heartbeat.is_action_due(action, last_run, now_utc)
 
@@ -370,7 +370,7 @@ def test_run_tick_alert_routes_to_channel(cfg):
 
 
 def test_run_tick_one_shot_archives_after_notify(cfg):
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     fire_at = (now - timedelta(minutes=1)).isoformat()
     heartbeat.create_action(
         kind=heartbeat.ActionKind.AT,
@@ -390,7 +390,7 @@ def test_run_tick_one_shot_archives_after_notify(cfg):
 
 
 def test_run_tick_one_shot_kept_when_notify_fails(cfg):
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     fire_at = (now - timedelta(minutes=1)).isoformat()
     heartbeat.create_action(
         kind=heartbeat.ActionKind.AT,

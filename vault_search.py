@@ -157,7 +157,7 @@ def search(
                 except ValueError:
                     rel = current_path
             else:
-                rel = current_path[2:] if current_path.startswith("./") else current_path
+                rel = current_path.removeprefix("./")
             before = pending_before.pop(current_path, [])
             hits.append(
                 {

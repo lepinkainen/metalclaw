@@ -68,7 +68,7 @@ class OllamaProvider:
             log.exception(
                 "ollama request failed after %.2fs model=%s status=%s",
                 time.monotonic() - t0, self.model,
-                getattr(getattr(e, "response", None), "status_code", None),
+                getattr(getattr(e, "response", None), "status_code", None),  # noqa: TRY401
             )
             raise
         body = response.json()

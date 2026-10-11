@@ -5,8 +5,13 @@ from pathlib import Path
 from typing import Any, Literal
 
 import yaml
-from pydantic import BaseModel, ConfigDict, ValidationError, field_validator, model_validator
-
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    ValidationError,
+    field_validator,
+    model_validator,
+)
 
 log = logging.getLogger(__name__)
 
@@ -86,7 +91,7 @@ class Config(BaseModel):
         if v is None:
             return ()
         if isinstance(v, str) or not isinstance(v, (list, tuple)):
-            raise ValueError("discord_chat_channels must be a list of integer channel IDs")
+            raise ValueError("discord_chat_channels must be a list of integer channel IDs")  # noqa: TRY004 pydantic validator
         try:
             return tuple(int(c) for c in v)
         except (TypeError, ValueError) as e:
@@ -108,7 +113,7 @@ class Config(BaseModel):
         if v is None:
             return ()
         if isinstance(v, str) or not isinstance(v, (list, tuple)):
-            raise ValueError("vault_search_excludes must be a list of glob patterns")
+            raise ValueError("vault_search_excludes must be a list of glob patterns")  # noqa: TRY004 pydantic validator
         return tuple(str(e) for e in v)
 
     @field_validator("heartbeat_active_hours", mode="before")
@@ -121,7 +126,7 @@ class Config(BaseModel):
         return (int(v[0]), int(v[1]))
 
     @model_validator(mode="after")
-    def _resolve_and_check(self) -> "Config":
+    def _resolve_and_check(self) -> Config:
         provider_models = {
             "ollama": self.model,
             "litellm": self.litellm_model,
@@ -137,7 +142,7 @@ def _load_yaml(path: Path) -> dict[str, Any]:
     with path.open("r", encoding="utf-8") as f:
         data = yaml.safe_load(f) or {}
     if not isinstance(data, dict):
-        raise ValueError(f"{path}: top-level YAML must be a mapping")
+        raise ValueError(f"{path}: top-level YAML must be a mapping")  # noqa: TRY004 callers catch ValueError
     return data
 
 

@@ -1,5 +1,5 @@
+import tools
 from registry import TOOLS
-import tools  # noqa: F401
 
 
 def test_weather_tool_is_registered_under_weather_name():

@@ -84,6 +84,7 @@ def test_reject_only_reverts_claude_changes(tmp_path):
         capture_output=True,
         text=True,
         timeout=60,
+        check=False,
     )
 
 

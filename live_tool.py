@@ -17,7 +17,7 @@ import logging
 import re
 import sys
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 import registry
@@ -227,7 +227,7 @@ def _run_gates(state: LiveAddState, pre_keys: set[str]) -> None:
         state.gate_messages["import"] = (
             f"registered: {new_keys}" if new_keys else "module imported but no @tool ran"
         )
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         state.gate_results["import"] = False
         state.gate_messages["import"] = f"{type(exc).__name__}: {exc}"
         log.exception("add-tool import gate failed for tools.%s", state.slug)
@@ -259,7 +259,7 @@ def _append_to_init(repo_root: Path, slug: str, names: list[str]) -> None:
     lines = text.splitlines()
     insert_at = 0
     for i, ln in enumerate(lines):
-        if ln.startswith("from .") or ln.startswith("from tools."):
+        if ln.startswith(("from .", "from tools.")):
             insert_at = i + 1
     lines.insert(insert_at, import_line)
     text = "\n".join(lines) + ("\n" if text.endswith("\n") else "")
@@ -293,7 +293,7 @@ def _merge_into_all(text: str, new_names: list[str]) -> str:
 def _log_change(repo_root: Path, state: LiveAddState, *, approved: bool) -> None:
     log_path = repo_root / "changes.jsonl"
     entry = {
-        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "timestamp": datetime.now(UTC).isoformat(),
         "kind": "add-tool",
         "request": state.request,
         "slug": state.slug,

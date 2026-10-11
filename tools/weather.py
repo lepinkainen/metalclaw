@@ -1,5 +1,5 @@
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from pydantic import BaseModel, Field
@@ -82,7 +82,7 @@ def weather(location: str) -> dict[str, Any]:
     timeseries = resp.json()["properties"]["timeseries"]
     log.debug("weather: met.no status=%s entries=%d", getattr(resp, "status_code", None), len(timeseries))
 
-    today = datetime.now(timezone.utc).date()
+    today = datetime.now(UTC).date()
     tomorrow = today + timedelta(days=1)
 
     by_day: dict[str, list[dict[str, Any]]] = {}

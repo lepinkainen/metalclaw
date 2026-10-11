@@ -85,7 +85,9 @@ def _render_tools_appendix() -> str:
 
 
 def _render_commands_appendix() -> str:
-    from frontends import common  # lazy: avoids importing the frontend layer at tool-registration time
+    from frontends import (
+        common,  # lazy: avoids importing the frontend layer at tool-registration time
+    )
 
     lines = ["## Slash command reference", ""]
     for entry in common.HELP_LINES[1:]:

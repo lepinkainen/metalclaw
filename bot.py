@@ -19,16 +19,20 @@ import heartbeat
 import memory
 from config import get_config
 from frontends import telegram as _telegram
-from frontends.cli import console, run_cli_repl as _run_cli_repl
+from frontends.cli import console
+from frontends.cli import run_cli_repl as _run_cli_repl
 from frontends.discord import (
     start_discord as _start_discord,
+)
+from frontends.discord import (
     stop_discord as _stop_discord,
 )
 from frontends.telegram import (
     start_telegram as _start_telegram,
+)
+from frontends.telegram import (
     stop_telegram as _stop_telegram,
 )
-
 
 log = logging.getLogger(__name__)
 
@@ -38,7 +42,7 @@ _LOG_FORMAT = "%(asctime)s %(levelname)-7s %(name)s: %(message)s"
 class _NoTraceback(logging.Formatter):
     """Console formatter: one-line errors; full tracebacks go to the log file only."""
 
-    def formatException(self, ei) -> str:  # noqa: N802
+    def formatException(self, ei) -> str:
         return ""
 
 
@@ -161,7 +165,7 @@ async def _async_main(
         stop.set()
         try:
             await asyncio.wait_for(hb_task, timeout=5)
-        except (asyncio.TimeoutError, asyncio.CancelledError):
+        except (TimeoutError, asyncio.CancelledError):
             hb_task.cancel()
         if tg_app is not None:
             await _stop_telegram(tg_app)
