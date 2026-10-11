@@ -7,16 +7,16 @@ dependencies = [
     "beautifulsoup4>=4.12",
     "discord.py>=2.3,<3.0",
     "httpx>=0.28.1",
-    "litellm[bedrock]>=1.50",
+    "litellm>=1.84",
     "markdown-it-py>=3.0",
     "markdownify>=0.13",
     "prompt_toolkit>=3.0",
     "pydantic>=2.6",
-    "pydantic-settings>=2.2",
+    "pydantic-settings>=2.14.2",
     "python-telegram-bot>=21.0",
     "pyyaml>=6.0",
     "rich>=13.0",
 ]
 
 [dependency-groups]
-dev = ["ruff", "pytest"]
+dev = ["ruff", "pytest>=9.0.3"]
