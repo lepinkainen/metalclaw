@@ -21,6 +21,8 @@ from config import get_config
 from frontends import common
 from registry import TOOLS
 
+log = logging.getLogger(__name__)
+
 _discord_sessions: dict[int, list[dict]] = {}
 _discord_session_locks: dict[int, asyncio.Lock] = {}
 _known_discord_channels: set[int] = set()
@@ -93,11 +95,13 @@ async def _discord_send(channel: "discord.abc.Messageable", text: str) -> None:
     """Send text to a Discord channel, splitting if it exceeds the 2000-char limit."""
     if not text:
         return
-    for chunk in _split_for_discord(text):
+    chunks = _split_for_discord(text)
+    log.info("discord: sending %d chars in %d message(s)", len(text), len(chunks))
+    for chunk in chunks:
         try:
             await channel.send(chunk)
         except Exception as e:  # noqa: BLE001
-            logging.warning("discord send failed: %s", e)
+            log.warning("discord send failed: %s", e, exc_info=True)
             return
 
 
@@ -116,7 +120,7 @@ class _DiscordChannel:
 
     async def notify(self, scope: str, text: str) -> None:
         if self._heartbeat_channel_id is None:
-            logging.warning(
+            log.warning(
                 "discord heartbeat: discord_heartbeat_channel unset, dropping reply for scope %s",
                 scope,
             )
@@ -126,12 +130,13 @@ class _DiscordChannel:
             try:
                 ch = await self._client.fetch_channel(self._heartbeat_channel_id)
             except Exception as e:  # noqa: BLE001
-                logging.warning(
+                log.warning(
                     "discord heartbeat: cannot resolve channel %s: %s",
                     self._heartbeat_channel_id,
                     e,
                 )
                 return
+        log.info("discord: notify channel=%s %d chars (scope %s)", self._heartbeat_channel_id, len(text), scope)
         await _discord_send(ch, text)
 
     def active_scopes(self) -> Iterable[str]:
@@ -140,11 +145,31 @@ class _DiscordChannel:
 
 def _get_discord_session(channel_id: int) -> list[dict]:
     if channel_id not in _discord_sessions:
+        log.info("discord: new session channel_id=%d", channel_id)
         now = datetime.now().strftime("%Y-%m-%d %H:%M")
         _discord_sessions[channel_id] = [
             {"role": "system", "content": build_system_prompt(now)}
         ]
     return _discord_sessions[channel_id]
+
+
+# Per-channel live tool-status toggle; absent -> config.show_tool_calls.
+_discord_show_tools: dict[int, bool] = {}
+
+
+def _tool_status_for(channel) -> common.ToolStatusReporter | None:
+    if not _discord_show_tools.get(channel.id, get_config().show_tool_calls):
+        return None
+
+    async def _send(text: str):
+        return await channel.send(text)
+
+    async def _edit(msg, text: str):
+        await msg.edit(content=text)
+
+    return common.ToolStatusReporter(
+        asyncio.get_running_loop(), _send, _edit, common.DISCORD_STATUS_LIMIT
+    )
 
 
 async def _discord_dispatch_command(
@@ -154,13 +179,20 @@ async def _discord_dispatch_command(
     scope = _discord_scope_for(channel_id)
     send = _send_for(message.channel)
     canon = common.canonicalize(cmd) or cmd
+    log.info("discord: command /%s (canon=%s) channel_id=%d args=%d chars", cmd, canon, channel_id, len(args))
 
     if canon == "help":
         await _discord_send(message.channel, _DISCORD_HELP_TEXT)
+    elif canon == "tools":
+        cur = _discord_show_tools.get(channel_id, get_config().show_tool_calls)
+        new, reply = common.parse_tools_arg(cur, args)
+        _discord_show_tools[channel_id] = new
+        await _discord_send(message.channel, reply)
     elif canon == "new":
         old = _discord_sessions.pop(channel_id, None)
         if old is not None:
             forget_session_provider(old)
+        log.info("discord: session reset channel_id=%d (had_session=%s)", channel_id, old is not None)
         await _discord_send(message.channel, "Conversation reset.")
     elif canon == "remember":
         await common.run_remember(send, args)
@@ -181,6 +213,7 @@ async def _discord_dispatch_command(
             _get_discord_session(channel_id),
             args.strip(),
             scope=scope,
+            on_tool_call=_tool_status_for(message.channel),
         )
     elif canon == "add-tool":
         await common.run_add_tool(send, args, scope)
@@ -197,10 +230,13 @@ async def _discord_dispatch_command(
         try:
             params = parser(args)
         except ValueError as e:
+            log.info("discord: /%s bad args: %s", cmd, e)
             await _discord_send(message.channel, str(e))
             return
+        log.info("discord: tool command /%s -> %s params=%.200s", cmd, tool_name, params)
         tool_obj = TOOLS.get(tool_name)
         if tool_obj is None:
+            log.warning("discord: tool %s unavailable", tool_name)
             await _discord_send(message.channel, f"{tool_name} tool unavailable")
             return
         loop = asyncio.get_running_loop()
@@ -210,10 +246,12 @@ async def _discord_dispatch_command(
                     None, lambda: tool_obj.func(**params)
                 )
         except Exception as e:  # noqa: BLE001
+            log.exception("discord: tool command /%s failed", cmd)
             await _discord_send(message.channel, f"Error: {e}")
             return
         await _discord_send(message.channel, formatter(result))
     else:
+        log.info("discord: unknown command /%s", cmd)
         await _discord_send(message.channel, f"Unknown command: /{cmd}  (try /help)")
 
 
@@ -221,12 +259,16 @@ def _discord_should_respond(
     message: "discord.Message", bot_user: "discord.ClientUser | None"
 ) -> bool:
     """Decide whether to handle a non-command message based on channel context."""
+    cid = message.channel.id
     if isinstance(message.channel, discord.DMChannel):
+        log.debug("discord: respond=yes channel=%d reason=dm", cid)
         return True
     cfg = get_config()
     if message.channel.id in cfg.discord_chat_channels:
+        log.debug("discord: respond=yes channel=%d reason=chat_channel", cid)
         return True
     if bot_user is not None and bot_user in message.mentions:
+        log.debug("discord: respond=yes channel=%d reason=mention", cid)
         return True
     ref = message.reference
     if (
@@ -235,7 +277,9 @@ def _discord_should_respond(
         and bot_user is not None
         and ref.resolved.author.id == bot_user.id
     ):
+        log.debug("discord: respond=yes channel=%d reason=reply_to_bot", cid)
         return True
+    log.debug("discord: respond=no channel=%d reason=guild channel without mention/reply", cid)
     return False
 
 
@@ -251,6 +295,11 @@ async def _discord_handle_message(
     bot_user = client.user
     text = _strip_bot_mention(raw, bot_user.id) if bot_user is not None else raw
     parsed = _parse_command(text)
+    log.info(
+        "discord: message channel_id=%d user=%s len=%d command=%s",
+        message.channel.id, message.author, len(text), parsed[0] if parsed else None,
+    )
+    log.debug("discord: message text: %.500s", text)
 
     if parsed is None and not _discord_should_respond(message, bot_user):
         return
@@ -268,30 +317,36 @@ async def _discord_handle_message(
             await _discord_dispatch_command(message, cmd, args)
             return
 
+        on_tool = _tool_status_for(message.channel)
         try:
             async with message.channel.typing():
                 _, _, clean_reply = await run_turn(
                     messages,
                     text,
                     lambda: scoped_chat(
-                        _discord_scope_for(channel_id), lambda: chat(messages)
+                        _discord_scope_for(channel_id),
+                        lambda: chat(messages, on_tool_call=on_tool),
                     ),
                 )
         except Exception as e:  # noqa: BLE001
+            log.exception("discord: turn failed channel_id=%d", channel_id)
             await _discord_send(message.channel, f"Error: {e}")
             return
+        if on_tool is not None:
+            await on_tool.drain()
+        log.info("discord: reply channel_id=%d len=%d", channel_id, len(clean_reply))
         await _discord_send(message.channel, clean_reply)
 
 
 class _MetalclawDiscordClient(discord.Client):
     async def on_ready(self) -> None:
-        logging.info("discord ready as %s", self.user)
+        log.info("discord ready as %s", self.user)
 
     async def on_message(self, message: "discord.Message") -> None:
         try:
             await _discord_handle_message(self, message)
         except Exception:
-            logging.exception("discord on_message crashed")
+            log.exception("discord on_message crashed")
 
 
 async def start_discord(token: str) -> tuple[discord.Client, asyncio.Task]:
@@ -301,6 +356,10 @@ async def start_discord(token: str) -> tuple[discord.Client, asyncio.Task]:
     client = _MetalclawDiscordClient(intents=intents)
     channels.register(_DiscordChannel(client, cfg.discord_heartbeat_channel))
     task = asyncio.create_task(client.start(token))
+    log.info(
+        "discord: starting gateway (chat_channels=%d heartbeat_channel=%s)",
+        len(cfg.discord_chat_channels), cfg.discord_heartbeat_channel,
+    )
     return client, task
 
 
@@ -308,7 +367,7 @@ async def stop_discord(client: discord.Client, task: asyncio.Task) -> None:
     try:
         await client.close()
     except Exception:
-        logging.exception("discord client close failed")
+        log.exception("discord client close failed")
     try:
         await asyncio.wait_for(task, timeout=5)
     except (asyncio.TimeoutError, asyncio.CancelledError):

@@ -27,6 +27,7 @@
 | `litellm_model` | `str` | `"bedrock/anthropic.claude-haiku-4-5"` | litellm-prefixed model id. |
 | `aws_region` | `str?` | None | Threaded to litellm as `aws_region_name`. |
 | `aws_profile` | `str?` | None | Threaded to litellm as `aws_profile_name`. |
+| `show_tool_calls` | `bool` | `True` | Live tool-call status messages (Telegram/Discord) and CLI `/tools` initial state. Per-chat `/tools on\|off` overrides in memory. |
 | `escalation_enabled` | `bool` | `False` | Gates `escalate_to_big_model` + `/big`. |
 | `escalation_provider` | provider literal | `"litellm"` | |
 | `escalation_model` | `str?` | None | Defaults to per-provider model in `_resolve_and_check`. |

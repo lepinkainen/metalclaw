@@ -14,6 +14,7 @@ its own reply mechanism.
 
 import argparse
 import asyncio
+import logging
 import shlex
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
@@ -25,6 +26,8 @@ import live_tool
 import memory
 from chat_loop import chat_via_escalation, run_turn, scoped_chat
 from config import get_config
+
+log = logging.getLogger(__name__)
 
 SendFn = Callable[[str], Awaitable[None]]
 
@@ -80,7 +83,7 @@ COMMANDS: tuple[CommandSpec, ...] = (
     CommandSpec("diff",          "/diff — show diff of a pending self-change",                             "show diff of a pending self-change",                             ALL_FRONTENDS),
     CommandSpec("self-edit",     "/self-edit <description> — make a general code change (CLI only)",       "make a general code change (full lint/build/test)",              frozenset({CLI})),
     CommandSpec("think",         "/think — toggle display of model thinking (off by default)",             "toggle display of model thinking (off by default)",              frozenset({CLI})),
-    CommandSpec("tools",         "/tools — toggle dim trace of tool calls (off by default)",               "toggle dim trace of tool calls (off by default)",                frozenset({CLI})),
+    CommandSpec("tools",         "/tools [on|off] — show/toggle live tool-call status",                    "show/toggle live tool-call status: [on|off]",                    ALL_FRONTENDS),
     CommandSpec("new",           "/new — reset this conversation",                                         "reset this conversation",                                        ALL_FRONTENDS),
     CommandSpec("help",          "/help — this message",                                                   "show available commands",                                        ALL_FRONTENDS),
 )
@@ -325,6 +328,7 @@ TOOL_COMMANDS: dict[str, tuple] = {
 
 
 async def run_remember(send: SendFn, args: str) -> None:
+    log.info("/remember args=%.200r", args)
     if "=" not in args:
         await send("usage: /remember <key>=<value>")
         return
@@ -334,15 +338,18 @@ async def run_remember(send: SendFn, args: str) -> None:
         await send("usage: /remember <key>=<value>")
         return
     memory.set_preference(key, value)
+    log.info("/remember saved key=%r", key)
     await send(f"saved {key}={value}")
 
 
 async def run_forget(send: SendFn, args: str) -> None:
     matcher = args.strip()
+    log.info("/forget matcher=%r", matcher)
     if not matcher:
         await send("usage: /forget <substring>")
         return
     res = memory.forget(matcher)
+    log.info("/forget status=%s matches=%d", res.status, len(res.matches or []))
     if res.status == "removed":
         await send(f"forgot: {res.entry}")
     elif res.status == "ambiguous":
@@ -355,6 +362,7 @@ async def run_forget(send: SendFn, args: str) -> None:
 
 
 async def run_memory(send: SendFn) -> None:
+    log.info("/memory")
     await send(memory.render_full())
 
 
@@ -368,6 +376,7 @@ async def run_manual(send: SendFn, args: str) -> None:
     from tools import manual as manual_tool
 
     arg = args.strip()
+    log.info("/manual arg=%r", arg)
     if arg == "init":
         res = manual_tool.init_manual()
         if res["status"] == "created":
@@ -411,6 +420,7 @@ def _format_action_line(action: heartbeat.HeartbeatAction) -> str:
 async def run_heartbeat(
     send: SendFn, scope: str, sub: str, *, warn_no_discord_channel: bool = False
 ) -> None:
+    log.info("/heartbeat sub=%r scope=%s", sub, scope)
     if sub == "run":
         asyncio.create_task(heartbeat.run_tick())
         await send("heartbeat tick fired")
@@ -428,6 +438,7 @@ async def run_heartbeat(
     try:
         ledger = heartbeat.load_ledger()
     except Exception as e:
+        log.exception("/heartbeat ledger read failed")
         await send("\n".join([*lines, f"ledger read failed: {e}"]))
         return
 
@@ -456,17 +467,20 @@ async def run_big(
     messages: list[dict],
     query: str,
     scope: str | None = None,
+    on_tool_call: Callable[[str, dict, str], None] | None = None,
 ) -> None:
     """Run an escalation turn. ``typing_ctx`` is an async context manager
     (e.g. Telegram's typing pulser, Discord's ``channel.typing()``, or
     ``contextlib.nullcontext()``) shown while the call blocks. ``scope``
     pins ``chat_loop.current_scope`` for the duration of the turn so any
     tool the big model calls can resolve the active surface."""
+    log.info("/big scope=%s query=%d chars", scope, len(query))
     if not query:
         await send("usage: /big <query>")
         return
     cfg = get_config()
     if not cfg.escalation_enabled:
+        log.warning("/big refused: escalation disabled")
         await send("escalation disabled — set escalation_enabled: true in config.yaml")
         return
     try:
@@ -474,12 +488,187 @@ async def run_big(
             _, _, clean_reply = await run_turn(
                 messages,
                 query,
-                lambda: scoped_chat(scope, lambda: chat_via_escalation(messages)),
+                lambda: scoped_chat(
+                    scope,
+                    lambda: chat_via_escalation(messages, on_tool_call=on_tool_call),
+                ),
             )
     except Exception as e:
+        log.exception("/big failed")
         await send(f"Error: {e}")
         return
+    log.info("/big reply %d chars", len(clean_reply))
+    if isinstance(on_tool_call, ToolStatusReporter):
+        await on_tool_call.drain()
     await send(clean_reply)
+
+
+# --- live tool-call status ---
+
+_TOOL_EMOJI_EXACT = {
+    "mark_emails_reported": "✅",
+    "read_email": "📖",
+    "read_note": "📖",
+    "search_vault": "🔍",
+    "weather": "🌦️",
+    "get_weather": "🌦️",
+    "train_departures": "🚆",
+    "roll_die": "🎲",
+    "escalate_to_big_model": "🚀",
+}
+# first match wins
+_TOOL_EMOJI_PREFIX = (
+    ("add_email_label", "🏷️"),
+    ("remove_email_label", "🏷️"),
+    ("list_email_label", "🏷️"),
+    ("email_label", "🏷️"),
+    ("check_new_mail", "📧"),
+    ("list_email", "📧"),
+    ("weather", "🌦️"),
+    ("manual", "📘"),
+    ("get_manual", "📘"),
+    ("read_manual", "📘"),
+    ("set_user_", "🧠"),
+    ("add_user_", "🧠"),
+    ("forget_user_", "🧠"),
+    ("get_user_", "🧠"),
+    ("create_heartbeat", "⏰"),
+    ("list_heartbeat", "⏰"),
+    ("cancel_heartbeat", "⏰"),
+)
+_ARG_CHARS = 40
+_LINE_CHARS = 100
+TELEGRAM_STATUS_LIMIT = 4096
+DISCORD_STATUS_LIMIT = 2000
+
+
+def _tool_emoji(name: str) -> str:
+    if name in _TOOL_EMOJI_EXACT:
+        return _TOOL_EMOJI_EXACT[name]
+    for prefix, emoji in _TOOL_EMOJI_PREFIX:
+        if name.startswith(prefix):
+            return emoji
+    return "🔧"
+
+
+def _clip(text: str, n: int) -> str:
+    text = " ".join(text.split())
+    return text if len(text) <= n else text[: n - 1] + "…"
+
+
+def _arg_value(v: object) -> str:
+    if isinstance(v, (list, tuple, set)) and len(v) > 2:
+        return f"{len(v)} items"
+    if isinstance(v, str):
+        return _clip(v, _ARG_CHARS)
+    return _clip(str(v), _ARG_CHARS)
+
+
+def format_tool_status(name: str, args: dict) -> str:
+    """One plain-text line: emoji + tool name + short arg summary."""
+    parts = []
+    for k, v in (args or {}).items():
+        val = _arg_value(v)
+        if isinstance(v, str) and len(args) > 1:
+            parts.append(f"{k}={val!r}")
+        elif isinstance(v, str):
+            parts.append(f'"{val}"' if " " in val or name == "search_vault" else val)
+        elif len(args) > 1:
+            parts.append(f"{k}={val}")
+        else:
+            parts.append(val)
+    line = f"{_tool_emoji(name)} {name}"
+    if parts:
+        line += f"({_clip(', '.join(parts), _LINE_CHARS)})"
+    return _clip(line, _LINE_CHARS + len(name) + 8)
+
+
+class ToolStatusReporter:
+    """Live tool-call status message. ``__call__`` matches ``on_tool_call`` and
+    is invoked from the worker thread; it schedules send/edit on ``loop``.
+
+    ``send(text) -> handle`` posts the first message, ``edit(handle, text)``
+    updates it. Updates run under one asyncio.Lock (FIFO), so the initial send
+    always completes before the first edit. All errors are logged and swallowed.
+    """
+
+    def __init__(
+        self,
+        loop: asyncio.AbstractEventLoop,
+        send: Callable[[str], Awaitable[object]],
+        edit: Callable[[object, str], Awaitable[object]],
+        limit: int = TELEGRAM_STATUS_LIMIT,
+    ) -> None:
+        self._loop = loop
+        self._send = send
+        self._edit = edit
+        self._limit = limit
+        self._lines: list[str] = []
+        self._handle: object = None
+        self._lock = asyncio.Lock()
+        self._pending: list = []
+
+    def _render(self) -> str:
+        lines = self._lines
+        text = "\n".join(lines)
+        if len(text) <= self._limit:
+            return text
+        kept: list[str] = []
+        size = 2  # "…\n"
+        for line in reversed(lines):
+            if size + len(line) + 1 > self._limit:
+                break
+            kept.append(line)
+            size += len(line) + 1
+        return "…\n" + "\n".join(reversed(kept))
+
+    async def _upsert(self, text: str) -> None:
+        async with self._lock:
+            try:
+                if self._handle is None:
+                    self._handle = await self._send(text)
+                else:
+                    await self._edit(self._handle, text)
+            except Exception:
+                log.exception("tool status update failed")
+
+    def __call__(self, name: str, args: dict, result: str) -> None:
+        try:
+            self._lines.append(format_tool_status(name, args))
+            fut = asyncio.run_coroutine_threadsafe(self._upsert(self._render()), self._loop)
+            self._pending.append(fut)
+        except Exception:
+            log.exception("tool status schedule failed")
+
+    async def drain(self) -> None:
+        """Await scheduled updates (event loop) so the status lands before the reply."""
+        pending, self._pending = self._pending, []
+        for fut in pending:
+            try:
+                await asyncio.wrap_future(fut)
+            except Exception:
+                log.exception("tool status drain failed")
+
+    def flush(self, timeout: float = 10.0) -> None:
+        """Block (worker thread / tests) until scheduled updates finish."""
+        for fut in self._pending:
+            try:
+                fut.result(timeout)
+            except Exception:
+                log.exception("tool status flush failed")
+        self._pending.clear()
+
+
+def parse_tools_arg(current: bool, arg: str) -> tuple[bool, str]:
+    """Resolve ``/tools [on|off]`` -> (new_state, reply). No arg shows state."""
+    a = arg.strip().lower()
+    if a in ("on", "off"):
+        new = a == "on"
+    elif a == "":
+        return current, f"tool-call status is {'on' if current else 'off'} (/tools on|off)"
+    else:
+        return current, "usage: /tools [on|off]"
+    return new, f"tool-call status {'on' if new else 'off'}"
 
 
 # --- self-change pending-state pump ---
@@ -501,15 +690,18 @@ def _format_self_change_summary(state: live_tool.LiveAddState) -> str:
 
 
 async def run_add_tool(send: SendFn, request: str, scope: str) -> None:
+    log.info("/add-tool scope=%s request=%.200r", scope, request)
     if not request.strip():
         await send("usage: /add-tool <description of the tool to add>")
         return
     if not get_config().allow_self_modification:
+        log.warning("/add-tool refused: allow_self_modification=false (scope=%s)", scope)
         await send(
             "self-modification is disabled (allow_self_modification: false in config.yaml)"
         )
         return
     if scope in _pending_self_change:
+        log.info("/add-tool refused: self-change already pending for %s", scope)
         await send(
             "a self-change is already pending — /approve, /approve_force, /reject, or /diff first"
         )
@@ -517,14 +709,17 @@ async def run_add_tool(send: SendFn, request: str, scope: str) -> None:
     await send("running self-change… this can take a few minutes.")
     state = await asyncio.to_thread(live_tool.run_add_tool_live, request, REPO_ROOT)
     if state.aborted:
+        log.warning("/add-tool aborted: %s", state.aborted)
         await send(f"aborted: {state.aborted}\n\n{state.plan_output}".strip())
         return
     _pending_self_change[scope] = state
+    log.info("/add-tool pending scope=%s slug=%s gates=%s", scope, state.slug, state.gate_results)
     await send(_format_self_change_summary(state))
 
 
 async def run_approve(send: SendFn, scope: str, *, force: bool = False) -> None:
     state = _pending_self_change.get(scope)
+    log.info("/approve force=%s scope=%s pending=%s", force, scope, state is not None)
     if state is None:
         await send("no pending self-change")
         return
@@ -536,6 +731,7 @@ async def run_approve(send: SendFn, scope: str, *, force: bool = False) -> None:
 
 async def run_reject(send: SendFn, scope: str) -> None:
     state = _pending_self_change.get(scope)
+    log.info("/reject scope=%s pending=%s", scope, state is not None)
     if state is None:
         await send("no pending self-change")
         return
@@ -547,6 +743,7 @@ async def run_reject(send: SendFn, scope: str) -> None:
 
 async def run_diff(send: SendFn, scope: str) -> None:
     state = _pending_self_change.get(scope)
+    log.info("/diff scope=%s pending=%s", scope, state is not None)
     if state is None:
         await send("no pending self-change")
         return

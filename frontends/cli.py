@@ -1,6 +1,7 @@
 """CLI REPL frontend: prompt_toolkit input loop, slash-command handlers, rich rendering."""
 
 import asyncio
+import logging
 from collections.abc import Callable, Iterable
 from datetime import datetime
 from pathlib import Path
@@ -26,8 +27,11 @@ from chat_loop import (
 )
 from config import get_config
 from frontends import common
+from frontends.common import format_tool_status
 from history import SQLiteHistory
 from registry import TOOLS
+
+log = logging.getLogger(__name__)
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -36,7 +40,7 @@ console = Console(highlight=False)
 _COMMANDS = common.cli_command_table()
 
 _show_thinking = False
-_show_tools = False
+_show_tools = False  # initialised from config.show_tool_calls in run_cli_repl
 _prompt_session: PromptSession | None = None
 _cli_messages: list[dict] | None = None
 
@@ -65,6 +69,7 @@ def _print_help() -> None:
 
 
 async def _handle_add_tool(args: str) -> None:
+    log.info("cli: /add-tool args=%.200r", args)
     if not args.strip():
         console.print("usage: /add-tool <description>")
         return
@@ -89,7 +94,9 @@ async def _handle_diff(_: str) -> None:
 
 
 def _handle_self_edit(args: str) -> None:
+    log.info("cli: /self-edit args=%.200r", args)
     if not get_config().allow_self_modification:
+        log.warning("cli: /self-edit refused: allow_self_modification=false")
         console.print(
             "[red]self-modification is disabled[/red] "
             "(allow_self_modification: false in config.yaml)"
@@ -103,13 +110,22 @@ def _handle_self_edit(args: str) -> None:
 def _handle_think(_: str) -> None:
     global _show_thinking
     _show_thinking = not _show_thinking
+    log.info("cli: show_thinking=%s", _show_thinking)
     state = "on" if _show_thinking else "off"
     console.print(f"[dim]thinking display {state}[/dim]")
 
 
-def _handle_tools(_: str) -> None:
+def _handle_tools(args: str) -> None:
     global _show_tools
-    _show_tools = not _show_tools
+    a = args.strip().lower()
+    if a in ("on", "off"):
+        _show_tools = a == "on"
+    elif not a:
+        _show_tools = not _show_tools
+    else:
+        console.print("[dim]usage: /tools [on|off][/dim]")
+        return
+    log.info("cli: show_tools=%s", _show_tools)
     state = "on" if _show_tools else "off"
     console.print(f"[dim]tool-call trace {state}[/dim]")
 
@@ -124,13 +140,16 @@ def _print_bot_markdown(text: str) -> None:
 def _make_tool_handler(tool_name: str, parser: Callable, formatter: Callable) -> Callable:
     def handler(args: str) -> None:
         params = parser(args)
+        log.info("cli: tool command -> %s params=%.200s", tool_name, params)
         tool_obj = TOOLS.get(tool_name)
         if tool_obj is None:
+            log.warning("cli: tool %s unavailable", tool_name)
             console.print(f"{tool_name} tool is not available")
             return
         try:
             result = tool_obj.func(**params)
         except Exception as e:
+            log.exception("cli: tool command %s failed", tool_name)
             console.print(f"\n[bold]bot>[/bold] Error: {e}\n")
             return
         _print_bot_markdown(formatter(result))
@@ -147,6 +166,7 @@ def _cli_messages_ref() -> list[dict] | None:
 
 async def _handle_big(args: str) -> None:
     query = args.strip()
+    log.info("cli: /big query=%d chars", len(query))
     if not query:
         console.print("usage: /big <query>")
         return
@@ -169,6 +189,7 @@ async def _handle_big(args: str) -> None:
                 ),
             )
     except Exception as e:
+        log.exception("cli: /big failed")
         console.print(f"\n[bold]bot>[/bold] Error: {e}\n")
         return
     _print_bot_markdown(clean_reply)
@@ -231,11 +252,12 @@ _COMMAND_HANDLERS = {
 
 
 def _cli_tool_log(name: str, args: dict, result: str) -> None:
+    log.debug("cli: tool callback %s", name)
     if not (_show_thinking or _show_tools):
         return
-    args_summary = ", ".join(f"{k}={v!r}" for k, v in args.items()) if args else ""
-    console.print(f"  [tool: {name}({args_summary})]", style="dim", markup=False)
-    console.print(f"    → {result}", style="dim", markup=False)
+    console.print(f"  {format_tool_status(name, args)}", style="dim", markup=False)
+    if _show_thinking:
+        console.print(f"    → {result}", style="dim", markup=False)
 
 
 class _CLIChannel:
@@ -255,8 +277,10 @@ class _CLIChannel:
 
 
 async def run_cli_repl() -> None:
-    global _prompt_session, _cli_messages
+    global _prompt_session, _cli_messages, _show_tools
+    _show_tools = get_config().show_tool_calls
     channels.register(_CLIChannel())
+    log.info("cli: REPL starting")
 
     now = datetime.now().strftime("%Y-%m-%d %H:%M")
     session_id = datetime.now().strftime("%Y%m%dT%H%M%S")
@@ -310,6 +334,7 @@ async def run_cli_repl() -> None:
         console.print(
             f"[dim]escalation: {cfg.escalation_provider}: {cfg.escalation_model}[/dim]"
         )
+    log.info("cli: %d tool(s) loaded: %s", len(TOOLS), ", ".join(TOOLS))
     console.print(f"  {len(TOOLS)} tool(s) loaded: {', '.join(TOOLS)}\n")
 
     with patch_stdout(raw=True):
@@ -320,13 +345,17 @@ async def run_cli_repl() -> None:
                 print()
                 break
             if not user_input or user_input.lower() in ("quit", "exit"):
+                log.info("cli: exiting (input=%r)", user_input)
                 break
+            log.info("cli: input len=%d", len(user_input))
+            log.debug("cli: input text: %.500s", user_input)
 
             parsed = _parse_command(user_input)
             if parsed is not None:
                 cmd, args = parsed
                 canon = common.canonicalize(cmd) or cmd
                 handler = _COMMAND_HANDLERS.get(canon)
+                log.info("cli: command /%s (canon=%s) known=%s", cmd, canon, handler is not None)
                 if handler is None:
                     console.print(f"unknown command: /{cmd}  (try /help)")
                     continue
@@ -335,6 +364,7 @@ async def run_cli_repl() -> None:
                     if asyncio.iscoroutine(result):
                         await result
                 except ValueError as e:
+                    log.info("cli: /%s rejected: %s", cmd, e)
                     console.print(str(e))
                 continue
 
@@ -349,8 +379,10 @@ async def run_cli_repl() -> None:
                         ),
                     )
             except Exception as e:
+                log.exception("cli: turn failed")
                 console.print(f"\n[bold]bot>[/bold] Error: {e}\n")
                 continue
+            log.info("cli: reply len=%d thinking=%d chars", len(clean_reply), len(thinking))
 
             hist.save_assistant(reply)
 

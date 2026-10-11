@@ -1,3 +1,4 @@
+import logging
 import os
 from functools import lru_cache
 from pathlib import Path
@@ -5,6 +6,9 @@ from typing import Any, Literal
 
 import yaml
 from pydantic import BaseModel, ConfigDict, ValidationError, field_validator, model_validator
+
+
+log = logging.getLogger(__name__)
 
 
 def _config_path() -> Path:
@@ -65,6 +69,7 @@ class Config(BaseModel):
     heartbeat_default_channel: str | None = None
     vault_search_excludes: tuple[str, ...] = ()
     allow_self_modification: bool = True
+    show_tool_calls: bool = True
 
     @property
     def memory_dir(self) -> Path:
@@ -141,12 +146,14 @@ def _merge_env(raw: dict[str, Any]) -> None:
         value = os.environ.get(env_name)
         if value:
             raw[key] = value
+            log.info("config: env override applied %s -> %s", env_name, key)
 
 
 @lru_cache(maxsize=1)
 def get_config() -> Config:
     path = _config_path()
     raw = _load_yaml(path)
+    log.info("config: loading %s (exists=%s, %d yaml keys)", path, path.exists(), len(raw))
     if not raw.get("vault_path"):
         raise ValueError(
             f"vault_path missing from {path}. "
@@ -154,9 +161,12 @@ def get_config() -> Config:
         )
     _merge_env(raw)
     try:
-        return Config.model_validate(raw)
+        cfg = Config.model_validate(raw)
     except ValidationError as e:
+        log.error("config: validation failed for %s", path)
         raise ValueError(str(e)) from e
+    log.debug("config: loaded keys=%s", sorted(raw))
+    return cfg
 
 
 def reset_cache() -> None:

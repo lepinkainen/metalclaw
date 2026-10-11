@@ -223,7 +223,7 @@ def test_run_big_disabled_when_escalation_off(vault):
 
 
 def test_run_big_routes_through_escalation(vault_with_escalation, monkeypatch):
-    def fake_escalate(msgs: list[dict]) -> str:
+    def fake_escalate(msgs: list[dict], on_tool_call=None) -> str:
         msgs.append({"role": "assistant", "content": "cloud reply"})
         return "cloud reply"
 
@@ -241,7 +241,7 @@ def test_run_big_routes_through_escalation(vault_with_escalation, monkeypatch):
 
 
 def test_run_big_rolls_back_on_exception(vault_with_escalation, monkeypatch):
-    def boom(_msgs):
+    def boom(_msgs, on_tool_call=None):
         raise RuntimeError("boom")
 
     monkeypatch.setattr(common, "chat_via_escalation", boom)

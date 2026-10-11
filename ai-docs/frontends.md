@@ -53,6 +53,14 @@ CLI does **not** delegate `/remember /forget /memory /heartbeat /big` to `common
 - `console.status("[dim]thinking…[/dim]", spinner="dots")` while waiting on `chat()`.
 - Model dispatch via `await loop.run_in_executor(None, lambda: chat(messages, on_tool_call=_cli_tool_log))` (`cli.py:262`).
 
+## Live tool status
+
+- `common.format_tool_status(name, args)` -> one plain-text line (emoji by name/prefix, args clipped to 40 chars, lists >2 shown as counts).
+- `common.ToolStatusReporter(loop, send, edit, limit)` is the `on_tool_call` callback. Called from the worker thread; schedules `_upsert` via `run_coroutine_threadsafe`. A single `asyncio.Lock` (FIFO) orders first `send(text)->handle` before later `edit(handle, text)`. Errors are logged and swallowed. Over `limit` (Telegram 4096 / Discord 2000) it keeps the last lines prefixed `…`.
+- Telegram/Discord build one per turn via `_tool_status_for(...)`, pass it to `chat(...)` and `common.run_big(on_tool_call=...)`. The status message is left in the chat after the reply.
+- `/tools [on|off]` (all frontends): Telegram/Discord keep per-chat state in `_telegram_show_tools` / `_discord_show_tools` (in-memory; default `config.show_tool_calls`). CLI `_show_tools` is initialised from config; `/tools` toggles, result lines shown only with `/think` on.
+- Heartbeat runs never get a callback.
+
 ## Telegram specifics
 
 - Library: `python-telegram-bot >= 21`.

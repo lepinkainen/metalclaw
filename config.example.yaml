@@ -99,6 +99,10 @@ heartbeat_interval_seconds: 1800
 # Python in `tools/<slug>.py`. CLI `/self-edit` is gated by the same flag.
 allow_self_modification: true
 
+# Show live tool-call status (emoji + tool name) in chat while the bot works.
+# Per-chat override: /tools on|off in Telegram/Discord. Heartbeat runs stay quiet.
+show_tool_calls: true
+
 # Glob patterns (relative to vault_path) excluded from /search and the
 # search_vault tool. Defaults to empty — full vault is searched. ripgrep
 # already skips hidden dirs (.obsidian, .trash) and respects .gitignore, so
