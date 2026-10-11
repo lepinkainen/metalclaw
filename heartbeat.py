@@ -35,6 +35,7 @@ import re
 import secrets
 import tempfile
 import threading
+import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -49,6 +50,9 @@ from config import get_config
 log = logging.getLogger("metalclaw.heartbeat")
 
 SENTINEL = "HEARTBEAT_OK"
+# Models often wrap the sentinel in a "nothing to report" sentence; treat short
+# leftovers as an ack. Longer leftovers are a real alert with a stray sentinel.
+_ACK_MAX_CHARS = 300
 _STATE_VERSION = 1
 _LEDGER_VERSION = 1
 _LEDGER_FILENAME = "heartbeat.yaml"
@@ -534,13 +538,19 @@ async def run_tick(*, now: datetime | None = None) -> dict[str, str]:
 
     now = now or datetime.now(timezone.utc)
     cfg = get_config()
+    tick_t0 = time.monotonic()
     if not _within_active_hours(now.astimezone(), cfg.heartbeat_active_hours):
-        log.debug("heartbeat tick outside active hours")
+        log.info(
+            "heartbeat tick skipped: outside active hours %s (local hour=%d)",
+            cfg.heartbeat_active_hours, now.astimezone().hour,
+        )
         return {}
 
     state = load_state()
     snapshot = load_ledger()
     replies: dict[str, str] = {}
+    n_due = n_ran = n_suppressed = n_notified = n_failed = 0
+    log.info("heartbeat tick start: %d active action(s)", len(snapshot.actions))
 
     for action in list(snapshot.actions):
         last_run_iso = state.get(action.id)
@@ -548,18 +558,41 @@ async def run_tick(*, now: datetime | None = None) -> dict[str, str]:
             due = is_action_due(action, last_run_iso, now)
         except Exception:
             log.exception("heartbeat action %s: due-check crashed", action.id)
+            n_failed += 1
             continue
         if not due:
+            log.debug(
+                "heartbeat action %s not due: kind=%s last_run=%s at=%s every=%s schedule=%s",
+                action.id, action.kind, last_run_iso, action.at, action.every, action.schedule,
+            )
             continue
+        n_due += 1
+        log.info("heartbeat action %s due: kind=%s channel=%s", action.id, action.kind, action.channel)
+        action_t0 = time.monotonic()
 
         try:
             reply = await _run_action(action, now, chat_loop.chat, chat_loop.build_system_prompt)
         except Exception as e:
             log.exception("heartbeat action %s: chat turn failed: %s", action.id, e)
+            n_failed += 1
             continue
+        n_ran += 1
+        log.info(
+            "heartbeat action %s ran in %.2fs reply=%d chars",
+            action.id, time.monotonic() - action_t0, len(reply),
+        )
+        log.debug("heartbeat action %s reply: %.500s", action.id, reply)
 
         clean = reply.strip()
-        if clean == SENTINEL or clean.startswith(SENTINEL):
+        if SENTINEL in clean:
+            clean = clean.replace(SENTINEL, "").strip()
+            if len(clean) <= _ACK_MAX_CHARS:
+                if clean:
+                    log.info("heartbeat action %s: ack suppressed, dropped text: %r", action.id, clean)
+                clean = ""
+        if not clean:
+            n_suppressed += 1
+            log.info("heartbeat action %s: HEARTBEAT_OK (nothing to report)", action.id)
             replies[action.id] = ""
             state[action.id] = now.isoformat()
             if action.kind == ActionKind.AT:
@@ -568,7 +601,13 @@ async def run_tick(*, now: datetime | None = None) -> dict[str, str]:
             continue
 
         target_scope, channel = _resolve_channel(action.channel)
+        log.info(
+            "heartbeat action %s: notify target=%r (action.channel=%r default=%r) channel=%s",
+            action.id, target_scope, action.channel, cfg.heartbeat_default_channel,
+            channel.name if channel else None,
+        )
         if channel is None:
+            n_failed += 1
             log.warning(
                 "heartbeat action %s: no channel resolves for %r — keeping active",
                 action.id, target_scope,
@@ -582,14 +621,22 @@ async def run_tick(*, now: datetime | None = None) -> dict[str, str]:
                 "heartbeat action %s: channel notify failed: %s — keeping active",
                 action.id, e,
             )
+            n_failed += 1
             continue
 
+        n_notified += 1
+        log.info("heartbeat action %s: notified %s (%d chars)", action.id, target_scope, len(clean))
         replies[action.id] = clean
         state[action.id] = now.isoformat()
         if action.kind == ActionKind.AT:
             _archive_with_lock(action.id, now)
 
     save_state(state)
+    log.info(
+        "heartbeat tick end: total=%d due=%d ran=%d suppressed=%d notified=%d failed=%d duration=%.2fs",
+        len(snapshot.actions), n_due, n_ran, n_suppressed, n_notified, n_failed,
+        time.monotonic() - tick_t0,
+    )
     return replies
 
 
@@ -602,6 +649,7 @@ def _archive_with_lock(action_id: str, now: datetime) -> None:
                 removed = ledger.actions.pop(i)
                 _archive_completed(removed, ledger, completed_at)
                 _write_ledger_locked(ledger)
+                log.info("heartbeat action %s archived to completed", action_id)
                 return
 
 

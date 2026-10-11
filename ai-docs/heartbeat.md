@@ -67,7 +67,7 @@ Per-action last-run timestamp. Rebuilt automatically on first tick if missing.
 3. For each `action` in snapshot:
    - `is_action_due(action, state.get(action.id), now)` → skip if not.
    - `_run_action(...)` runs `chat_loop.chat(messages)` in a thread executor.
-   - Strip reply. If `clean == SENTINEL` (or starts with it) → suppress notify; still update state; for `kind=at`, archive to `completed`.
+   - Strip reply. If `SENTINEL` appears anywhere, remove it; if ≤`_ACK_MAX_CHARS` (300) chars remain, or the reply is empty → suppress notify (longer leftovers are sent with the sentinel stripped); still update state; for `kind=at`, archive to `completed`.
    - Otherwise resolve channel via `_resolve_channel(action.channel)` → `(target_scope, channels.Channel)` (falls back to `cfg.heartbeat_default_channel`).
    - On notify success: update state; for `kind=at`, archive. On notify failure: leave action active (next tick retries).
 4. `save_state(state)`.
@@ -100,7 +100,7 @@ Heartbeat ticks themselves run with `current_scope` set to `None` — actions ca
 
 ## Sentinel
 
-`SENTINEL = "HEARTBEAT_OK"` (`heartbeat.py`). Comparison: `clean == SENTINEL or clean.startswith(SENTINEL)` so trailing model chatter still suppresses.
+`SENTINEL = "HEARTBEAT_OK"` (`heartbeat.py`). Detection: sentinel anywhere in the reply (leading, trailing, wrapped in `**…**`). After removing it, ≤300 leftover chars = ack chatter → suppressed; longer = real alert, delivered with the sentinel stripped.
 
 ## Routing (`channels.for_scope`)
 

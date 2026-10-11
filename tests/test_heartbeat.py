@@ -327,7 +327,16 @@ class _StubChannel:
         return ("cli",)
 
 
-def test_run_tick_sentinel_suppresses_notify(cfg):
+@pytest.mark.parametrize(
+    ("reply", "sent"),
+    [
+        ("HEARTBEAT_OK", None),
+        ("No messages require action.\n\nHEARTBEAT_OK", None),
+        ("**HEARTBEAT_OK**", None),
+        ("x" * 400 + "\nHEARTBEAT_OK", "x" * 400),
+    ],
+)
+def test_run_tick_sentinel_suppresses_notify(cfg, reply, sent):
     heartbeat.create_action(
         kind=heartbeat.ActionKind.EVERY,
         prompt="poll",
@@ -338,10 +347,9 @@ def test_run_tick_sentinel_suppresses_notify(cfg):
     ch = _StubChannel()
     channels.register(ch)
 
-    with patch("chat_loop.chat", return_value="HEARTBEAT_OK"):
-        replies = asyncio.run(heartbeat.run_tick())
-    assert all(r == "" for r in replies.values())
-    assert ch.calls == []
+    with patch("chat_loop.chat", return_value=reply):
+        asyncio.run(heartbeat.run_tick())
+    assert ch.calls == ([] if sent is None else [("cli", sent)])
 
 
 def test_run_tick_alert_routes_to_channel(cfg):
