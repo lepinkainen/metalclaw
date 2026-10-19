@@ -1,7 +1,7 @@
 [project]
 name = "metalclaw"
 version = "0.1.0"
-description = "Add your description here"
+description = "Single-user LLM chatbot with tool calling, exposed via CLI, Telegram and Discord frontends"
 requires-python = ">=3.14"
 dependencies = [
     "beautifulsoup4>=4.12",

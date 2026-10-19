@@ -3,6 +3,6 @@
 import httpx
 
 HTTP = httpx.Client(
-    headers={"User-Agent": "metalclaw/0.1 github.com/shrike/metalclaw"},
+    headers={"User-Agent": "metalclaw/0.1 github.com/lepinkainen/metalclaw"},
     timeout=15.0,
 )
