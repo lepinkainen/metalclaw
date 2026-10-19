@@ -14,14 +14,19 @@ its own reply mechanism.
 
 import argparse
 import asyncio
+import collections
 import logging
 import shlex
-from collections.abc import Awaitable, Callable
+import time
+from collections.abc import Awaitable, Callable, Hashable
 from dataclasses import dataclass, field
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import NoReturn
+from typing import Any, NoReturn
 
+import channels
 import heartbeat
+import history
 import live_tool
 import memory
 from chat_loop import chat_via_escalation, run_turn, scoped_chat
@@ -172,6 +177,18 @@ COMMANDS: tuple[CommandSpec, ...] = (
         "/think — toggle display of model thinking (off by default)",
         "toggle display of model thinking (off by default)",
         frozenset({CLI}),
+    ),
+    CommandSpec(
+        "status",
+        "/status — model, uptime, frontends, heartbeat schedule, recent warnings",
+        "show bot status",
+        ALL_FRONTENDS,
+    ),
+    CommandSpec(
+        "usage",
+        "/usage — LLM token usage and cost (today, last 30 days)",
+        "show LLM token usage and cost",
+        ALL_FRONTENDS,
     ),
     CommandSpec(
         "tools",
@@ -652,6 +669,157 @@ async def run_big(
     if isinstance(on_tool_call, ToolStatusReporter):
         await on_tool_call.drain()
     await send(clean_reply)
+
+
+# --- /status and /usage ---
+
+_STARTED = time.monotonic()
+
+
+class RecentWarnings(logging.Handler):
+    """In-memory ring buffer of the last WARNING+ records, for /status."""
+
+    def __init__(self, maxlen: int = 5) -> None:
+        super().__init__(level=logging.WARNING)
+        self.records: collections.deque[str] = collections.deque(maxlen=maxlen)
+
+    def emit(self, record: logging.LogRecord) -> None:
+        ts = datetime.fromtimestamp(record.created).strftime("%H:%M:%S")
+        self.records.append(
+            f"{ts} {record.levelname} {record.name}: {record.getMessage()}"
+        )
+
+
+recent_warnings = RecentWarnings()
+
+
+def _fmt_td(td: timedelta) -> str:
+    mins = int(td.total_seconds()) // 60
+    d, rem = divmod(mins, 1440)
+    h, m = divmod(rem, 60)
+    return (f"{d}d " if d else "") + f"{h}h {m}m"
+
+
+def format_status() -> str:
+    cfg = get_config()
+    model = cfg.model if cfg.provider == "ollama" else cfg.litellm_model
+    lines = [
+        f"provider: {cfg.provider} / {model}",
+        (
+            f"escalation: {cfg.escalation_provider} / {cfg.escalation_model}"
+            if cfg.escalation_enabled
+            else "escalation: disabled"
+        ),
+        f"uptime: {_fmt_td(timedelta(seconds=time.monotonic() - _STARTED))}",
+    ]
+    active = {
+        name: sorted(ch.active_scopes()) for name, ch in channels.CHANNELS.items()
+    }
+    lines.append(
+        "frontends: "
+        + (
+            "; ".join(f"{n} ({len(sc)} active)" for n, sc in sorted(active.items()))
+            or "none registered"
+        )
+    )
+    try:
+        actions = heartbeat.list_active()
+        state = heartbeat.load_state()
+    except Exception as e:
+        log.exception("/status: heartbeat read failed")
+        actions, state = [], {}
+        lines.append(f"heartbeat: ledger read failed: {e}")
+    else:
+        lines.append(
+            f"heartbeat: enabled={cfg.heartbeat_enabled} "
+            f"interval={cfg.heartbeat_interval_seconds}s actions={len(actions)}"
+        )
+    now = datetime.now(UTC)
+    for a in actions:
+        nxt = heartbeat.next_due(a, state.get(a.id), now)
+        when = "never" if nxt is None else nxt.astimezone().strftime("%Y-%m-%d %H:%M")
+        lines.append(f"  • {a.id} [{a.kind}] next: {when} | {a.prompt[:50]}")
+    recent = list(recent_warnings.records)
+    lines.append(
+        f"recent warnings/errors (last {len(recent)}):"
+        if recent
+        else "recent warnings/errors: none"
+    )
+    lines.extend(f"  {r[:200]}" for r in recent)
+    return "\n".join(lines)
+
+
+def _usage_block(title: str, since: datetime) -> list[str]:
+    rows = history.usage_since(since.astimezone(UTC).isoformat())
+    if not rows:
+        return [f"{title}: no calls recorded"]
+    out = [f"{title}:"]
+    for provider, model, calls, prompt, completion, cost, known in rows:
+        if known == 0:
+            cost_s = "cost n/a"
+        else:
+            cost_s = f"${cost:.4f}" + ("" if known == calls else " (partial)")
+        out.append(
+            f"  • {provider}/{model}: {calls} call(s), {prompt} in / {completion} out, {cost_s}"
+        )
+    return out
+
+
+def format_usage() -> str:
+    now = datetime.now().astimezone()
+    midnight = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    return "\n".join(
+        [
+            *_usage_block("today", midnight),
+            *_usage_block("last 30 days", now - timedelta(days=30)),
+        ]
+    )
+
+
+async def run_status(send: SendFn) -> None:
+    await send(format_status())
+
+
+async def run_usage(send: SendFn) -> None:
+    await send(format_usage())
+
+
+# --- message debounce (Telegram / Discord) ---
+
+
+class Debouncer:
+    """Per-key quiet-period buffer.
+
+    ``add`` appends text and restarts the key's timer; after ``delay`` seconds
+    with no further ``add``, ``flush(key, joined_text, latest_ctx)`` runs once.
+    The timer entry is dropped before ``flush`` starts, so a message arriving
+    mid-turn starts a fresh timer instead of cancelling the running turn; the
+    frontends' per-session lock then serialises the two turns.
+    """
+
+    def __init__(self, flush: Callable[[Any, str, Any], Awaitable[None]]) -> None:
+        self._flush = flush
+        self._pending: dict[Hashable, tuple[list[str], Any]] = {}
+        self._timers: dict[Hashable, asyncio.Task] = {}
+
+    def add(self, key: Hashable, text: str, ctx: Any, delay: float) -> None:
+        texts = self._pending.get(key, ([], None))[0]
+        texts.append(text)
+        self._pending[key] = (texts, ctx)
+        if (old := self._timers.get(key)) is not None:
+            old.cancel()
+        self._timers[key] = asyncio.create_task(self._fire(key, delay))
+        log.debug("debounce: key=%s buffered=%d delay=%.2fs", key, len(texts), delay)
+
+    async def _fire(self, key: Hashable, delay: float) -> None:
+        await asyncio.sleep(delay)
+        texts, ctx = self._pending.pop(key)
+        del self._timers[key]
+        log.info("debounce: flushing key=%s messages=%d", key, len(texts))
+        try:
+            await self._flush(key, "\n".join(texts), ctx)
+        except Exception:
+            log.exception("debounce: flush failed key=%s", key)
 
 
 # --- live tool-call status ---

@@ -10,6 +10,7 @@ from typing import cast
 import discord
 
 import channels
+import history
 from chat_loop import (
     _parse_command,
     build_system_prompt,
@@ -205,6 +206,10 @@ async def _discord_dispatch_command(
         new, reply = common.parse_tools_arg(cur, args)
         _discord_show_tools[channel_id] = new
         await _discord_send(message.channel, reply)
+    elif canon == "status":
+        await common.run_status(send)
+    elif canon == "usage":
+        await common.run_usage(send)
     elif canon == "new":
         old = _discord_sessions.pop(channel_id, None)
         if old is not None:
@@ -337,14 +342,25 @@ async def _discord_handle_message(
     channel_id = message.channel.id
     _known_discord_channels.add(channel_id)
 
+    if parsed is not None:
+        cmd, args = parsed
+        async with _session_lock(channel_id):
+            await _discord_dispatch_command(message, cmd, args)
+        return
+
+    delay = get_config().message_debounce_seconds
+    if delay > 0:
+        _debouncer.add(channel_id, text, message, delay)
+        return
+    await _run_text_turn(channel_id, text, message)
+
+
+async def _run_text_turn(channel_id: int, text: str, message: discord.Message) -> None:
+    """One chat turn for ``text``; replies in the channel of the latest message."""
     async with _session_lock(channel_id):
         messages = _get_discord_session(channel_id)
-
-        if parsed is not None:
-            cmd, args = parsed
-            await _discord_dispatch_command(message, cmd, args)
-            return
-
+        scope = _discord_scope_for(channel_id)
+        history.record_message(scope, "user", text)
         on_tool = _tool_status_for(message.channel)
         try:
             async with message.channel.typing():
@@ -352,8 +368,7 @@ async def _discord_handle_message(
                     messages,
                     text,
                     lambda: scoped_chat(
-                        _discord_scope_for(channel_id),
-                        lambda: chat(messages, on_tool_call=on_tool),
+                        scope, lambda: chat(messages, on_tool_call=on_tool)
                     ),
                 )
         except Exception as e:
@@ -362,8 +377,12 @@ async def _discord_handle_message(
             return
         if on_tool is not None:
             await on_tool.drain()
+        history.record_message(scope, "assistant", clean_reply)
         log.info("discord: reply channel_id=%d len=%d", channel_id, len(clean_reply))
         await _discord_send(message.channel, clean_reply)
+
+
+_debouncer = common.Debouncer(_run_text_turn)
 
 
 class _MetalclawDiscordClient(discord.Client):

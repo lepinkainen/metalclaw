@@ -52,7 +52,9 @@ Per-module symbol map. `→` = imports. `←` = imported by.
 ## history.py — sqlite prompt history
 
 - `SQLiteHistory(session)` extends `prompt_toolkit.history.History`. Methods: `load_history_strings()`, `store_string(s)`, `save_assistant(s)`.
-- DB: `$XDG_DATA_HOME/metalclaw/history.db`. Single table `messages(id, session, ts, role, content)`.
+- DB: `$XDG_DATA_HOME/metalclaw/history.db`. Tables `messages(id, session, ts, role, content)` and `usage(id, ts, provider, model, prompt_tokens, completion_tokens, cost_usd NULL)`. `ts` is UTC ISO.
+- `session`: CLI = bare timestamp id; Telegram/Discord = `telegram-<chat_id>` / `discord-<channel_id>` (same strings as heartbeat scopes). `load_history_strings` excludes any session containing `-` so up-arrow history stays CLI-only.
+- Module fns (shared locked connection): `record_message`, `search_messages(query, limit)` (LIKE, newest first), `record_usage`, `usage_since(iso)` (grouped by provider/model).
 
 ## self_change.py — `/add-tool` `/self-edit`
 

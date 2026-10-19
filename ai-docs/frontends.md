@@ -61,6 +61,14 @@ CLI does **not** delegate `/remember /forget /memory /heartbeat /big` to `common
 - `/tools [on|off]` (all frontends): Telegram/Discord keep per-chat state in `_telegram_show_tools` / `_discord_show_tools` (in-memory; default `config.show_tool_calls`). CLI `_show_tools` is initialised from config; `/tools` toggles, result lines shown only with `/think` on.
 - Heartbeat runs never get a callback.
 
+## Debounce, persistence, /status, /usage
+
+- Non-command messages in Telegram/Discord go through `common.Debouncer` (`message_debounce_seconds`, 0 = off): each `add` restarts the per-chat timer; after quiet, buffered texts are joined with `\n` and ONE turn runs (`_run_text_turn`), replying to the latest message. The timer entry is dropped before the flush starts, so a message arriving mid-turn starts a new timer and its turn waits on the per-chat lock. Slash commands bypass it. Discord debounces only messages that passed `_discord_should_respond`.
+- Locks: Discord `_session_lock(channel_id)`; Telegram `_chat_lock(chat_id)` (needed because debounced turns run in timer tasks outside PTB's serialized update queue; it also wraps `_telegram_dispatch_command`).
+- Each turn records the user text and clean reply to `history.db` via `history.record_message(scope, role, text)` (not `/big` turns).
+- `/status` (`common.format_status`): provider/model, escalation, uptime (since `common` import), registered channels + active scope counts, heartbeat actions with `heartbeat.next_due`, last 5 WARNING+ records from `common.recent_warnings` (ring buffer handler, `bot._setup_logging` installs it on root).
+- `/usage` (`common.format_usage`): today (local midnight) and last 30 days from the `usage` table, grouped by provider/model; cost `n/a` when unknown, `(partial)` when some calls unpriced.
+
 ## Telegram specifics
 
 - Library: `python-telegram-bot >= 21`.

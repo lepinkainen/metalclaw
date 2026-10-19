@@ -113,6 +113,11 @@ allow_self_modification: true
 # Per-chat override: /tools on|off in Telegram/Discord. Heartbeat runs stay quiet.
 show_tool_calls: true
 
+# Telegram/Discord: wait this many seconds of quiet after a message and join
+# everything sent meanwhile (text + link, split pastes) into ONE turn. Slash
+# commands are never delayed. 0 disables.
+message_debounce_seconds: 1.0
+
 # Glob patterns (relative to vault_path) excluded from /search and the
 # search_vault tool. Defaults to empty — full vault is searched. ripgrep
 # already skips hidden dirs (.obsidian, .trash) and respects .gitignore, so

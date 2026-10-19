@@ -60,6 +60,8 @@ Per-action last-run timestamp. Rebuilt automatically on first tick if missing.
 
 `cron` uses `zoneinfo.ZoneInfo`. A missed schedule (server down at 07:00, tick at 09:00) still fires — better late than never — and updates `last_run` so it won't re-fire today.
 
+`heartbeat.next_due(action, last_run_iso, now)` returns when an action is next due (`now` if due already, None if never again); used by `/status`. Actual execution waits for the next tick.
+
 ## `run_tick` (`heartbeat.py:run_tick`)
 
 1. Active-hours gate (`_within_active_hours(now.astimezone(), cfg.heartbeat_active_hours)`). Wraparound `[22, 6]` supported.

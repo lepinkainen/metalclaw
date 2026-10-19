@@ -16,6 +16,7 @@ from datetime import datetime
 from pydantic import ValidationError
 
 import heartbeat
+import history as history_db
 import memory
 from config import get_config
 from providers import Provider, get_provider
@@ -263,6 +264,17 @@ def _chat_with_provider(
                 len(am.text),
                 len(am.tool_calls),
             )
+            if am.usage is not None:
+                try:
+                    history_db.record_usage(
+                        pname,
+                        str(pmodel),
+                        am.usage.prompt_tokens,
+                        am.usage.completion_tokens,
+                        am.usage.cost_usd,
+                    )
+                except Exception:
+                    log.exception("usage: could not record")
             raw = am.raw
             if isinstance(raw, list):
                 history.extend(raw)

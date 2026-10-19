@@ -15,6 +15,7 @@ class AssistantMessage:
     text: str
     tool_calls: list[ToolCall] = []
     raw: dict | list[dict] | None = None  # appended to history verbatim
+    usage: Usage | None = None  # prompt/completion tokens + cost_usd (None = unknown)
 
 
 class Provider(Protocol):
@@ -25,6 +26,8 @@ class Provider(Protocol):
     ) -> AssistantMessage: ...
     def format_tool_results(results: list[tuple[ToolCall, str]]) -> list[dict]: ...
 ```
+
+`usage`: Ollama fills tokens from `prompt_eval_count`/`eval_count` (cost None); litellm from `resp.usage` + `completion_cost`. `chat_loop._chat_with_provider` persists it via `history.record_usage` after every `chat_once` (failures logged, never raised).
 
 `raw` shape is provider-specific. The chat loop treats history as opaque — only the active provider parses it. `chat_loop._session_providers` stamps each session and drops tainted history when the active provider switches mid-session (`chat_loop.py:248-277`).
 

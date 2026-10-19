@@ -4,7 +4,7 @@ import time
 
 import litellm
 
-from providers.base import AssistantMessage, ToolCall
+from providers.base import AssistantMessage, ToolCall, Usage
 
 # Silently strip kwargs the underlying model does not understand. Lets one
 # provider module front a heterogeneous Bedrock catalog (Claude, Nova, Llama,
@@ -113,7 +113,16 @@ class LiteLLMProvider:
         if raw_tool_calls:
             raw["tool_calls"] = raw_tool_calls
 
-        return AssistantMessage(text=content, tool_calls=tool_calls, raw=raw)
+        return AssistantMessage(
+            text=content,
+            tool_calls=tool_calls,
+            raw=raw,
+            usage=Usage(
+                getattr(usage, "prompt_tokens", None) or 0,
+                getattr(usage, "completion_tokens", None) or 0,
+                cost,
+            ),
+        )
 
     def format_tool_results(
         self,

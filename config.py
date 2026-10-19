@@ -83,6 +83,7 @@ class Config(BaseModel):
     vault_search_excludes: tuple[str, ...] = ()
     allow_self_modification: bool = True
     show_tool_calls: bool = True
+    message_debounce_seconds: float = 1.0
 
     @property
     def memory_dir(self) -> Path:

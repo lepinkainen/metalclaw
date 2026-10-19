@@ -37,7 +37,7 @@ import tempfile
 import threading
 import time
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -492,6 +492,34 @@ def is_action_due(
         return True
 
     return False
+
+
+def next_due(
+    action: HeartbeatAction, last_run_iso: str | None, now: datetime
+) -> datetime | None:
+    """When ``action`` becomes due next (``now`` if already due); None if never again.
+
+    Actual execution still waits for the next scheduler tick.
+    """
+    if is_action_due(action, last_run_iso, now):
+        return now
+    try:
+        if action.kind == ActionKind.AT:
+            return None if last_run_iso else parse_iso(action.at or "")
+        if action.kind == ActionKind.EVERY:
+            return parse_iso(last_run_iso or "") + timedelta(seconds=action.every or 0)
+        if action.kind == ActionKind.CRON and action.schedule is not None:
+            tz = ZoneInfo(action.schedule.timezone)
+            h, m = (int(x) for x in action.schedule.time.split(":"))
+            today = now.astimezone(tz).date()
+            for i in range(8):
+                day = today + timedelta(days=i)
+                cand = datetime(day.year, day.month, day.day, h, m, tzinfo=tz)
+                if _WEEKDAYS[cand.weekday()] in action.schedule.days and cand > now:
+                    return cand
+    except ValueError, ZoneInfoNotFoundError:
+        log.warning("next_due: bad schedule for action %s", action.id)
+    return None
 
 
 # --- Tick logic ---

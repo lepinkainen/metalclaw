@@ -10,10 +10,18 @@ class ToolCall:
 
 
 @dataclass
+class Usage:
+    prompt_tokens: int
+    completion_tokens: int
+    cost_usd: float | None = None  # None = unknown (local model / unpriced)
+
+
+@dataclass
 class AssistantMessage:
     text: str
     tool_calls: list[ToolCall] = field(default_factory=list)
     raw: dict | list[dict] | None = None
+    usage: Usage | None = None
 
 
 class Provider(Protocol):

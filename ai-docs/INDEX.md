@@ -19,6 +19,7 @@ AI-only architecture docs. Dense, indexed, cross-referenced. No human-friendly p
 | `conventions.md` | House rules: imports, locking, async, errors, tests. |
 | `gotchas.md` | Subtle traps: circular imports, mutated history, tool registration order, file-watching. |
 | `testing.md` | pytest fixtures, conftest, common stubs. |
+| `mcp-plan.md` | Plan (not implemented): MCP client — external MCP server tools bridged into `registry.TOOLS`, config, lifecycle, sync→async dispatch, security. |
 
 ## Source map (line counts)
 
@@ -30,7 +31,7 @@ channels.py        52   Channel Protocol, scope→channel registry
 config.py         180   pydantic Config, yaml load, env merge, lru_cache
 memory.py         381   Memory dataclass, parse/render, file lock, mutators, forget
 heartbeat.py      324   parse, schedule, run_tick, scope discovery
-history.py         64   SQLiteHistory (prompt_toolkit subclass)
+history.py        ~110  shared locked sqlite: messages + usage tables, SQLiteHistory
 self_change.py    183   spawn `claude -p`, gate via task lint/build/test, approve/reject
 live_tool.py      290   /add-tool: spawn `claude -p`, focused gates, async approval
 telegram_format.py 146  CommonMark→Telegram HTML

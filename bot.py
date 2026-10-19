@@ -18,6 +18,7 @@ from telegram.ext import Application
 import heartbeat
 import memory
 from config import get_config
+from frontends import common as _common
 from frontends import telegram as _telegram
 from frontends.cli import console
 from frontends.cli import run_cli_repl as _run_cli_repl
@@ -76,6 +77,7 @@ def _setup_logging(args: argparse.Namespace) -> Path:
     root.setLevel(logging.DEBUG)
     root.addHandler(file_h)
     root.addHandler(console_h)
+    root.addHandler(_common.recent_warnings)  # feeds /status
     for name in (
         "httpx",
         "httpcore",

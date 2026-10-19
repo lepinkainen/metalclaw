@@ -52,6 +52,8 @@ Ollama and litellm consume this directly (litellm normalises to per-backend form
 | `add_user_instruction` | `tools.py:658` | `text` | `dict` | → `memory.add_instruction`. Behavioural rule. |
 | `forget_user_memory` | `tools.py:678` | `matcher` | `dict` | → `memory.forget`. Returns `{status: removed/ambiguous/not_found, ...}`. |
 | `get_user_memory` | `tools.py:700` | none | `{markdown: str}` | Full memory file. |
+| `append_to_inbox` | `tools/inbox.py` | `text` | `dict` | Appends `- YYYY-MM-DD HH:MM — text` to `<vault_path>/INBOX.md` (fixed name, no path arg; created if missing; `fcntl.flock` on the append fd). Errors if `vault_path` is not a dir. |
+| `search_conversation_history` | `tools/conversation_history.py` | `query, limit=10` | `dict` | Case-insensitive LIKE over `history.db` messages (CLI + Telegram + Discord), newest first; content trimmed to 500 chars. |
 | `search_vault` | `tools.py:725` | `query, max_results=20, context_lines=1` | `dict` | ripgrep wrapper via `vault_search.search`. |
 | `read_note` | `tools.py:748` | `path` | `dict` | Vault note read via `vault_search.read`. |
 | `escalate_to_big_model` | `tools.py:768` | `query, reason` | `dict` | Calls big model with current session snapshot. Returns `{status, model, reason, reply}`. Disabled if `cfg.escalation_enabled=False`. |

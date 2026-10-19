@@ -38,3 +38,9 @@ def write_config():
         path.write_text(yaml.safe_dump(data))
 
     return _write
+
+
+@pytest.fixture(autouse=True)
+def _isolated_data_dir(tmp_path, monkeypatch):
+    """Keep history.db / state files out of the real XDG data dir."""
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "xdg-data"))

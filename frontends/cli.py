@@ -230,6 +230,14 @@ async def _handle_heartbeat(args: str) -> None:
     await common.run_heartbeat(_cli_send_dim, "cli", args.strip())
 
 
+async def _handle_status(_: str) -> None:
+    await common.run_status(_cli_send_dim)
+
+
+async def _handle_usage(_: str) -> None:
+    await common.run_usage(_cli_send_dim)
+
+
 # Keys are canonical command names from `common.COMMANDS`; user-typed aliases
 # (e.g. "approve_force", "add_tool") are folded to the canonical form by
 # `common.canonicalize` before lookup in the dispatcher below.
@@ -253,6 +261,8 @@ _COMMAND_HANDLERS = {
     "manual": _handle_manual,
     "heartbeat": _handle_heartbeat,
     "big": _handle_big,
+    "status": _handle_status,
+    "usage": _handle_usage,
     "help": _handle_help,
 }
 

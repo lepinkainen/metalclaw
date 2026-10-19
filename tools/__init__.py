@@ -5,6 +5,7 @@ submodule. ``bot.py`` does ``import tools`` at runtime in ``_async_main()`` to
 populate the global ``registry.TOOLS`` dict before any provider runs.
 """
 
+from .conversation_history import search_conversation_history
 from .dice import roll_die
 from .escalation import escalate_to_big_model
 from .heartbeat_tools import (
@@ -12,6 +13,7 @@ from .heartbeat_tools import (
     create_heartbeat_action,
     list_heartbeat_actions,
 )
+from .inbox import append_to_inbox
 from .mail import (
     add_email_label,
     check_new_mail,
@@ -38,6 +40,7 @@ __all__ = [
     "add_email_label",
     "add_user_fact",
     "add_user_instruction",
+    "append_to_inbox",
     "cancel_heartbeat_action",
     "check_new_mail",
     "create_heartbeat_action",
@@ -56,6 +59,7 @@ __all__ = [
     "read_wilma_message",
     "remove_email_label",
     "roll_die",
+    "search_conversation_history",
     "search_vault",
     "set_user_preference",
     "train_departures",

@@ -11,6 +11,7 @@ tests/
   test_discord.py             _split_for_discord, _strip_bot_mention, _discord_should_respond
   test_escalation.py          chat_via_escalation, escalate_to_big_model tool
   test_frontends_common.py    parsers, formatters, run_remember/forget/memory
+  test_inbox_history_usage.py inbox tool, history search/up-arrow isolation, usage, /status, Debouncer, Telegram debounce
   test_heartbeat.py           parse_heartbeat_file, is_due, run_tick, sentinel handling
   test_memory.py              parse/render, mutators, forget statuses, migration
   test_providers.py           chat-loop tool dispatch + session-provider stamping
@@ -25,6 +26,7 @@ tests/
 
 ## Fixtures (`tests/conftest.py`)
 
+- `_isolated_data_dir` (autouse) — points `XDG_DATA_HOME` at a tmp dir so `history.db`/state never touch the real data dir.
 - `clear_env(monkeypatch)` — unsets all `_ENV_VARS` (Fastmail/Ollama/Discord/Telegram).
 - `cfg_file(tmp_path, monkeypatch, clear_env)` — sets `METALCLAW_CONFIG=<tmp>/config.yaml`, calls `config.reset_cache()` before+after. Yields the path.
 - `write_config()` — factory: `write_config(path, **fields)` writes yaml with `vault_path: <tmp>/vault` baseline.

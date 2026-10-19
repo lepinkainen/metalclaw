@@ -19,6 +19,7 @@ from telegram.ext import (
 )
 
 import channels
+import history
 import telegram_format
 from chat_loop import (
     _parse_command,
@@ -35,6 +36,7 @@ from registry import TOOLS
 log = logging.getLogger(__name__)
 
 _telegram_sessions: dict[int, list[dict]] = {}
+_telegram_chat_locks: dict[int, asyncio.Lock] = {}
 _known_chats: set[int] = set()
 
 
@@ -68,6 +70,11 @@ def _remember_chat(chat_id: int) -> None:
         len(_known_chats),
     )
     _save_known_chats(_known_chats)
+
+
+def _chat_lock(chat_id: int) -> asyncio.Lock:
+    """Serialises turns/commands per chat; debounced turns run outside PTB's update queue."""
+    return _telegram_chat_locks.setdefault(chat_id, asyncio.Lock())
 
 
 def _telegram_scope_for(chat_id: int) -> str:
@@ -190,6 +197,14 @@ async def _telegram_dispatch_command(
     update: Update, cmd: str, args: str, bot=None
 ) -> None:
     assert update.effective_chat is not None
+    async with _chat_lock(update.effective_chat.id):
+        await _dispatch_command_locked(update, cmd, args, bot)
+
+
+async def _dispatch_command_locked(
+    update: Update, cmd: str, args: str, bot=None
+) -> None:
+    assert update.effective_chat is not None
     chat_id = update.effective_chat.id
     scope = _telegram_scope_for(chat_id)
     send = _send_for(update)
@@ -209,6 +224,10 @@ async def _telegram_dispatch_command(
         new, reply = common.parse_tools_arg(cur, args)
         _telegram_show_tools[chat_id] = new
         await _tg_reply(update, reply)
+    elif canon == "status":
+        await common.run_status(send)
+    elif canon == "usage":
+        await common.run_usage(send)
     elif canon == "new":
         old = _telegram_sessions.pop(chat_id, None)
         if old is not None:
@@ -302,7 +321,6 @@ async def _telegram_handle_message(
     )
     log.debug("telegram: message text: %.500s", text)
     _remember_chat(chat_id)
-    messages = _get_telegram_session(chat_id)
 
     parsed = _parse_command(text)
     if parsed is not None:
@@ -310,25 +328,42 @@ async def _telegram_handle_message(
         await _telegram_dispatch_command(update, cmd, args, context.bot)
         return
 
-    on_tool = _tool_status_for(chat_id, context.bot)
-    try:
-        async with _typing(chat_id, context.bot):
-            _, _, clean_reply = await run_turn(
-                messages,
-                text,
-                lambda: scoped_chat(
-                    _telegram_scope_for(chat_id),
-                    lambda: chat(messages, on_tool_call=on_tool),
-                ),
-            )
-    except Exception as e:
-        log.exception("telegram: turn failed chat_id=%d", chat_id)
-        await _tg_reply(update, f"Error: {e}")
+    delay = get_config().message_debounce_seconds
+    if delay > 0:
+        _debouncer.add(chat_id, text, (update, context), delay)
         return
-    if on_tool is not None:
-        await on_tool.drain()
-    log.info("telegram: reply chat_id=%d len=%d", chat_id, len(clean_reply))
-    await _tg_reply(update, clean_reply)
+    await _run_text_turn(chat_id, text, (update, context))
+
+
+async def _run_text_turn(chat_id: int, text: str, ctx: tuple) -> None:
+    """One chat turn for ``text``; replies to the latest message's ``update``."""
+    update, context = ctx
+    async with _chat_lock(chat_id):
+        messages = _get_telegram_session(chat_id)
+        scope = _telegram_scope_for(chat_id)
+        history.record_message(scope, "user", text)
+        on_tool = _tool_status_for(chat_id, context.bot)
+        try:
+            async with _typing(chat_id, context.bot):
+                _, _, clean_reply = await run_turn(
+                    messages,
+                    text,
+                    lambda: scoped_chat(
+                        scope, lambda: chat(messages, on_tool_call=on_tool)
+                    ),
+                )
+        except Exception as e:
+            log.exception("telegram: turn failed chat_id=%d", chat_id)
+            await _tg_reply(update, f"Error: {e}")
+            return
+        if on_tool is not None:
+            await on_tool.drain()
+        history.record_message(scope, "assistant", clean_reply)
+        log.info("telegram: reply chat_id=%d len=%d", chat_id, len(clean_reply))
+        await _tg_reply(update, clean_reply)
+
+
+_debouncer = common.Debouncer(_run_text_turn)
 
 
 def _make_telegram_cmd_handler(cmd: str):
@@ -344,11 +379,8 @@ async def start_telegram(token: str) -> Application:
     global _known_chats
     _known_chats = _load_known_chats()
 
-    # PTB's Application serializes updates per-chat by default, so the
-    # `_telegram_sessions` list mutation in handlers needs no per-chat lock
-    # (cf. the explicit asyncio.Lock in frontends/discord.py). If anyone ever
-    # passes `concurrent_updates=True` to the builder below, add a per-chat
-    # lock around session reads/writes the same way Discord does.
+    # PTB serializes updates, but debounced turns run in timer tasks outside
+    # that queue, so `_chat_lock` guards every session read/write and command.
     app = Application.builder().token(token).build()
     app.add_handler(
         MessageHandler(filters.TEXT & ~filters.COMMAND, _telegram_handle_message)

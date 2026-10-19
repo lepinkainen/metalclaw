@@ -5,7 +5,7 @@ from typing import Any
 
 import httpx
 
-from providers.base import AssistantMessage, ToolCall
+from providers.base import AssistantMessage, ToolCall, Usage
 
 log = logging.getLogger(__name__)
 
@@ -108,6 +108,9 @@ class OllamaProvider:
             text=msg.get("content", "") or "",
             tool_calls=tool_calls,
             raw=msg,
+            usage=Usage(
+                body.get("prompt_eval_count") or 0, body.get("eval_count") or 0
+            ),
         )
 
     def format_tool_results(
