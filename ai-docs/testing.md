@@ -80,7 +80,7 @@ Pass to `_chat_with_provider(stub, messages)` to drive multi-turn tool-call sequ
 
 ## CI gates (`task test` + `task lint` + `task build`)
 
-- `task lint` — `ruff check .` + `mypy .` + optional gitleaks.
+- `task lint` — `ruff check .` + `ruff format --check .` + `mypy .` + optional gitleaks.
 - `task build` — import smoke test (`python -c "import bot, tools, registry, self_change, memory, config"`). **Doesn't import providers/frontends** — those are runtime deps. If you break import in those, build won't catch it; run `task test` too.
 - `task test` — full suite, suppresses output unless failure.
 

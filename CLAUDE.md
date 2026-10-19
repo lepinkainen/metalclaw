@@ -30,7 +30,7 @@ Metalclaw is a single-user chatbot that talks to an LLM provider — Ollama (def
 
 ```
 task build        # Import-check all modules
-task lint         # ruff check . + mypy . + optional gitleaks scan
+task lint         # ruff check . + ruff format . + mypy . + optional gitleaks scan
 task test         # pytest -q
 task daemon       # uv run python bot.py --daemon  (Telegram + Discord + heartbeat, no REPL)
 uv run python bot.py                # CLI REPL + Telegram + Discord (each starts only if token is set)
