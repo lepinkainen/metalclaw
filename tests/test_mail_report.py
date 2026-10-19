@@ -70,3 +70,19 @@ def test_mark_rejects_unknown(fm):
     res = mail.mark_emails_reported(["2", "zzz", ""])
     assert res == {"recorded": ["2"], "rejected": ["zzz"]}
     assert [e["id"] for e in mail.check_new_mail()["emails"]] == ["1"]
+
+
+def test_wilma_notification_gets_hint(fm, monkeypatch):
+    from types import SimpleNamespace
+
+    monkeypatch.setattr(mail, "get_config", lambda: SimpleNamespace(wilma_url="https://w.example"))
+
+    def post(url, headers, json):
+        raw = [_raw("1"), _raw("2")]
+        raw[0].update(subject="Viesti Wilmasta: Hei", **{"from": [{"name": "W", "email": "x@inschool.fi"}]})
+        return type("R", (), {"raise_for_status": lambda s: None, "json": lambda s: {"methodResponses": [["Email/get", {"list": raw}, "g"]]}})()
+
+    monkeypatch.setattr(mail.HTTP, "post", post)
+    by_id = {e["id"]: e for e in mail.check_new_mail()["emails"]}
+    assert "find_wilma_message" in by_id["1"]["hint"]
+    assert "hint" not in by_id["2"]

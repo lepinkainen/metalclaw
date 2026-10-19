@@ -478,7 +478,8 @@ def check_new_mail() -> dict[str, Any]:
     for e in emails:
         log.debug("check_new_mail candidate id=%s from=%s subject=%.100s", e["id"], e["from"], e["subject"])
         if _is_wilma_notification(e) and get_config().wilma_url:
-            e["wilma_hint"] = "Wilma notification: call find_wilma_message(subject, sent_at) for the full message."
+            # `hint` is the generic per-email field telling the model which tool fetches the real content; other integrations should reuse it.
+            e["hint"] = "Wilma notification: call find_wilma_message(subject, sent_at) for the full message."
     return {"count": len(emails), "emails": emails}
 
 

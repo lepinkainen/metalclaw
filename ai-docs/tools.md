@@ -46,7 +46,7 @@ Ollama and litellm consume this directly (litellm normalises to per-backend form
 | `remove_email_label` | `tools/mail.py` | same | `dict` | Same `bot/` restriction; errors if label missing (never creates). Patches `mailboxIds/<id>: null`. |
 | `list_wilma_messages` | `tools/wilma.py` | `student?, folder="inbox", unread_only=False, limit=20` | `dict` | Per child `{student, student_name, messages[]}`; newest first. `student` = name substring or number. |
 | `read_wilma_message` | `tools/wilma.py` | `message_id: int, student?` | `dict` | Full body (markdown), recipients, replies. Without `student` tries each child. |
-| `find_wilma_message` | `tools/wilma.py` | `subject, sent_at?, student?` | `dict` | Resolves a "Viesti Wilmasta" notification email to the real message. `{status: found/ambiguous/not_found}`; dedups the same message across children (`students` lists them). `check_new_mail` adds `wilma_hint` to such emails when `wilma_url` is set. |
+| `find_wilma_message` | `tools/wilma.py` | `subject, sent_at?, student?` | `dict` | Resolves a "Viesti Wilmasta" notification email to the real message. `{status: found/ambiguous/not_found}`; dedups the same message across children (`students` lists them). `check_new_mail` adds `hint` to such emails when `wilma_url` is set. |
 | `set_user_preference` | `tools.py:618` | `key, value` | `dict` | → `memory.set_preference`. |
 | `add_user_fact` | `tools.py:635` | `text` | `dict` | → `memory.add_fact`. |
 | `add_user_instruction` | `tools.py:658` | `text` | `dict` | → `memory.add_instruction`. Behavioural rule. |
