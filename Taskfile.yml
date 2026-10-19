@@ -3,7 +3,7 @@ tasks:
   lint:
     silent: true
     cmds:
-      - uv run ruff check . --quiet
+      - uv run ruff check . --quiet --fix
       - |
         if command -v gitleaks >/dev/null 2>&1; then
           gitleaks dir . --config .gitleaks.toml --no-banner --log-level error
@@ -12,8 +12,19 @@ tasks:
         fi
       - echo "Lint OK"
   build:
-    deps: [lint, test]
-    cmd: uv run python -c "import bot, tools, registry, self_change, memory, config"
+    cmds:
+      - task: lint
+      - task: test
+      - uv run python -c "import bot, tools, registry, self_change, memory, config"
+  build-ci:
+    desc: CI build — lint without autofix, tests, import check
+    cmds:
+      - uv run ruff check .
+      - task: test-ci
+      - uv run python -c "import bot, tools, registry, self_change, memory, config"
+  test-ci:
+    desc: Run tests (plain pytest output)
+    cmd: uv run pytest -q
   test:
     silent: true
     cmds:

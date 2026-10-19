@@ -1,0 +1,21 @@
+name: Python CI
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version-file: '.python-version'
+      - uses: astral-sh/setup-uv@v10
+      - uses: go-task/setup-task@v2
+        with:
+          version: 3.x
+      - name: Install ripgrep (vault_search tests)
+        run: sudo apt-get update && sudo apt-get install -y ripgrep
+      - run: task build-ci
