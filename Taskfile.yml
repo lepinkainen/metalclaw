@@ -23,6 +23,7 @@ tasks:
     cmds:
       - uv run ruff check .
       - uv run ruff format --check .
+      - gitleaks dir . --config .gitleaks.toml --no-banner --log-level error
       - uv run mypy .
       - task: test-ci
       - uv run python -c "import bot, tools, registry, self_change, memory, config"

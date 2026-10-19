@@ -18,4 +18,6 @@ jobs:
           version: 3.x
       - name: Install ripgrep (vault_search tests)
         run: sudo apt-get update && sudo apt-get install -y ripgrep
+      - name: Install gitleaks
+        run: curl -sSfL https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz | sudo tar -xz -C /usr/local/bin gitleaks
       - run: task build-ci
