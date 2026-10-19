@@ -1,5 +1,7 @@
 FROM python:3.14-slim
+RUN pip install uv && useradd --create-home app
 WORKDIR /app
 COPY . .
-RUN pip install uv && uv sync --no-dev
-CMD ["uv", "run", "python", "bot.py", "--daemon"]
+RUN uv sync --no-dev --frozen
+USER app
+CMD [".venv/bin/python", "bot.py", "--daemon"]
