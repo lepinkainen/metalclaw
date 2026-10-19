@@ -43,6 +43,7 @@ class FakeWilma:
         self.logins = 0
         self.calls: list[str] = []
         self.detail_json = True
+        self.roles_status = 200
 
     def __call__(self, request: httpx.Request) -> httpx.Response:
         path = request.url.path
@@ -71,8 +72,10 @@ class FakeWilma:
             return httpx.Response(302, headers={"location": "/login"})
         if path == "/forbidden":
             return httpx.Response(403)
+        if path == "/":
+            return httpx.Response(200, html='<a href="/!1001/">Sanni Lindblad</a><a href="/!1001/messages">Viestit</a>')
         if path == "/api/v1/accounts/me/roles":
-            return httpx.Response(200, json=ROLES)
+            return httpx.Response(self.roles_status, json=ROLES)
         if path.endswith("/messages/list"):
             return httpx.Response(200, json=MESSAGES)
         if path.endswith("/messages/5"):
@@ -226,6 +229,19 @@ def test_403_on_live_session_does_not_relogin(client, fake):
     with pytest.raises(wilma.WilmaError, match="HTTP 403"):
         client.get("/forbidden")
     assert fake.logins == 1
+
+
+def test_transient_roles_failure_is_not_cached(client, fake):
+    fake.roles_status = 503
+    with pytest.raises(wilma.WilmaError, match="HTTP 503"):
+        client.students()
+    fake.roles_status = 200
+    assert len(client.students()) == 2
+
+
+def test_missing_roles_api_falls_back_to_home_page(client, fake):
+    fake.roles_status = 404
+    assert client.students() == [{"number": "1001", "name": "Sanni Lindblad"}]
 
 
 def test_wilma_notification_detection():

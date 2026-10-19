@@ -79,7 +79,7 @@ Per-module symbol map. `→` = imports. `←` = imported by.
 
 - Unofficial: speaks the web UI's cookie-session + JSON endpoints. Protocol mirrors github.com/aikarjal/wilmai (TS, MIT) — diff its changelog when Wilma breaks.
 - Login: `GET /login` hidden fields → `SESSIONID` (or `GET /token` → `Wilma2LoginID`) → `POST /login` form → `Wilma2SID` cookie. Redirect with `loginfailed` = bad creds. Redirect page containing `mfa-formkey` → `POST /api/v1/accounts/me/mfa/otp/check` with stdlib `totp(cfg.wilma_totp_secret)`.
-- Endpoints: `/api/v1/accounts/me/roles` (students; `passwd` role skipped), `/!<student>/messages/list[/archive|/outbox]`, `/!<student>/messages/<id>?format=json` (falls back to `/messages/<id>` HTML on 404).
+- Endpoints: `/api/v1/accounts/me/roles` (students; `passwd` role skipped; on 404/non-JSON falls back to `/!<n>/` links on the home page; 5xx/network errors propagate uncached), `/!<student>/messages/list[/archive|/outbox]`, `/!<student>/messages/<id>?format=json` (falls back to `/messages/<id>` HTML on 404).
 - **One live session per account**: every login cancels the previous one, browser included. So: lazy login, module singleton `get_client()` shared across threads (`RLock` serialises requests), re-login only on 401 / redirect to `/login` / 403-with-dead-session (`_session_alive` probes roles first so a single forbidden item doesn't log the parent out).
 - Rejected creds or missing TOTP secret set `_failed` → all later calls raise immediately until restart (repeated failed logins can lock the account).
 - Bodies: `ContentHtml` → markdown via `markdownify`, truncated at 20 000 chars. Timestamps → ISO in Europe/Helsinki.

@@ -48,7 +48,9 @@ FOLDERS = {
 
 
 class WilmaError(Exception):
-    pass
+    def __init__(self, message: str, status: int | None = None) -> None:
+        super().__init__(message)
+        self.status = status
 
 
 class WilmaAuthError(WilmaError):
@@ -119,6 +121,16 @@ def parse_students(data: Any) -> list[dict[str, str]]:
             continue
         name = _compact(rec.get("name") or rec.get("Name") or m.group(1))
         out.setdefault(m.group(1), {"number": m.group(1), "name": name})
+    return list(out.values())
+
+
+def parse_students_from_home(html: str) -> list[dict[str, str]]:
+    """Older Wilmas without the roles API: guardian home page links each child as ``/!<number>/``."""
+    out: dict[str, dict[str, str]] = {}
+    for a in BeautifulSoup(html, "html.parser").find_all("a", href=True):
+        m = re.match(r"/!(\d+)/?$", a["href"])
+        if m:
+            out.setdefault(m.group(1), {"number": m.group(1), "name": _compact(a.get_text(" ")) or m.group(1)})
     return list(out.values())
 
 
@@ -353,7 +365,7 @@ class WilmaClient:
             if self._is_logged_out(resp):
                 raise WilmaError("Wilma keeps asking to log in again")
             if resp.status_code >= 400:
-                raise WilmaError(f"Wilma HTTP {resp.status_code}")
+                raise WilmaError(f"Wilma HTTP {resp.status_code}", status=resp.status_code)
             return resp
 
     # --- data ---
@@ -361,11 +373,18 @@ class WilmaClient:
     def students(self) -> list[dict[str, str]]:
         with self._lock:
             if self._students is None:
+                # Only a missing/non-JSON roles API means "older Wilma": fall back to the home page.
+                # Anything else (5xx, network) propagates uncached so the next call retries.
                 try:
                     self._students = parse_students(self.get("/api/v1/accounts/me/roles").json())
-                except (WilmaError, ValueError):
-                    log.warning("wilma: roles API unavailable; assuming a single-student account")
-                    self._students = []
+                except WilmaError as e:
+                    if e.status != 404:
+                        raise
+                    log.warning("wilma: no roles API; reading students from the home page")
+                    self._students = parse_students_from_home(self.get("/").text)
+                except ValueError:
+                    log.warning("wilma: roles API not JSON; reading students from the home page")
+                    self._students = parse_students_from_home(self.get("/").text)
                 log.info("wilma: %d student(s)", len(self._students))
             return self._students
 
@@ -388,7 +407,7 @@ class WilmaClient:
                 if msg:
                     return msg
         except WilmaError as e:
-            if "HTTP 404" not in str(e):
+            if e.status != 404:
                 raise
         resp = self.get(f"/messages/{message_id}", student)
         if "json" in resp.headers.get("content-type", ""):
