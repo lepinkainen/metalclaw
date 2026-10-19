@@ -125,6 +125,11 @@ def _log_startup(cfg, args: argparse.Namespace, log_path: Path) -> None:
 async def _async_main(*, daemon: bool, with_telegram: bool, with_discord: bool) -> None:
     import tools  # noqa: F401 — triggers @tool registrations
 
+    def status(msg: str) -> None:
+        log.info(msg)
+        if not daemon:
+            console.print(f"[dim]{msg}[/dim]")
+
     cfg = get_config()
     migrated = memory.migrate_legacy_scopes()
     if migrated:
@@ -141,12 +146,13 @@ async def _async_main(*, daemon: bool, with_telegram: bool, with_discord: bool) 
                     "telegram_bot_token missing — set TELEGRAM_BOT_TOKEN env or "
                     "telegram_bot_token in config.yaml"
                 )
-            console.print("[dim]no telegram_bot_token — telegram disabled[/dim]")
+            status("telegram: no telegram_bot_token — disabled")
         else:
             tg_app = await _start_telegram(cfg.telegram_bot_token)
-            console.print(
-                f"[dim]telegram polling started ({_telegram.known_chat_count()} known chat(s))[/dim]"
-            )
+            if not daemon:
+                console.print(
+                    f"[dim]telegram polling started ({_telegram.known_chat_count()} known chat(s))[/dim]"
+                )
 
     discord_client: discord.Client | None = None
     discord_task: asyncio.Task | None = None
@@ -157,17 +163,17 @@ async def _async_main(*, daemon: bool, with_telegram: bool, with_discord: bool) 
                     "no frontend token configured — set telegram_bot_token or "
                     "discord_bot_token (or pass --no-daemon to use the CLI)"
                 )
-            console.print("[dim]no discord_bot_token — discord disabled[/dim]")
+            status("discord: no discord_bot_token — disabled")
         else:
             discord_client, discord_task = await _start_discord(cfg.discord_bot_token)
-            console.print("[dim]discord gateway connecting…[/dim]")
+            status("discord: gateway connecting…")
 
     stop = asyncio.Event()
     hb_task = asyncio.create_task(heartbeat.run(stop))
 
     try:
         if daemon:
-            console.print("[dim]daemon mode — Ctrl-C to exit[/dim]")
+            status("daemon mode — Ctrl-C to exit")
             try:
                 await asyncio.Event().wait()
             except KeyboardInterrupt, asyncio.CancelledError:
