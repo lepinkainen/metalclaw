@@ -36,6 +36,7 @@ def _session_lock(channel_id: int) -> asyncio.Lock:
         _discord_session_locks[channel_id] = lock
     return lock
 
+
 _DISCORD_MAX_MESSAGE = 2000
 
 _DISCORD_HELP_TEXT = "\n".join(common.HELP_LINES)
@@ -109,13 +110,16 @@ async def _discord_send(channel: discord.abc.Messageable, text: str) -> None:
 def _send_for(channel: discord.abc.Messageable) -> common.SendFn:
     async def _send(text: str) -> None:
         await _discord_send(channel, text)
+
     return _send
 
 
 class _DiscordChannel:
     name = "discord"
 
-    def __init__(self, client: discord.Client, heartbeat_channel_id: int | None) -> None:
+    def __init__(
+        self, client: discord.Client, heartbeat_channel_id: int | None
+    ) -> None:
         self._client = client
         self._heartbeat_channel_id = heartbeat_channel_id
 
@@ -137,7 +141,12 @@ class _DiscordChannel:
                     e,
                 )
                 return
-        log.info("discord: notify channel=%s %d chars (scope %s)", self._heartbeat_channel_id, len(text), scope)
+        log.info(
+            "discord: notify channel=%s %d chars (scope %s)",
+            self._heartbeat_channel_id,
+            len(text),
+            scope,
+        )
         # ids come from the configured heartbeat channel, which is a text channel
         await _discord_send(cast(discord.abc.Messageable, ch), text)
 
@@ -181,7 +190,13 @@ async def _discord_dispatch_command(
     scope = _discord_scope_for(channel_id)
     send = _send_for(message.channel)
     canon = common.canonicalize(cmd) or cmd
-    log.info("discord: command /%s (canon=%s) channel_id=%d args=%d chars", cmd, canon, channel_id, len(args))
+    log.info(
+        "discord: command /%s (canon=%s) channel_id=%d args=%d chars",
+        cmd,
+        canon,
+        channel_id,
+        len(args),
+    )
 
     if canon == "help":
         await _discord_send(message.channel, _DISCORD_HELP_TEXT)
@@ -194,7 +209,11 @@ async def _discord_dispatch_command(
         old = _discord_sessions.pop(channel_id, None)
         if old is not None:
             forget_session_provider(old)
-        log.info("discord: session reset channel_id=%d (had_session=%s)", channel_id, old is not None)
+        log.info(
+            "discord: session reset channel_id=%d (had_session=%s)",
+            channel_id,
+            old is not None,
+        )
         await _discord_send(message.channel, "Conversation reset.")
     elif canon == "remember":
         await common.run_remember(send, args)
@@ -235,7 +254,9 @@ async def _discord_dispatch_command(
             log.info("discord: /%s bad args: %s", cmd, e)
             await _discord_send(message.channel, str(e))
             return
-        log.info("discord: tool command /%s -> %s params=%.200s", cmd, tool_name, params)
+        log.info(
+            "discord: tool command /%s -> %s params=%.200s", cmd, tool_name, params
+        )
         tool_obj = TOOLS.get(tool_name)
         if tool_obj is None:
             log.warning("discord: tool %s unavailable", tool_name)
@@ -281,7 +302,9 @@ def _discord_should_respond(
     ):
         log.debug("discord: respond=yes channel=%d reason=reply_to_bot", cid)
         return True
-    log.debug("discord: respond=no channel=%d reason=guild channel without mention/reply", cid)
+    log.debug(
+        "discord: respond=no channel=%d reason=guild channel without mention/reply", cid
+    )
     return False
 
 
@@ -299,7 +322,10 @@ async def _discord_handle_message(
     parsed = _parse_command(text)
     log.info(
         "discord: message channel_id=%d user=%s len=%d command=%s",
-        message.channel.id, message.author, len(text), parsed[0] if parsed else None,
+        message.channel.id,
+        message.author,
+        len(text),
+        parsed[0] if parsed else None,
     )
     log.debug("discord: message text: %.500s", text)
 
@@ -360,7 +386,8 @@ async def start_discord(token: str) -> tuple[discord.Client, asyncio.Task]:
     task = asyncio.create_task(client.start(token))
     log.info(
         "discord: starting gateway (chat_channels=%d heartbeat_channel=%s)",
-        len(cfg.discord_chat_channels), cfg.discord_heartbeat_channel,
+        len(cfg.discord_chat_channels),
+        cfg.discord_heartbeat_channel,
     )
     return client, task
 
@@ -372,5 +399,5 @@ async def stop_discord(client: discord.Client, task: asyncio.Task) -> None:
         log.exception("discord client close failed")
     try:
         await asyncio.wait_for(task, timeout=5)
-    except (TimeoutError, asyncio.CancelledError):
+    except TimeoutError, asyncio.CancelledError:
         task.cancel()

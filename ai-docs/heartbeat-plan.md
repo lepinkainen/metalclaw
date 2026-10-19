@@ -130,8 +130,7 @@ Check the weather for Helsinki. If rain is expected today, notify the user brief
 Better: use a dedicated helper:
 
 ```python
-def run_prompt(prompt: str, source: str = "user") -> str:
-    ...
+def run_prompt(prompt: str, source: str = "user") -> str: ...
 ```
 
 Then both REPL and heartbeat can call the same function.
@@ -414,8 +413,7 @@ Refactor `bot.py` so both:
 go through a common function, something like:
 
 ```python
-def run_bot_turn(user_input: str, source: str = "interactive") -> str:
-    ...
+def run_bot_turn(user_input: str, source: str = "interactive") -> str: ...
 ```
 
 This avoids duplicating chat/tool-call logic.

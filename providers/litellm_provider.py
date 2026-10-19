@@ -55,14 +55,19 @@ class LiteLLMProvider:
 
         log.info(
             "litellm request model=%s messages=%d tools=%d retries=%d",
-            self.model, len(payload), len(tools), self.num_retries,
+            self.model,
+            len(payload),
+            len(tools),
+            self.num_retries,
         )
         t0 = time.monotonic()
         try:
             resp = litellm.completion(**kwargs)
         except Exception:
             log.exception(
-                "litellm request failed after %.2fs model=%s", time.monotonic() - t0, self.model
+                "litellm request failed after %.2fs model=%s",
+                time.monotonic() - t0,
+                self.model,
             )
             raise
         usage = getattr(resp, "usage", None)
@@ -83,19 +88,25 @@ class LiteLLMProvider:
 
         tool_calls: list[ToolCall] = []
         raw_tool_calls: list[dict] = []
-        for tc in (getattr(msg, "tool_calls", None) or []):
+        for tc in getattr(msg, "tool_calls", None) or []:
             args_str = tc.function.arguments or ""
             try:
                 args = json.loads(args_str) if args_str else {}
             except json.JSONDecodeError:
-                log.warning("litellm: bad tool-call JSON for %s: %.200s", tc.function.name, args_str)
+                log.warning(
+                    "litellm: bad tool-call JSON for %s: %.200s",
+                    tc.function.name,
+                    args_str,
+                )
                 args = {}
             tool_calls.append(ToolCall(id=tc.id, name=tc.function.name, arguments=args))
-            raw_tool_calls.append({
-                "id": tc.id,
-                "type": "function",
-                "function": {"name": tc.function.name, "arguments": args_str},
-            })
+            raw_tool_calls.append(
+                {
+                    "id": tc.id,
+                    "type": "function",
+                    "function": {"name": tc.function.name, "arguments": args_str},
+                }
+            )
 
         content = getattr(msg, "content", "") or ""
         raw: dict = {"role": "assistant", "content": content}

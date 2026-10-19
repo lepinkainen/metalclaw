@@ -76,7 +76,16 @@ def _setup_logging(args: argparse.Namespace) -> Path:
     root.setLevel(logging.DEBUG)
     root.addHandler(file_h)
     root.addHandler(console_h)
-    for name in ("httpx", "httpcore", "telegram", "discord", "litellm", "LiteLLM", "asyncio", "markdown_it"):
+    for name in (
+        "httpx",
+        "httpcore",
+        "telegram",
+        "discord",
+        "litellm",
+        "LiteLLM",
+        "asyncio",
+        "markdown_it",
+    ):
         logging.getLogger(name).setLevel(logging.WARNING)
     return path
 
@@ -84,7 +93,9 @@ def _setup_logging(args: argparse.Namespace) -> Path:
 def _log_startup(cfg, args: argparse.Namespace, log_path: Path) -> None:
     from config import _config_path
 
-    log.info("startup: pid=%d daemon=%s log_file=%s", os.getpid(), args.daemon, log_path)
+    log.info(
+        "startup: pid=%d daemon=%s log_file=%s", os.getpid(), args.daemon, log_path
+    )
     log.info("startup: config=%s", _config_path())
     log.info(
         "startup: provider=%s model=%s",
@@ -93,11 +104,15 @@ def _log_startup(cfg, args: argparse.Namespace, log_path: Path) -> None:
     )
     log.info(
         "startup: escalation enabled=%s provider=%s model=%s",
-        cfg.escalation_enabled, cfg.escalation_provider, cfg.escalation_model,
+        cfg.escalation_enabled,
+        cfg.escalation_provider,
+        cfg.escalation_model,
     )
     log.info(
         "startup: heartbeat enabled=%s interval=%s active_hours=%s",
-        cfg.heartbeat_enabled, cfg.heartbeat_interval_seconds, cfg.heartbeat_active_hours,
+        cfg.heartbeat_enabled,
+        cfg.heartbeat_interval_seconds,
+        cfg.heartbeat_active_hours,
     )
     log.info(
         "startup: frontends telegram=%s discord=%s cli=%s",
@@ -107,9 +122,7 @@ def _log_startup(cfg, args: argparse.Namespace, log_path: Path) -> None:
     )
 
 
-async def _async_main(
-    *, daemon: bool, with_telegram: bool, with_discord: bool
-) -> None:
+async def _async_main(*, daemon: bool, with_telegram: bool, with_discord: bool) -> None:
     import tools  # noqa: F401 — triggers @tool registrations
 
     cfg = get_config()
@@ -157,7 +170,7 @@ async def _async_main(
             console.print("[dim]daemon mode — Ctrl-C to exit[/dim]")
             try:
                 await asyncio.Event().wait()
-            except (KeyboardInterrupt, asyncio.CancelledError):
+            except KeyboardInterrupt, asyncio.CancelledError:
                 pass
         else:
             await _run_cli_repl()
@@ -165,7 +178,7 @@ async def _async_main(
         stop.set()
         try:
             await asyncio.wait_for(hb_task, timeout=5)
-        except (TimeoutError, asyncio.CancelledError):
+        except TimeoutError, asyncio.CancelledError:
             hb_task.cancel()
         if tg_app is not None:
             await _stop_telegram(tg_app)
@@ -176,15 +189,18 @@ async def _async_main(
 def main() -> None:
     parser = argparse.ArgumentParser(prog="metalclaw")
     parser.add_argument(
-        "--daemon", action="store_true",
+        "--daemon",
+        action="store_true",
         help="run without CLI REPL (Telegram + Discord + heartbeat only)",
     )
     parser.add_argument(
-        "--no-telegram", action="store_true",
+        "--no-telegram",
+        action="store_true",
         help="skip starting the Telegram frontend",
     )
     parser.add_argument(
-        "--no-discord", action="store_true",
+        "--no-discord",
+        action="store_true",
         help="skip starting the Discord frontend",
     )
     args = parser.parse_args()

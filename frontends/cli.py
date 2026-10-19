@@ -137,7 +137,9 @@ def _print_bot_markdown(text: str) -> None:
     console.print()
 
 
-def _make_tool_handler(tool_name: str, parser: Callable, formatter: Callable) -> Callable:
+def _make_tool_handler(
+    tool_name: str, parser: Callable, formatter: Callable
+) -> Callable:
     def handler(args: str) -> None:
         params = parser(args)
         log.info("cli: tool command -> %s params=%.200s", tool_name, params)
@@ -153,6 +155,7 @@ def _make_tool_handler(tool_name: str, parser: Callable, formatter: Callable) ->
             console.print(f"\n[bold]bot>[/bold] Error: {e}\n")
             return
         _print_bot_markdown(formatter(result))
+
     return handler
 
 
@@ -172,7 +175,9 @@ async def _handle_big(args: str) -> None:
         return
     cfg = get_config()
     if not cfg.escalation_enabled:
-        console.print("escalation disabled — set escalation_enabled: true in config.yaml")
+        console.print(
+            "escalation disabled — set escalation_enabled: true in config.yaml"
+        )
         return
     messages = _cli_messages_ref()
     if messages is None:
@@ -229,26 +234,26 @@ async def _handle_heartbeat(args: str) -> None:
 # (e.g. "approve_force", "add_tool") are folded to the canonical form by
 # `common.canonicalize` before lookup in the dispatcher below.
 _COMMAND_HANDLERS = {
-    "add-tool":      _handle_add_tool,
-    "self-edit":     _handle_self_edit,
-    "approve":       _handle_approve,
+    "add-tool": _handle_add_tool,
+    "self-edit": _handle_self_edit,
+    "approve": _handle_approve,
     "approve-force": _handle_approve_force,
-    "reject":        _handle_reject,
-    "diff":          _handle_diff,
-    "think":     _handle_think,
-    "tools":     _handle_tools,
-    "train":     _make_tool_handler(*common.TOOL_COMMANDS["train"]),
-    "weather":   _make_tool_handler(*common.TOOL_COMMANDS["weather"]),
-    "mail":      _make_tool_handler(*common.TOOL_COMMANDS["mail"]),
-    "search":    _make_tool_handler(*common.TOOL_COMMANDS["search"]),
-    "wilma":     _make_tool_handler(*common.TOOL_COMMANDS["wilma"]),
-    "remember":  _handle_remember,
-    "forget":    _handle_forget,
-    "memory":    _handle_memory,
-    "manual":    _handle_manual,
+    "reject": _handle_reject,
+    "diff": _handle_diff,
+    "think": _handle_think,
+    "tools": _handle_tools,
+    "train": _make_tool_handler(*common.TOOL_COMMANDS["train"]),
+    "weather": _make_tool_handler(*common.TOOL_COMMANDS["weather"]),
+    "mail": _make_tool_handler(*common.TOOL_COMMANDS["mail"]),
+    "search": _make_tool_handler(*common.TOOL_COMMANDS["search"]),
+    "wilma": _make_tool_handler(*common.TOOL_COMMANDS["wilma"]),
+    "remember": _handle_remember,
+    "forget": _handle_forget,
+    "memory": _handle_memory,
+    "manual": _handle_manual,
     "heartbeat": _handle_heartbeat,
-    "big":       _handle_big,
-    "help":      _handle_help,
+    "big": _handle_big,
+    "help": _handle_help,
 }
 
 
@@ -342,7 +347,7 @@ async def run_cli_repl() -> None:
         while True:
             try:
                 user_input = (await _prompt_session.prompt_async("you> ")).strip()
-            except (EOFError, KeyboardInterrupt):
+            except EOFError, KeyboardInterrupt:
                 print()
                 break
             if not user_input or user_input.lower() in ("quit", "exit"):
@@ -356,7 +361,12 @@ async def run_cli_repl() -> None:
                 cmd, args = parsed
                 canon = common.canonicalize(cmd) or cmd
                 handler = _COMMAND_HANDLERS.get(canon)
-                log.info("cli: command /%s (canon=%s) known=%s", cmd, canon, handler is not None)
+                log.info(
+                    "cli: command /%s (canon=%s) known=%s",
+                    cmd,
+                    canon,
+                    handler is not None,
+                )
                 if handler is None:
                     console.print(f"unknown command: /{cmd}  (try /help)")
                     continue
@@ -383,7 +393,9 @@ async def run_cli_repl() -> None:
                 log.exception("cli: turn failed")
                 console.print(f"\n[bold]bot>[/bold] Error: {e}\n")
                 continue
-            log.info("cli: reply len=%d thinking=%d chars", len(clean_reply), len(thinking))
+            log.info(
+                "cli: reply len=%d thinking=%d chars", len(clean_reply), len(thinking)
+            )
 
             hist.save_assistant(reply)
 

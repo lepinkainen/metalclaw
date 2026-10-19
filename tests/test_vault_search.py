@@ -56,11 +56,13 @@ def test_search_respects_excludes(vault, monkeypatch):
     _write_note(vault_dir / "Excluded" / "b.md", "secretphrase here\n")
 
     cfg_path.write_text(
-        yaml.safe_dump({
-            "vault_path": str(vault_dir),
-            "memory_subdir": "Memory",
-            "vault_search_excludes": ["Excluded/**"],
-        })
+        yaml.safe_dump(
+            {
+                "vault_path": str(vault_dir),
+                "memory_subdir": "Memory",
+                "vault_search_excludes": ["Excluded/**"],
+            }
+        )
     )
     config.reset_cache()
 

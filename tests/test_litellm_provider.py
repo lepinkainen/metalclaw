@@ -12,7 +12,9 @@ def _stub_response(*, content: str = "", tool_calls: list | None = None):
 
 
 def _stub_tool_call(*, id: str, name: str, arguments: str):
-    return SimpleNamespace(id=id, function=SimpleNamespace(name=name, arguments=arguments))
+    return SimpleNamespace(
+        id=id, function=SimpleNamespace(name=name, arguments=arguments)
+    )
 
 
 @pytest.fixture
@@ -25,6 +27,7 @@ def patched_completion(monkeypatch):
         return captured.setdefault("response", _stub_response(content="ok"))
 
     import providers.litellm_provider as lp
+
     monkeypatch.setattr(lp.litellm, "completion", _stub)
     return captured
 
@@ -77,7 +80,9 @@ def test_chat_once_extracts_tool_calls_and_round_trip_raw(patched_completion):
         ],
     )
     p = LiteLLMProvider(model="bedrock/anthropic.claude-haiku-4-5")
-    out = p.chat_once(messages=[{"role": "user", "content": "roll"}], tools=[], system="")
+    out = p.chat_once(
+        messages=[{"role": "user", "content": "roll"}], tools=[], system=""
+    )
     assert len(out.tool_calls) == 1
     tc = out.tool_calls[0]
     assert tc.id == "c1"
@@ -86,11 +91,13 @@ def test_chat_once_extracts_tool_calls_and_round_trip_raw(patched_completion):
     assert out.raw == {
         "role": "assistant",
         "content": "",
-        "tool_calls": [{
-            "id": "c1",
-            "type": "function",
-            "function": {"name": "roll_die", "arguments": '{"sides":6}'},
-        }],
+        "tool_calls": [
+            {
+                "id": "c1",
+                "type": "function",
+                "function": {"name": "roll_die", "arguments": '{"sides":6}'},
+            }
+        ],
     }
 
 
@@ -113,6 +120,7 @@ def test_aws_region_and_profile_threaded_to_completion(monkeypatch):
         return _stub_response(content="ok")
 
     import providers.litellm_provider as lp
+
     monkeypatch.setattr(lp.litellm, "completion", _stub)
     p = lp.LiteLLMProvider(
         model="bedrock/x",

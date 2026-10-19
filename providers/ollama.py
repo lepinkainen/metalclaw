@@ -58,7 +58,10 @@ class OllamaProvider:
 
         log.info(
             "ollama request model=%s messages=%d tools=%d options=%s",
-            self.model, len(payload_messages), len(tools), options or None,
+            self.model,
+            len(payload_messages),
+            len(tools),
+            options or None,
         )
         t0 = time.monotonic()
         try:
@@ -67,7 +70,8 @@ class OllamaProvider:
         except httpx.HTTPError as e:
             log.exception(
                 "ollama request failed after %.2fs model=%s status=%s",
-                time.monotonic() - t0, self.model,
+                time.monotonic() - t0,
+                self.model,
                 getattr(getattr(e, "response", None), "status_code", None),  # noqa: TRY401
             )
             raise
@@ -75,8 +79,11 @@ class OllamaProvider:
         msg = body["message"]
         log.info(
             "ollama response status=%s latency=%.2fs done_reason=%s prompt_tokens=%s eval_tokens=%s",
-            getattr(response, "status_code", None), time.monotonic() - t0, body.get("done_reason"),
-            body.get("prompt_eval_count"), body.get("eval_count"),
+            getattr(response, "status_code", None),
+            time.monotonic() - t0,
+            body.get("done_reason"),
+            body.get("prompt_eval_count"),
+            body.get("eval_count"),
         )
         log.debug("ollama raw response: %.500s", body)
 
@@ -87,6 +94,7 @@ class OllamaProvider:
             if isinstance(args, str):
                 # Defensive: some Ollama builds emit JSON-string arguments.
                 import json
+
                 args = json.loads(args) if args.strip() else {}
             tool_calls.append(
                 ToolCall(
@@ -124,7 +132,9 @@ def fetch_model_defaults(chat_url: str, model: str) -> dict[str, Any]:
         r.raise_for_status()
         params_text = r.json().get("parameters", "") or ""
     except Exception:
-        log.exception("ollama: fetch_model_defaults failed url=%s model=%s", show_url, model)
+        log.exception(
+            "ollama: fetch_model_defaults failed url=%s model=%s", show_url, model
+        )
         return {}
     out: dict[str, Any] = {}
     for line in params_text.splitlines():

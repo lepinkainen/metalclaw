@@ -72,7 +72,9 @@ def test_escalation_model_explicit_wins(tmp_path, cfg_file, write_config):
     assert cfg.escalation_model == "bedrock/anthropic.claude-opus-4-7"
 
 
-def test_escalation_provider_ollama_defaults_to_ollama_model(tmp_path, cfg_file, write_config):
+def test_escalation_provider_ollama_defaults_to_ollama_model(
+    tmp_path, cfg_file, write_config
+):
     write_config(
         cfg_file,
         vault_path=str(tmp_path / "vault"),
@@ -94,12 +96,18 @@ def test_discord_defaults(tmp_path, cfg_file, write_config):
 
 
 def test_discord_token_yaml(tmp_path, cfg_file, write_config):
-    write_config(cfg_file, vault_path=str(tmp_path / "vault"), discord_bot_token="from-yaml")
+    write_config(
+        cfg_file, vault_path=str(tmp_path / "vault"), discord_bot_token="from-yaml"
+    )
     assert config.get_config().discord_bot_token == "from-yaml"
 
 
-def test_env_discord_token_wins_over_yaml(tmp_path, cfg_file, write_config, monkeypatch):
-    write_config(cfg_file, vault_path=str(tmp_path / "vault"), discord_bot_token="from-yaml")
+def test_env_discord_token_wins_over_yaml(
+    tmp_path, cfg_file, write_config, monkeypatch
+):
+    write_config(
+        cfg_file, vault_path=str(tmp_path / "vault"), discord_bot_token="from-yaml"
+    )
     monkeypatch.setenv("DISCORD_BOT_TOKEN", "from-env")
     config.reset_cache()
     assert config.get_config().discord_bot_token == "from-env"
@@ -116,13 +124,17 @@ def test_discord_chat_channels_parses_int_list(tmp_path, cfg_file, write_config)
 
 
 def test_discord_chat_channels_rejects_non_list(tmp_path, cfg_file, write_config):
-    write_config(cfg_file, vault_path=str(tmp_path / "vault"), discord_chat_channels="123")
+    write_config(
+        cfg_file, vault_path=str(tmp_path / "vault"), discord_chat_channels="123"
+    )
     with pytest.raises(ValueError, match="discord_chat_channels"):
         config.get_config()
 
 
 def test_discord_chat_channels_rejects_non_int(tmp_path, cfg_file, write_config):
-    write_config(cfg_file, vault_path=str(tmp_path / "vault"), discord_chat_channels=["abc"])
+    write_config(
+        cfg_file, vault_path=str(tmp_path / "vault"), discord_chat_channels=["abc"]
+    )
     with pytest.raises(ValueError, match="discord_chat_channels"):
         config.get_config()
 
@@ -182,8 +194,12 @@ def test_yaml_overrides_defaults(tmp_path, cfg_file, write_config):
     assert cfg.fastmail_api_token == "from-yaml"
 
 
-def test_env_fastmail_token_wins_over_yaml(tmp_path, cfg_file, write_config, monkeypatch):
-    write_config(cfg_file, vault_path=str(tmp_path / "vault"), fastmail_api_token="from-yaml")
+def test_env_fastmail_token_wins_over_yaml(
+    tmp_path, cfg_file, write_config, monkeypatch
+):
+    write_config(
+        cfg_file, vault_path=str(tmp_path / "vault"), fastmail_api_token="from-yaml"
+    )
     monkeypatch.setenv("FASTMAIL_API_TOKEN", "from-env")
     config.reset_cache()
     assert config.get_config().fastmail_api_token == "from-env"

@@ -95,12 +95,16 @@ def run_add_tool_live(request: str, repo_root: Path) -> LiveAddState:
     state.new_file = repo_root / new_file_rel
     state.slug = Path(new_file_rel).stem
 
-    _, state.diff, _ = _run(["git", "diff", "--no-index", "/dev/null", new_file_rel], repo_root)
+    _, state.diff, _ = _run(
+        ["git", "diff", "--no-index", "/dev/null", new_file_rel], repo_root
+    )
 
     _run_gates(state, pre_keys)
     log.info(
         "add-tool slug=%s gates=%s registered=%s",
-        state.slug, state.gate_results, state.registered_names,
+        state.slug,
+        state.gate_results,
+        state.registered_names,
     )
     return state
 
@@ -129,7 +133,11 @@ def finalise_add_tool_live(state: LiveAddState, choice: str) -> ApprovalResult:
                 "validation failed — use /approve-force to override",
             )
         _append_to_init(state.repo_root, state.slug, state.registered_names)
-        log.info("add-tool approved slug=%s names=%s persisted to tools/__init__.py", state.slug, state.registered_names)
+        log.info(
+            "add-tool approved slug=%s names=%s persisted to tools/__init__.py",
+            state.slug,
+            state.registered_names,
+        )
         _log_change(state.repo_root, state, approved=True)
         state.finalised = True
         return ApprovalResult(
@@ -144,7 +152,11 @@ def finalise_add_tool_live(state: LiveAddState, choice: str) -> ApprovalResult:
         sys.modules.pop(f"tools.{state.slug}", None)
         if state.new_file.exists():
             state.new_file.unlink()
-        log.info("add-tool rejected slug=%s removed names=%s", state.slug, state.registered_names)
+        log.info(
+            "add-tool rejected slug=%s removed names=%s",
+            state.slug,
+            state.registered_names,
+        )
         _log_change(state.repo_root, state, approved=False)
         state.finalised = True
         return ApprovalResult(choice, True, f"rejected — {state.slug} removed")
@@ -201,7 +213,9 @@ def _validate_delta(files_changed: list[str], new_tracked: set[str]) -> str | No
     return None
 
 
-def _revert_changes(repo_root: Path, new_tracked: set[str], new_untracked: set[str]) -> None:
+def _revert_changes(
+    repo_root: Path, new_tracked: set[str], new_untracked: set[str]
+) -> None:
     if new_tracked:
         _run(["git", "checkout", "--"] + sorted(new_tracked), repo_root)
     for f in sorted(new_untracked):
@@ -209,7 +223,9 @@ def _revert_changes(repo_root: Path, new_tracked: set[str], new_untracked: set[s
 
 
 def _run_gates(state: LiveAddState, pre_keys: set[str]) -> None:
-    new_file_rel = state.new_file.relative_to(state.repo_root) if state.new_file else None
+    new_file_rel = (
+        state.new_file.relative_to(state.repo_root) if state.new_file else None
+    )
     repo_root = state.repo_root
 
     rc, out, err = _run(["uv", "run", "ruff", "check", str(new_file_rel)], repo_root)
@@ -225,7 +241,9 @@ def _run_gates(state: LiveAddState, pre_keys: set[str]) -> None:
         state.registered_names = new_keys
         state.gate_results["import"] = bool(new_keys)
         state.gate_messages["import"] = (
-            f"registered: {new_keys}" if new_keys else "module imported but no @tool ran"
+            f"registered: {new_keys}"
+            if new_keys
+            else "module imported but no @tool ran"
         )
     except Exception as exc:
         state.gate_results["import"] = False
@@ -241,7 +259,11 @@ def _run_gates(state: LiveAddState, pre_keys: set[str]) -> None:
             schema_msgs.append(f"{name}: missing from TOOLS")
             continue
         fn = t.schema.get("function") if isinstance(t.schema, dict) else None
-        if not isinstance(fn, dict) or fn.get("name") != name or not isinstance(fn.get("parameters"), dict):
+        if (
+            not isinstance(fn, dict)
+            or fn.get("name") != name
+            or not isinstance(fn.get("parameters"), dict)
+        ):
             schema_ok = False
             schema_msgs.append(f"{name}: malformed schema")
     state.gate_results["schema"] = schema_ok and bool(state.registered_names)
@@ -279,7 +301,11 @@ def _merge_into_all(text: str, new_names: list[str]) -> str:
             and isinstance(node.value, ast.List)
         ):
             continue
-        existing = [e.value for e in node.value.elts if isinstance(e, ast.Constant) and isinstance(e.value, str)]
+        existing = [
+            e.value
+            for e in node.value.elts
+            if isinstance(e, ast.Constant) and isinstance(e.value, str)
+        ]
         merged = sorted(set(existing) | set(new_names))
         new_block = "__all__ = [\n" + "".join(f'    "{n}",\n' for n in merged) + "]"
         lines = text.splitlines()

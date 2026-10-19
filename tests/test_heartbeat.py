@@ -234,13 +234,17 @@ def test_at_due_after_target():
 
 def test_at_not_due_before_target():
     now = datetime(2026, 5, 8, 10, 0, tzinfo=UTC)
-    assert not heartbeat.is_action_due(_at(at_iso="2026-05-08T11:00:00+00:00"), None, now)
+    assert not heartbeat.is_action_due(
+        _at(at_iso="2026-05-08T11:00:00+00:00"), None, now
+    )
 
 
 def test_at_already_fired_skips():
     now = datetime(2026, 5, 8, 12, 0, tzinfo=UTC)
     last = "2026-05-08T11:30:00+00:00"
-    assert not heartbeat.is_action_due(_at(at_iso="2026-05-08T11:00:00+00:00"), last, now)
+    assert not heartbeat.is_action_due(
+        _at(at_iso="2026-05-08T11:00:00+00:00"), last, now
+    )
 
 
 def test_every_first_run_due():
@@ -442,8 +446,10 @@ def test_run_tick_skips_outside_active_hours(cfg):
         every=1,
     )
     channels.register(_StubChannel())
-    with patch.object(heartbeat, "_within_active_hours", return_value=False), \
-         patch("chat_loop.chat", return_value="ALERT") as chat_mock:
+    with (
+        patch.object(heartbeat, "_within_active_hours", return_value=False),
+        patch("chat_loop.chat", return_value="ALERT") as chat_mock,
+    ):
         replies = asyncio.run(heartbeat.run_tick())
     assert replies == {}
     chat_mock.assert_not_called()
@@ -501,7 +507,9 @@ def test_create_tool_falls_back_to_default_channel(cfg):
     assert result["action"]["channel"] == "cli"  # heartbeat_default_channel
 
 
-def test_create_tool_no_channel_no_default(tmp_path, monkeypatch, clear_env, write_config):
+def test_create_tool_no_channel_no_default(
+    tmp_path, monkeypatch, clear_env, write_config
+):
     cfg_path = tmp_path / "config.yaml"
     write_config(
         cfg_path,
@@ -570,8 +578,11 @@ def test_for_scope_routes_telegram():
     class _T:
         name = "telegram"
 
-        async def notify(self, scope, text): pass
-        def active_scopes(self): return ()
+        async def notify(self, scope, text):
+            pass
+
+        def active_scopes(self):
+            return ()
 
     channels.register(_T())
     assert channels.for_scope("telegram-123") is not None

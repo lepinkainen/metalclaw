@@ -99,11 +99,15 @@ class Config(BaseModel):
         if v is None:
             return ()
         if isinstance(v, str) or not isinstance(v, (list, tuple)):
-            raise ValueError("discord_chat_channels must be a list of integer channel IDs")  # noqa: TRY004 pydantic validator
+            raise ValueError(  # noqa: TRY004 pydantic validator
+                "discord_chat_channels must be a list of integer channel IDs"
+            )
         try:
             return tuple(int(c) for c in v)
         except (TypeError, ValueError) as e:
-            raise ValueError("discord_chat_channels must be a list of integer channel IDs") from e
+            raise ValueError(
+                "discord_chat_channels must be a list of integer channel IDs"
+            ) from e
 
     @field_validator("discord_heartbeat_channel", mode="before")
     @classmethod
@@ -113,7 +117,9 @@ class Config(BaseModel):
         try:
             return int(v)
         except (TypeError, ValueError) as e:
-            raise ValueError("discord_heartbeat_channel must be an integer channel ID") from e
+            raise ValueError(
+                "discord_heartbeat_channel must be an integer channel ID"
+            ) from e
 
     @field_validator("vault_search_excludes", mode="before")
     @classmethod
@@ -130,7 +136,9 @@ class Config(BaseModel):
         if v is None:
             return None
         if not (isinstance(v, (list, tuple)) and len(v) == 2):
-            raise ValueError("heartbeat_active_hours must be a [start_hour, end_hour] pair or null")
+            raise ValueError(
+                "heartbeat_active_hours must be a [start_hour, end_hour] pair or null"
+            )
         return (int(v[0]), int(v[1]))
 
     @model_validator(mode="after")
@@ -140,7 +148,9 @@ class Config(BaseModel):
             "litellm": self.litellm_model,
         }
         if self.escalation_model is None:
-            return self.model_copy(update={"escalation_model": provider_models[self.escalation_provider]})
+            return self.model_copy(
+                update={"escalation_model": provider_models[self.escalation_provider]}
+            )
         return self
 
 
@@ -166,7 +176,9 @@ def _merge_env(raw: dict[str, Any]) -> None:
 def get_config() -> Config:
     path = _config_path()
     raw = _load_yaml(path)
-    log.info("config: loading %s (exists=%s, %d yaml keys)", path, path.exists(), len(raw))
+    log.info(
+        "config: loading %s (exists=%s, %d yaml keys)", path, path.exists(), len(raw)
+    )
     if not raw.get("vault_path"):
         raise ValueError(
             f"vault_path missing from {path}. "

@@ -16,7 +16,9 @@ from registry import TOOLS, tool
 
 log = logging.getLogger(__name__)
 
-_TEMPLATE_PATH = Path(__file__).resolve().parent.parent / "assets" / "manual_template.md"
+_TEMPLATE_PATH = (
+    Path(__file__).resolve().parent.parent / "assets" / "manual_template.md"
+)
 _VAULT_FILENAME = "manual.md"
 
 _TOOLS_REFERENCE_SLUG = "tools-reference"
@@ -55,7 +57,7 @@ def _split_sections(md: str) -> dict[str, str]:
         if not slug:
             continue
         end = matches[i + 1].start() if i + 1 < len(matches) else len(md)
-        sections[slug] = md[m.start():end].rstrip() + "\n"
+        sections[slug] = md[m.start() : end].rstrip() + "\n"
     return sections
 
 

@@ -36,4 +36,5 @@ def write_config():
         data = {"vault_path": str(path.parent / "vault")}
         data.update(fields)
         path.write_text(yaml.safe_dump(data))
+
     return _write

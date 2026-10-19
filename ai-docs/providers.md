@@ -4,17 +4,25 @@
 
 ```python
 @dataclass
-class ToolCall: id: str; name: str; arguments: dict
+class ToolCall:
+    id: str
+    name: str
+    arguments: dict
+
 
 @dataclass
 class AssistantMessage:
     text: str
     tool_calls: list[ToolCall] = []
-    raw: dict | list[dict] | None = None   # appended to history verbatim
+    raw: dict | list[dict] | None = None  # appended to history verbatim
+
 
 class Provider(Protocol):
     name: str
-    def chat_once(messages: list[dict], tools: list[dict], system: str) -> AssistantMessage: ...
+
+    def chat_once(
+        messages: list[dict], tools: list[dict], system: str
+    ) -> AssistantMessage: ...
     def format_tool_results(results: list[tuple[ToolCall, str]]) -> list[dict]: ...
 ```
 

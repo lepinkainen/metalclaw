@@ -55,7 +55,11 @@ def _fake_import_registers(slug: str, names: list[str]):
                     "function": {
                         "name": name,
                         "description": "fake",
-                        "parameters": {"type": "object", "properties": {}, "required": []},
+                        "parameters": {
+                            "type": "object",
+                            "properties": {},
+                            "required": [],
+                        },
                     },
                 },
                 args_model=None,
@@ -92,17 +96,22 @@ def test_happy_path_registers_and_finalise_persists(fake_repo, clean_tools_dict)
         return _completed(0, "ok")
 
     side_effects = [
-        _completed(0, ""),                 # pre tracked
-        _completed(0, ""),                 # pre untracked
-        claude_writes,                     # claude -p
-        _completed(0, ""),                 # post tracked
+        _completed(0, ""),  # pre tracked
+        _completed(0, ""),  # pre untracked
+        claude_writes,  # claude -p
+        _completed(0, ""),  # post tracked
         _completed(0, "tools/ping.py\n"),  # post untracked
-        _completed(0, "diff body"),        # git diff --no-index
-        _completed(0, ""),                 # ruff
+        _completed(0, "diff body"),  # git diff --no-index
+        _completed(0, ""),  # ruff
     ]
 
-    with _patch_run(side_effects), patch.object(
-        live_tool.importlib, "import_module", side_effect=_fake_import_registers("ping", ["ping_tool"])
+    with (
+        _patch_run(side_effects),
+        patch.object(
+            live_tool.importlib,
+            "import_module",
+            side_effect=_fake_import_registers("ping", ["ping_tool"]),
+        ),
     ):
         state = live_tool.run_add_tool_live("add ping", fake_repo)
 
@@ -140,8 +149,13 @@ def test_reject_unlinks_file_and_pops_registry(fake_repo, clean_tools_dict):
         _completed(0, ""),
     ]
 
-    with _patch_run(side_effects), patch.object(
-        live_tool.importlib, "import_module", side_effect=_fake_import_registers("ping", ["ping_tool"])
+    with (
+        _patch_run(side_effects),
+        patch.object(
+            live_tool.importlib,
+            "import_module",
+            side_effect=_fake_import_registers("ping", ["ping_tool"]),
+        ),
     ):
         state = live_tool.run_add_tool_live("add ping", fake_repo)
 
@@ -200,9 +214,9 @@ def test_aborts_when_tracked_file_modified(fake_repo, clean_tools_dict):
         _completed(0, ""),
         _completed(0, ""),
         _completed(0, "ok"),
-        _completed(0, "bot.py\n"),       # post tracked: claude touched a tracked file
+        _completed(0, "bot.py\n"),  # post tracked: claude touched a tracked file
         _completed(0, ""),
-        _completed(0),                   # git checkout (revert)
+        _completed(0),  # git checkout (revert)
     ]
 
     with _patch_run(side_effects):
@@ -232,8 +246,13 @@ def test_ruff_failure_blocks_approve_but_force_passes(fake_repo, clean_tools_dic
         _completed(1, "F401 unused import"),  # ruff failure
     ]
 
-    with _patch_run(side_effects), patch.object(
-        live_tool.importlib, "import_module", side_effect=_fake_import_registers("ping", ["ping_tool"])
+    with (
+        _patch_run(side_effects),
+        patch.object(
+            live_tool.importlib,
+            "import_module",
+            side_effect=_fake_import_registers("ping", ["ping_tool"]),
+        ),
     ):
         state = live_tool.run_add_tool_live("add ping", fake_repo)
 
@@ -268,8 +287,11 @@ def test_import_failure_reported_and_blocks_approve(fake_repo, clean_tools_dict)
     def fake_no_register(modname):
         return types.SimpleNamespace(__name__=modname)
 
-    with _patch_run(side_effects), patch.object(
-        live_tool.importlib, "import_module", side_effect=fake_no_register
+    with (
+        _patch_run(side_effects),
+        patch.object(
+            live_tool.importlib, "import_module", side_effect=fake_no_register
+        ),
     ):
         state = live_tool.run_add_tool_live("add nothing", fake_repo)
 

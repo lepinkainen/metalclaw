@@ -63,11 +63,17 @@ def test_x(cfg_file, write_config):
 ```python
 class StubProvider:
     name = "stub"
-    def __init__(self, replies): self.replies = iter(replies)
+
+    def __init__(self, replies):
+        self.replies = iter(replies)
+
     def chat_once(self, messages, tools, system):
         return next(self.replies)
+
     def format_tool_results(self, results):
-        return [{"role":"tool", "tool_call_id": c.id, "content": j} for c, j in results]
+        return [
+            {"role": "tool", "tool_call_id": c.id, "content": j} for c, j in results
+        ]
 ```
 
 Pass to `_chat_with_provider(stub, messages)` to drive multi-turn tool-call sequences without an LLM.

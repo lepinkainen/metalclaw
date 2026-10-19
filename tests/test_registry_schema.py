@@ -73,6 +73,7 @@ def test_tool_decorator_no_args_emits_empty_parameters():
 
     assert _zero_arg.__name__ == "_zero_arg"
     from registry import TOOLS
+
     schema = TOOLS["_zero_arg"].schema["function"]["parameters"]
     assert schema == _EMPTY_PARAMETERS
 
@@ -86,6 +87,7 @@ def test_tool_decorator_with_args_derives_schema():
         return q
 
     from registry import TOOLS
+
     schema = TOOLS["_echo"].schema["function"]
     assert schema["name"] == "_echo"
     assert schema["description"] == "echo"

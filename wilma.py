@@ -59,11 +59,15 @@ class WilmaAuthError(WilmaError):
 
 def totp(secret: str, at: float | None = None) -> str:
     """RFC 6238 TOTP (SHA1, 30 s, 6 digits) — what Wilma's authenticator setup key produces."""
-    key = base64.b32decode(secret.replace(" ", "").upper() + "=" * (-len(secret.replace(" ", "")) % 8))
+    key = base64.b32decode(
+        secret.replace(" ", "").upper() + "=" * (-len(secret.replace(" ", "")) % 8)
+    )
     counter = int((time.time() if at is None else at) // 30)
     digest = hmac.new(key, struct.pack(">Q", counter), hashlib.sha1).digest()
     offset = digest[-1] & 0x0F
-    code = (struct.unpack(">I", digest[offset:offset + 4])[0] & 0x7FFFFFFF) % 1_000_000
+    code = (
+        struct.unpack(">I", digest[offset : offset + 4])[0] & 0x7FFFFFFF
+    ) % 1_000_000
     return f"{code:06d}"
 
 
@@ -76,7 +80,13 @@ def parse_timestamp(value: Any) -> datetime | None:
         return datetime.fromtimestamp(secs, _TZ)
     raw = str(value).strip().replace("klo", " ")
     raw = re.sub(r"\s+", " ", raw)
-    for fmt in ("%Y-%m-%d %H:%M", "%Y-%m-%d %H:%M:%S", "%d.%m.%Y %H:%M", "%d.%m.%Y %H.%M", "%d.%m.%Y"):
+    for fmt in (
+        "%Y-%m-%d %H:%M",
+        "%Y-%m-%d %H:%M:%S",
+        "%d.%m.%Y %H:%M",
+        "%d.%m.%Y %H.%M",
+        "%d.%m.%Y",
+    ):
         try:
             return datetime.strptime(raw, fmt).replace(tzinfo=_TZ)
         except ValueError:
@@ -109,7 +119,9 @@ def _html_to_markdown(html: str | None) -> str:
 
 def parse_students(data: Any) -> list[dict[str, str]]:
     """``GET /api/v1/accounts/me/roles`` → ``[{number, name}]``. Skips the account's own ``passwd`` role."""
-    roles = data.get("payload") or data.get("Payload") if isinstance(data, dict) else data
+    roles = (
+        data.get("payload") or data.get("Payload") if isinstance(data, dict) else data
+    )
     out: dict[str, dict[str, str]] = {}
     for rec in roles if isinstance(roles, list) else []:
         if not isinstance(rec, dict):
@@ -130,35 +142,50 @@ def parse_students_from_home(html: str) -> list[dict[str, str]]:
     for a in BeautifulSoup(html, "html.parser").find_all("a", href=True):
         m = re.match(r"/!(\d+)/?$", str(a["href"]))
         if m:
-            out.setdefault(m.group(1), {"number": m.group(1), "name": _compact(a.get_text(" ")) or m.group(1)})
+            out.setdefault(
+                m.group(1),
+                {"number": m.group(1), "name": _compact(a.get_text(" ")) or m.group(1)},
+            )
     return list(out.values())
 
 
 def parse_message_list(data: Any) -> list[dict[str, Any]]:
-    items = data.get("Messages") or data.get("messages") or [] if isinstance(data, dict) else data
+    items = (
+        data.get("Messages") or data.get("messages") or []
+        if isinstance(data, dict)
+        else data
+    )
     out = []
     for item in items if isinstance(items, list) else []:
         try:
             mid = int(item.get("Id") or item.get("id"))
-        except (TypeError, ValueError):
+        except TypeError, ValueError:
             continue
         sender = item.get("Sender") or item.get("sender")
-        out.append({
-            "id": mid,
-            "subject": _compact(item.get("Subject") or item.get("subject")),
-            "sender": _compact(sender) or None,
-            "sent_at": _iso(item.get("TimeStamp") or item.get("Timestamp") or item.get("Time")),
-            # Wilma marks unopened messages with a truthy Status (bold in the UI).
-            "unread": bool(item.get("Status")),
-            "replies": int(item.get("Replies") or 0),
-        })
+        out.append(
+            {
+                "id": mid,
+                "subject": _compact(item.get("Subject") or item.get("subject")),
+                "sender": _compact(sender) or None,
+                "sent_at": _iso(
+                    item.get("TimeStamp") or item.get("Timestamp") or item.get("Time")
+                ),
+                # Wilma marks unopened messages with a truthy Status (bold in the UI).
+                "unread": bool(item.get("Status")),
+                "replies": int(item.get("Replies") or 0),
+            }
+        )
     return out
 
 
 def parse_message_json(data: Any, message_id: int) -> dict[str, Any] | None:
     """``/messages/<id>?format=json`` → message dict, or None if this Wilma doesn't speak it."""
     msgs = data.get("messages") if isinstance(data, dict) else None
-    m = msgs[0] if isinstance(msgs, list) and msgs and isinstance(msgs[0], dict) else None
+    m = (
+        msgs[0]
+        if isinstance(msgs, list) and msgs and isinstance(msgs[0], dict)
+        else None
+    )
     if m is None:
         return None
     recipients = m.get("Recipients")
@@ -247,7 +274,9 @@ class WilmaClient:
     def _login_token(self) -> str:
         resp = self._http.get("/token")
         if resp.status_code != 200:
-            raise WilmaError(f"Wilma answered HTTP {resp.status_code} for its login token")
+            raise WilmaError(
+                f"Wilma answered HTTP {resp.status_code} for its login token"
+            )
         try:
             return resp.json()["Wilma2LoginID"]
         except (ValueError, KeyError) as e:
@@ -260,7 +289,11 @@ class WilmaClient:
         fields: dict[str, str] = {}
         for inp in BeautifulSoup(resp.text, "html.parser").find_all("input"):
             name = str(inp.get("name") or "")
-            if name and name not in ("Login", "Password") and str(inp.get("type", "text")).lower() in ("hidden", "submit"):
+            if (
+                name
+                and name not in ("Login", "Password")
+                and str(inp.get("type", "text")).lower() in ("hidden", "submit")
+            ):
                 fields[name] = str(inp.get("value", ""))
         return fields
 
@@ -280,13 +313,19 @@ class WilmaClient:
             )
             location = resp.headers.get("location", "")
             if resp.status_code >= 500:
-                raise WilmaError(f"Wilma answered HTTP {resp.status_code} while logging in")
+                raise WilmaError(
+                    f"Wilma answered HTTP {resp.status_code} while logging in"
+                )
             has_sid = "Wilma2SID" in self._http.cookies
-            if _LOGIN_FAILED_RE.search(location) or (resp.status_code < 300 and _LOGIN_FAILED_RE.search(resp.text)):
+            if _LOGIN_FAILED_RE.search(location) or (
+                resp.status_code < 300 and _LOGIN_FAILED_RE.search(resp.text)
+            ):
                 self._failed = WilmaAuthError(
                     "Wilma rejected the username/password. Fix wilma_username/wilma_password and restart."
                 )
-                log.warning("wilma: login rejected by Wilma; further attempts disabled until restart")
+                log.warning(
+                    "wilma: login rejected by Wilma; further attempts disabled until restart"
+                )
                 raise self._failed
             if resp.is_redirect and has_sid and location:
                 follow = self._http.get(location)
@@ -294,7 +333,9 @@ class WilmaClient:
                 if m:
                     self._answer_mfa(m.group(1))
             elif not (has_sid or resp.status_code < 300):
-                raise WilmaError(f"Wilma didn't accept the login right now (HTTP {resp.status_code})")
+                raise WilmaError(
+                    f"Wilma didn't accept the login right now (HTTP {resp.status_code})"
+                )
             self._logged_in = True
             log.info("wilma: logged in latency=%.2fs", time.monotonic() - t0)
 
@@ -307,16 +348,27 @@ class WilmaClient:
             raise self._failed
         resp = self._http.post(
             "/api/v1/accounts/me/mfa/otp/check",
-            data={"formkey": formkey, "payload": json.dumps({"otp": totp(self._totp_secret), "action": "login"})},
+            data={
+                "formkey": formkey,
+                "payload": json.dumps(
+                    {"otp": totp(self._totp_secret), "action": "login"}
+                ),
+            },
         )
         if resp.status_code >= 500:
-            raise WilmaError(f"Wilma answered HTTP {resp.status_code} while checking the code")
+            raise WilmaError(
+                f"Wilma answered HTTP {resp.status_code} while checking the code"
+            )
         try:
             data = resp.json()
         except ValueError as e:
-            raise WilmaAuthError("two-step verification failed: unexpected response") from e
+            raise WilmaAuthError(
+                "two-step verification failed: unexpected response"
+            ) from e
         if not ((data.get("payload") or {}).get("success") or data.get("success")):
-            raise WilmaAuthError("two-step verification failed: Wilma rejected the code (check wilma_totp_secret)")
+            raise WilmaAuthError(
+                "two-step verification failed: Wilma rejected the code (check wilma_totp_secret)"
+            )
 
     # --- requests ---
 
@@ -325,7 +377,10 @@ class WilmaClient:
             return True
         if resp.is_redirect:
             target = httpx.URL(self.base_url).join(resp.headers.get("location", ""))
-            return target.host == httpx.URL(self.base_url).host and target.path.rstrip("/") == "/login"
+            return (
+                target.host == httpx.URL(self.base_url).host
+                and target.path.rstrip("/") == "/login"
+            )
         return False
 
     def _get_once(self, path: str) -> httpx.Response:
@@ -354,18 +409,26 @@ class WilmaClient:
             resp = self._get_once(path)
             # 403 is either a cancelled session (another login, e.g. the browser) or just this
             # item being off-limits; probe before re-logging in, since that logs the browser out.
-            if self._is_logged_out(resp) or (resp.status_code == 403 and not self._session_alive()):
-                log.info("wilma: session gone (HTTP %s); logging in again", resp.status_code)
+            if self._is_logged_out(resp) or (
+                resp.status_code == 403 and not self._session_alive()
+            ):
+                log.info(
+                    "wilma: session gone (HTTP %s); logging in again", resp.status_code
+                )
                 self.login()
                 resp = self._get_once(path)
             log.info(
                 "wilma: GET %s status=%s latency=%.2fs",
-                re.sub(r"^/![^/]+", "", path).split("?")[0], resp.status_code, time.monotonic() - t0,
+                re.sub(r"^/![^/]+", "", path).split("?")[0],
+                resp.status_code,
+                time.monotonic() - t0,
             )
             if self._is_logged_out(resp):
                 raise WilmaError("Wilma keeps asking to log in again")
             if resp.status_code >= 400:
-                raise WilmaError(f"Wilma HTTP {resp.status_code}", status=resp.status_code)
+                raise WilmaError(
+                    f"Wilma HTTP {resp.status_code}", status=resp.status_code
+                )
             return resp
 
     # --- data ---
@@ -376,23 +439,33 @@ class WilmaClient:
                 # Only a missing/non-JSON roles API means "older Wilma": fall back to the home page.
                 # Anything else (5xx, network) propagates uncached so the next call retries.
                 try:
-                    self._students = parse_students(self.get("/api/v1/accounts/me/roles").json())
+                    self._students = parse_students(
+                        self.get("/api/v1/accounts/me/roles").json()
+                    )
                 except WilmaError as e:
                     if e.status != 404:
                         raise
-                    log.warning("wilma: no roles API; reading students from the home page")
+                    log.warning(
+                        "wilma: no roles API; reading students from the home page"
+                    )
                     self._students = parse_students_from_home(self.get("/").text)
                 except ValueError:
-                    log.warning("wilma: roles API not JSON; reading students from the home page")
+                    log.warning(
+                        "wilma: roles API not JSON; reading students from the home page"
+                    )
                     self._students = parse_students_from_home(self.get("/").text)
                 log.info("wilma: %d student(s)", len(self._students))
             return self._students
 
-    def list_messages(self, student: str | None, folder: str = "inbox") -> list[dict[str, Any]]:
+    def list_messages(
+        self, student: str | None, folder: str = "inbox"
+    ) -> list[dict[str, Any]]:
         try:
             path = FOLDERS[folder]
         except KeyError as e:
-            raise ValueError(f"unknown folder {folder!r}; use one of {sorted(FOLDERS)}") from e
+            raise ValueError(
+                f"unknown folder {folder!r}; use one of {sorted(FOLDERS)}"
+            ) from e
         resp = self.get(path, student)
         try:
             return parse_message_list(resp.json())
@@ -418,7 +491,9 @@ class WilmaClient:
                 "sender": _compact(data.get("Sender")) or None,
                 "sent_at": _iso(data.get("TimeStamp")),
                 "recipients": [],
-                "content": _html_to_markdown(data.get("ContentHtml") or data.get("Content")),
+                "content": _html_to_markdown(
+                    data.get("ContentHtml") or data.get("Content")
+                ),
                 "replies": [],
             }
         return parse_message_html(resp.text, message_id)
@@ -439,7 +514,12 @@ def get_client() -> WilmaClient:
                     "Wilma not configured. Set wilma_url, wilma_username and wilma_password in config.yaml "
                     "(or WILMA_URL / WILMA_USERNAME / WILMA_PASSWORD env vars)."
                 )
-            _CLIENT = WilmaClient(cfg.wilma_url, cfg.wilma_username, cfg.wilma_password, cfg.wilma_totp_secret)
+            _CLIENT = WilmaClient(
+                cfg.wilma_url,
+                cfg.wilma_username,
+                cfg.wilma_password,
+                cfg.wilma_totp_secret,
+            )
         return _CLIENT
 
 
@@ -449,24 +529,35 @@ def reset_client() -> None:
         _CLIENT = None
 
 
-def resolve_students(client: WilmaClient, student: str | None) -> list[dict[str, str | None]]:
+def resolve_students(
+    client: WilmaClient, student: str | None
+) -> list[dict[str, str | None]]:
     """Students to query: all of them, or those whose number/name matches ``student``.
 
     An account without role info (single student, older Wilma) yields one entry with
     ``number=None`` — requests then go unprefixed.
     """
-    students: list[dict[str, str | None]] = [dict(s) for s in client.students()] or [{"number": None, "name": None}]
+    students: list[dict[str, str | None]] = [dict(s) for s in client.students()] or [
+        {"number": None, "name": None}
+    ]
     if not student:
         return students
     needle = student.strip().lower()
-    hits = [s for s in students if needle == s["number"] or needle in (s["name"] or "").lower()]
+    hits = [
+        s
+        for s in students
+        if needle == s["number"] or needle in (s["name"] or "").lower()
+    ]
     if not hits:
         names = ", ".join(s["name"] or s["number"] or "?" for s in students)
         raise ValueError(f"no Wilma student matches {student!r} (known: {names})")
     return hits
 
 
-_NOTIFICATION_PREFIX_RE = re.compile(r"^\s*(viesti wilmasta|meddelande från wilma|message from wilma)\s*:\s*", re.IGNORECASE)
+_NOTIFICATION_PREFIX_RE = re.compile(
+    r"^\s*(viesti wilmasta|meddelande från wilma|message from wilma)\s*:\s*",
+    re.IGNORECASE,
+)
 
 
 def is_notification_subject(subject: str) -> bool:
@@ -478,7 +569,10 @@ def normalize_subject(subject: str) -> str:
 
 
 def match_messages(
-    messages: list[dict[str, Any]], subject: str, sent_at: str | None, tolerance: timedelta = timedelta(minutes=15)
+    messages: list[dict[str, Any]],
+    subject: str,
+    sent_at: str | None,
+    tolerance: timedelta = timedelta(minutes=15),
 ) -> list[dict[str, Any]]:
     """Messages whose subject starts with ``subject`` (notification emails truncate it), near ``sent_at`` if given."""
     want = normalize_subject(subject)

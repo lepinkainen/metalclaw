@@ -111,7 +111,9 @@ def test_forget_ambiguous_returns_candidates_and_deletes_nothing(vault):
     res = memory.forget("e")
     assert res.status == "ambiguous"
     assert len(res.matches) >= 2
-    assert all(m.startswith(("[pref] ", "[fact] ", "[instruction] ")) for m in res.matches)
+    assert all(
+        m.startswith(("[pref] ", "[fact] ", "[instruction] ")) for m in res.matches
+    )
     mem = memory.load()
     assert mem.preferences == {"role": "engineer", "tone": "terse"}
     assert mem.facts == ["drinks coffee"]

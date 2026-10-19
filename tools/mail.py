@@ -37,7 +37,9 @@ def _fm_session() -> dict[str, str]:
     data = resp.json()
     log.info(
         "jmap: session fetched status=%s latency=%.2fs api_url=%s",
-        getattr(resp, "status_code", None), time.monotonic() - t0, data.get("apiUrl"),
+        getattr(resp, "status_code", None),
+        time.monotonic() - t0,
+        data.get("apiUrl"),
     )
     _FM_SESSION = {
         "api_url": data["apiUrl"],
@@ -60,7 +62,11 @@ def _fm_mailboxes() -> dict[str, Any]:
         json={
             "using": ["urn:ietf:params:jmap:core", "urn:ietf:params:jmap:mail"],
             "methodCalls": [
-                ["Mailbox/get", {"accountId": session["account_id"], "ids": None}, "mb"],
+                [
+                    "Mailbox/get",
+                    {"accountId": session["account_id"], "ids": None},
+                    "mb",
+                ],
             ],
         },
     )
@@ -68,7 +74,9 @@ def _fm_mailboxes() -> dict[str, Any]:
     mailboxes = resp.json()["methodResponses"][0][1]["list"]
     log.info(
         "jmap: Mailbox/get status=%s mailboxes=%d latency=%.2fs (cache miss)",
-        getattr(resp, "status_code", None), len(mailboxes), time.monotonic() - t0,
+        getattr(resp, "status_code", None),
+        len(mailboxes),
+        time.monotonic() - t0,
     )
     by_role: dict[str, dict[str, Any]] = {}
     by_name: dict[str, dict[str, Any]] = {}
@@ -97,7 +105,12 @@ def _fm_mailboxes() -> dict[str, Any]:
             cur = by_id.get(cur["parentId"]) if cur["parentId"] else None
         entry["path"] = "/".join(reversed(parts))
         by_path[entry["path"].lower()] = entry
-    _FM_MAILBOXES = {"by_role": by_role, "by_name": by_name, "by_id": by_id, "by_path": by_path}
+    _FM_MAILBOXES = {
+        "by_role": by_role,
+        "by_name": by_name,
+        "by_id": by_id,
+        "by_path": by_path,
+    }
     return _FM_MAILBOXES
 
 
@@ -115,17 +128,23 @@ def _fm_lookup_mailbox(name: str) -> dict[str, Any]:
     if key in mbs["by_name"]:
         return mbs["by_name"][key]
     log.warning("mail: mailbox %r not found", name)
-    raise ValueError(f"mailbox '{name}' not found — try a role like 'inbox' or an exact label name")
+    raise ValueError(
+        f"mailbox '{name}' not found — try a role like 'inbox' or an exact label name"
+    )
 
 
 def _fmt_addrs(parts: list[dict[str, Any]] | None) -> str:
     return ", ".join(
-        f"{p.get('name', '')} <{p.get('email', '')}>" if p.get("name") else p.get("email", "")
+        f"{p.get('name', '')} <{p.get('email', '')}>"
+        if p.get("name")
+        else p.get("email", "")
         for p in (parts or [])
     ).strip()
 
 
-def _fetch_emails(filter_obj: dict[str, Any] | None, limit: int) -> list[dict[str, Any]]:
+def _fetch_emails(
+    filter_obj: dict[str, Any] | None, limit: int
+) -> list[dict[str, Any]]:
     session = _fm_session()
     mbs = _fm_mailboxes()
     query_args: dict[str, Any] = {
@@ -149,7 +168,11 @@ def _fetch_emails(filter_obj: dict[str, Any] | None, limit: int) -> list[dict[st
                     "Email/get",
                     {
                         "accountId": session["account_id"],
-                        "#ids": {"resultOf": "q", "name": "Email/query", "path": "/ids"},
+                        "#ids": {
+                            "resultOf": "q",
+                            "name": "Email/query",
+                            "path": "/ids",
+                        },
                         "properties": [
                             "id",
                             "subject",
@@ -171,7 +194,10 @@ def _fetch_emails(filter_obj: dict[str, Any] | None, limit: int) -> list[dict[st
     emails_raw = responses["g"]["list"]
     log.info(
         "jmap: Email/query+Email/get status=%s returned=%d limit=%d latency=%.2fs",
-        getattr(resp, "status_code", None), len(emails_raw), limit, time.monotonic() - t0,
+        getattr(resp, "status_code", None),
+        len(emails_raw),
+        limit,
+        time.monotonic() - t0,
     )
 
     by_id = mbs["by_id"]
@@ -235,7 +261,10 @@ def list_emails(
 ) -> dict[str, Any]:
     log.info(
         "list_emails mailbox=%r unread_only=%s from_search=%r limit=%s",
-        mailbox, unread_only, from_search, limit,
+        mailbox,
+        unread_only,
+        from_search,
+        limit,
     )
     mbs = _fm_mailboxes()
     is_all = mailbox.lower() == "all"
@@ -360,7 +389,9 @@ def read_email(email_id: str) -> dict[str, Any]:
     items = resp.json()["methodResponses"][0][1]["list"]
     log.info(
         "jmap: Email/get status=%s items=%d latency=%.2fs",
-        getattr(resp, "status_code", None), len(items), time.monotonic() - t0,
+        getattr(resp, "status_code", None),
+        len(items),
+        time.monotonic() - t0,
     )
     if not items:
         log.warning("read_email: %s not found", email_id)
@@ -394,7 +425,11 @@ def read_email(email_id: str) -> dict[str, Any]:
 
     log.info(
         "read_email done id=%s subject=%.100r format=%s body=%d chars truncated=%s",
-        email_id, e.get("subject", ""), body_format, len(body), truncated,
+        email_id,
+        e.get("subject", ""),
+        body_format,
+        len(body),
+        truncated,
     )
     attachments = []
     images = []
@@ -452,13 +487,20 @@ def check_new_mail() -> dict[str, Any]:
     global _last_candidates
     log.info("check_new_mail start")
     mbs = _fm_mailboxes()
-    skip_ids = [mbs["by_role"][r]["id"] for r in ("trash", "junk", "drafts", "sent") if r in mbs["by_role"]]
+    skip_ids = [
+        mbs["by_role"][r]["id"]
+        for r in ("trash", "junk", "drafts", "sent")
+        if r in mbs["by_role"]
+    ]
     wanted: list[dict[str, Any]] = [{"notKeyword": "$seen"}]
     if "inbox" in mbs["by_role"]:
         wanted.append(
             {
                 "operator": "AND",
-                "conditions": [{"inMailbox": mbs["by_role"]["inbox"]["id"]}, {"hasKeyword": "$flagged"}],
+                "conditions": [
+                    {"inMailbox": mbs["by_role"]["inbox"]["id"]},
+                    {"hasKeyword": "$flagged"},
+                ],
             }
         )
     filter_obj: dict[str, Any] = {"operator": "OR", "conditions": wanted}
@@ -475,18 +517,30 @@ def check_new_mail() -> dict[str, Any]:
     _last_candidates = {e["id"] for e in emails}
     log.info(
         "check_new_mail fetched=%d excluded_by_ledger=%d returned=%d (ledger size=%d)",
-        fetched, fetched - len(emails), len(emails), len(seen),
+        fetched,
+        fetched - len(emails),
+        len(emails),
+        len(seen),
     )
     for e in emails:
-        log.debug("check_new_mail candidate id=%s from=%s subject=%.100s", e["id"], e["from"], e["subject"])
+        log.debug(
+            "check_new_mail candidate id=%s from=%s subject=%.100s",
+            e["id"],
+            e["from"],
+            e["subject"],
+        )
         if _is_wilma_notification(e) and get_config().wilma_url:
             # `hint` is the generic per-email field telling the model which tool fetches the real content; other integrations should reuse it.
-            e["hint"] = "Wilma notification: call find_wilma_message(subject, sent_at) for the full message."
+            e["hint"] = (
+                "Wilma notification: call find_wilma_message(subject, sent_at) for the full message."
+            )
     return {"count": len(emails), "emails": emails}
 
 
 def _is_wilma_notification(email: dict[str, Any]) -> bool:
-    return "inschool.fi" in (email.get("from") or "").lower() and is_notification_subject(email.get("subject") or "")
+    return "inschool.fi" in (
+        email.get("from") or ""
+    ).lower() and is_notification_subject(email.get("subject") or "")
 
 
 class _MarkReportedArgs(BaseModel):
@@ -510,10 +564,15 @@ def mark_emails_reported(ids: list[str]) -> dict[str, Any]:
     now = datetime.now(UTC).isoformat()
     log.info(
         "mark_emails_reported requested=%d recorded=%d rejected=%d",
-        len(clean), len(recorded), len(rejected),
+        len(clean),
+        len(recorded),
+        len(rejected),
     )
     if rejected:
-        log.warning("mark_emails_reported rejected ids (not in last check_new_mail): %s", rejected)
+        log.warning(
+            "mark_emails_reported rejected ids (not in last check_new_mail): %s",
+            rejected,
+        )
     with _ledger() as db:
         db.executemany(
             "INSERT OR IGNORE INTO reported_messages(message_id, first_reported_at) VALUES (?, ?)",
@@ -530,7 +589,9 @@ _BOT_ROOT = "bot"
 def _method_result(resp: Any) -> dict[str, Any]:
     name, result, _ = resp.json()["methodResponses"][0]
     if name == "error":
-        raise ValueError(f"Fastmail rejected the request: {result.get('type')} {result.get('description', '')}".strip())
+        raise ValueError(
+            f"Fastmail rejected the request: {result.get('type')} {result.get('description', '')}".strip()
+        )
     return result
 
 
@@ -557,16 +618,30 @@ def _mailbox_set(session: dict[str, str], create: dict[str, Any]) -> str:
         headers={"Authorization": f"Bearer {session['token']}"},
         json={
             "using": ["urn:ietf:params:jmap:core", "urn:ietf:params:jmap:mail"],
-            "methodCalls": [["Mailbox/set", {"accountId": session["account_id"], "create": {"c": create}}, "s"]],
+            "methodCalls": [
+                [
+                    "Mailbox/set",
+                    {"accountId": session["account_id"], "create": {"c": create}},
+                    "s",
+                ]
+            ],
         },
     )
     resp.raise_for_status()
     r = _method_result(resp)
-    log.info("jmap: Mailbox/set status=%s latency=%.2fs", getattr(resp, "status_code", None), time.monotonic() - t0)
+    log.info(
+        "jmap: Mailbox/set status=%s latency=%.2fs",
+        getattr(resp, "status_code", None),
+        time.monotonic() - t0,
+    )
     if "c" in (r.get("notCreated") or {}):
         log.warning("jmap: Mailbox/set notCreated %s", r["notCreated"]["c"])
         raise ValueError(f"could not create label: {r['notCreated']['c']}")
-    log.info("mail: label mailbox created id=%s name=%s", r["created"]["c"]["id"], create.get("name"))
+    log.info(
+        "mail: label mailbox created id=%s name=%s",
+        r["created"]["c"]["id"],
+        create.get("name"),
+    )
     return r["created"]["c"]["id"]
 
 
@@ -578,7 +653,9 @@ def _resolve_bot_label(segments: list[str], create: bool) -> str:
             (
                 m
                 for m in mbs["by_id"].values()
-                if m["parentId"] == parent and m["name"].lower() == seg.lower() and not (i == 0 and m["role"])
+                if m["parentId"] == parent
+                and m["name"].lower() == seg.lower()
+                and not (i == 0 and m["role"])
             ),
             None,
         )
@@ -605,18 +682,27 @@ def list_email_labels() -> list[dict[str, Any]]:
     mbs = _fm_mailboxes()
     log.info("list_email_labels count=%d", len(mbs["by_id"]))
     return [
-        {"path": m["path"], "role": m["role"], "total": m["total"], "unread": m["unread"]}
+        {
+            "path": m["path"],
+            "role": m["role"],
+            "total": m["total"],
+            "unread": m["unread"],
+        }
         for m in sorted(mbs["by_id"].values(), key=lambda m: m["path"].lower())
     ]
 
 
 class _EmailLabelArgs(BaseModel):
     email_ids: list[str] = Field(description="1-50 JMAP email ids (from list_emails).")
-    label: str = Field(description='Label path under "bot/", e.g. "bot/job-offer" or "bot/order-tracking".')
+    label: str = Field(
+        description='Label path under "bot/", e.g. "bot/job-offer" or "bot/order-tracking".'
+    )
 
 
 def _patch_label(email_ids: list[str], label: str, add: bool) -> dict[str, Any]:
-    ids = list(dict.fromkeys(i.strip() for i in email_ids if isinstance(i, str) and i.strip()))
+    ids = list(
+        dict.fromkeys(i.strip() for i in email_ids if isinstance(i, str) and i.strip())
+    )
     op = "add" if add else "remove"
     log.info("%s_email_label label=%r ids=%d", op, label, len(ids))
     if not 1 <= len(ids) <= 50:
@@ -640,7 +726,10 @@ def _patch_label(email_ids: list[str], label: str, add: bool) -> dict[str, Any]:
                     "Email/set",
                     {
                         "accountId": session["account_id"],
-                        "update": {i: {f"mailboxIds/{mbid}": True if add else None} for i in ids},
+                        "update": {
+                            i: {f"mailboxIds/{mbid}": True if add else None}
+                            for i in ids
+                        },
                     },
                     "s",
                 ]
@@ -649,14 +738,26 @@ def _patch_label(email_ids: list[str], label: str, add: bool) -> dict[str, Any]:
     )
     resp.raise_for_status()
     r = _method_result(resp)
-    failed = {i: str(e.get("description") or e.get("type") or e) for i, e in (r.get("notUpdated") or {}).items()}
+    failed = {
+        i: str(e.get("description") or e.get("type") or e)
+        for i, e in (r.get("notUpdated") or {}).items()
+    }
     log.info(
         "jmap: Email/set %s label=%s status=%s updated=%d failed=%d latency=%.2fs",
-        op, "/".join(segs), getattr(resp, "status_code", None), len(ids) - len(failed), len(failed), time.monotonic() - t0,
+        op,
+        "/".join(segs),
+        getattr(resp, "status_code", None),
+        len(ids) - len(failed),
+        len(failed),
+        time.monotonic() - t0,
     )
     if failed:
         log.warning("%s_email_label failures: %s", op, failed)
-    return {"label": "/".join(segs), "updated": [i for i in ids if i not in failed], "failed": failed}
+    return {
+        "label": "/".join(segs),
+        "updated": [i for i in ids if i not in failed],
+        "failed": failed,
+    }
 
 
 @tool(

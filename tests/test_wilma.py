@@ -13,24 +13,54 @@ LOGIN_PAGE = """<form><input type="text" name="Login"><input type="password" nam
 <input type="hidden" name="SESSIONID" value=""><input type="hidden" name="returnpath" value="">
 <input type="submit" name="submit" value="Kirjaudu sisään"></form>"""
 
-ROLES = {"payload": [
-    {"type": "passwd", "name": "Parent", "slug": ""},
-    {"type": "guardian", "name": "Sanni Lindblad", "slug": "/!1001"},
-    {"type": "guardian", "name": "Otto Lindblad", "slug": "/!1002"},
-]}
+ROLES = {
+    "payload": [
+        {"type": "passwd", "name": "Parent", "slug": ""},
+        {"type": "guardian", "name": "Sanni Lindblad", "slug": "/!1001"},
+        {"type": "guardian", "name": "Otto Lindblad", "slug": "/!1002"},
+    ]
+}
 
-MESSAGES = {"Messages": [
-    {"Id": 5, "Subject": "Pidä huolta! -koulupoliisikonsertit Järvenpäässä", "TimeStamp": "2026-10-19 16:08",
-     "Sender": "Rehtori Meikäläinen", "Status": 1, "Replies": 0},
-    {"Id": 4, "Subject": "Retki", "TimeStamp": "2026-10-10 09:00", "Sender": "Opettaja", "Status": 0},
-]}
+MESSAGES = {
+    "Messages": [
+        {
+            "Id": 5,
+            "Subject": "Pidä huolta! -koulupoliisikonsertit Järvenpäässä",
+            "TimeStamp": "2026-10-19 16:08",
+            "Sender": "Rehtori Meikäläinen",
+            "Status": 1,
+            "Replies": 0,
+        },
+        {
+            "Id": 4,
+            "Subject": "Retki",
+            "TimeStamp": "2026-10-10 09:00",
+            "Sender": "Opettaja",
+            "Status": 0,
+        },
+    ]
+}
 
-DETAIL = {"messages": [{
-    "Id": 5, "Subject": "Pidä huolta! -koulupoliisikonsertit Järvenpäässä", "TimeStamp": "2026-10-19 16:08",
-    "Sender": "Rehtori Meikäläinen", "Recipients": ["Huoltajat"],
-    "ContentHtml": "<p>Hei!</p><p>Konsertti on <b>torstaina</b>.</p>",
-    "ReplyList": [{"Id": 9, "TimeStamp": "2026-10-19 17:00", "Sender": "Toinen", "ContentHtml": "<p>Kiitos</p>"}],
-}]}
+DETAIL = {
+    "messages": [
+        {
+            "Id": 5,
+            "Subject": "Pidä huolta! -koulupoliisikonsertit Järvenpäässä",
+            "TimeStamp": "2026-10-19 16:08",
+            "Sender": "Rehtori Meikäläinen",
+            "Recipients": ["Huoltajat"],
+            "ContentHtml": "<p>Hei!</p><p>Konsertti on <b>torstaina</b>.</p>",
+            "ReplyList": [
+                {
+                    "Id": 9,
+                    "TimeStamp": "2026-10-19 17:00",
+                    "Sender": "Toinen",
+                    "ContentHtml": "<p>Kiitos</p>",
+                }
+            ],
+        }
+    ]
+}
 
 
 class FakeWilma:
@@ -61,19 +91,29 @@ class FakeWilma:
             sid = f"sid{self.logins}"
             self.valid_sids = {sid}
             loc = "/mfa" if self.mfa else "/?checkcookie"
-            return httpx.Response(303, headers={"location": loc, "set-cookie": f"Wilma2SID={sid}; Path=/"})
+            return httpx.Response(
+                303, headers={"location": loc, "set-cookie": f"Wilma2SID={sid}; Path=/"}
+            )
         if path == "/mfa":
             return httpx.Response(200, html='<input id="mfa-formkey" value="fk1">')
         if path == "/api/v1/accounts/me/mfa/otp/check":
             form = dict(httpx.QueryParams(request.content.decode()))
-            ok = form["formkey"] == "fk1" and json.loads(form["payload"])["otp"] == wilma.totp("JBSWY3DPEHPK3PXP")
+            ok = form["formkey"] == "fk1" and json.loads(form["payload"])[
+                "otp"
+            ] == wilma.totp("JBSWY3DPEHPK3PXP")
             return httpx.Response(200, json={"payload": {"success": ok}})
-        if request.headers.get("cookie", "").removeprefix("Wilma2SID=") not in self.valid_sids:
+        if (
+            request.headers.get("cookie", "").removeprefix("Wilma2SID=")
+            not in self.valid_sids
+        ):
             return httpx.Response(302, headers={"location": "/login"})
         if path == "/forbidden":
             return httpx.Response(403)
         if path == "/":
-            return httpx.Response(200, html='<a href="/!1001/">Sanni Lindblad</a><a href="/!1001/messages">Viestit</a>')
+            return httpx.Response(
+                200,
+                html='<a href="/!1001/">Sanni Lindblad</a><a href="/!1001/messages">Viestit</a>',
+            )
         if path == "/api/v1/accounts/me/roles":
             return httpx.Response(self.roles_status, json=ROLES)
         if path.endswith("/messages/list"):
@@ -83,11 +123,14 @@ class FakeWilma:
                 return httpx.Response(200, json=DETAIL)
             if request.url.params.get("format") == "json":
                 return httpx.Response(404)
-            return httpx.Response(200, html=(
-                '<div id="page-content-area"><h1>Vanha viesti</h1><table class="proptable">'
-                "<tr><th>Lähettäjä</th><td>Opettaja X</td></tr><tr><th>Lähetetty</th><td>19.10.2026 16:08</td></tr>"
-                '</table><div class="ckeditor hidden"><p>Vanhan Wilman sisältö</p></div></div>'
-            ))
+            return httpx.Response(
+                200,
+                html=(
+                    '<div id="page-content-area"><h1>Vanha viesti</h1><table class="proptable">'
+                    "<tr><th>Lähettäjä</th><td>Opettaja X</td></tr><tr><th>Lähetetty</th><td>19.10.2026 16:08</td></tr>"
+                    '</table><div class="ckeditor hidden"><p>Vanhan Wilman sisältö</p></div></div>'
+                ),
+            )
         return httpx.Response(404)
 
 
@@ -98,7 +141,9 @@ def fake():
 
 @pytest.fixture
 def client(fake):
-    return wilma.WilmaClient("https://w.example", "u", "pw", transport=httpx.MockTransport(fake))
+    return wilma.WilmaClient(
+        "https://w.example", "u", "pw", transport=httpx.MockTransport(fake)
+    )
 
 
 @pytest.fixture
@@ -129,7 +174,9 @@ def test_relogin_when_session_cancelled(client, fake):
 
 
 def test_bad_password_disables_further_logins(fake):
-    c = wilma.WilmaClient("https://w.example", "u", "wrong", transport=httpx.MockTransport(fake))
+    c = wilma.WilmaClient(
+        "https://w.example", "u", "wrong", transport=httpx.MockTransport(fake)
+    )
     with pytest.raises(wilma.WilmaAuthError):
         c.list_messages(None)
     n = len(fake.calls)
@@ -140,14 +187,22 @@ def test_bad_password_disables_further_logins(fake):
 
 def test_mfa_with_totp_secret():
     fake = FakeWilma(mfa=True)
-    c = wilma.WilmaClient("https://w.example", "u", "pw", "JBSWY3DPEHPK3PXP", transport=httpx.MockTransport(fake))
+    c = wilma.WilmaClient(
+        "https://w.example",
+        "u",
+        "pw",
+        "JBSWY3DPEHPK3PXP",
+        transport=httpx.MockTransport(fake),
+    )
     assert c.list_messages("1001")[0]["unread"] is True
     assert "POST /api/v1/accounts/me/mfa/otp/check" in fake.calls
 
 
 def test_mfa_without_secret_is_actionable():
     fake = FakeWilma(mfa=True)
-    c = wilma.WilmaClient("https://w.example", "u", "pw", transport=httpx.MockTransport(fake))
+    c = wilma.WilmaClient(
+        "https://w.example", "u", "pw", transport=httpx.MockTransport(fake)
+    )
     with pytest.raises(wilma.WilmaAuthError, match="wilma_totp_secret"):
         c.list_messages(None)
 
@@ -171,7 +226,9 @@ def test_message_detail_html_fallback(client, fake):
 def test_match_messages_truncated_subject_and_time():
     msgs = wilma.parse_message_list(MESSAGES)
     subj = "Viesti Wilmasta: Pidä huolta! -koulupoliisikonsertit Jä"
-    assert [m["id"] for m in wilma.match_messages(msgs, subj, "19.10.2026 16:08")] == [5]
+    assert [m["id"] for m in wilma.match_messages(msgs, subj, "19.10.2026 16:08")] == [
+        5
+    ]
     assert wilma.match_messages(msgs, subj, "19.10.2026 18:00") == []
     assert wilma.match_messages(msgs, "Viesti Wilmasta: Jotain muuta", None) == []
 
@@ -186,7 +243,10 @@ def test_find_wilma_message_dedups_across_children(patched):
 
 
 def test_find_wilma_message_not_found(patched):
-    assert wilma_tools.find_wilma_message("Viesti Wilmasta: Ei ole")["status"] == "not_found"
+    assert (
+        wilma_tools.find_wilma_message("Viesti Wilmasta: Ei ole")["status"]
+        == "not_found"
+    )
 
 
 def test_list_and_read_tools(patched):
@@ -201,7 +261,12 @@ def test_list_and_read_tools(patched):
 
 def test_slash_wilma_parse_and_format(patched):
     kwargs = common.parse_wilma_args("--student sanni --unread --count 3")
-    assert kwargs == {"student": "sanni", "folder": "inbox", "unread_only": True, "limit": 3}
+    assert kwargs == {
+        "student": "sanni",
+        "folder": "inbox",
+        "unread_only": True,
+        "limit": 3,
+    }
     text = common.format_wilma_result(wilma_tools.list_wilma_messages(**kwargs))
     assert "**Sanni Lindblad**" in text
     assert "`5`" in text
@@ -221,7 +286,11 @@ def test_wilma_env_overrides(cfg_file, write_config, monkeypatch):
     monkeypatch.setenv("WILMA_PASSWORD", "envpw")
     config.reset_cache()
     cfg = config.get_config()
-    assert (cfg.wilma_url, cfg.wilma_username, cfg.wilma_password) == ("https://a.example", "envuser", "envpw")
+    assert (cfg.wilma_url, cfg.wilma_username, cfg.wilma_password) == (
+        "https://a.example",
+        "envuser",
+        "envpw",
+    )
 
 
 def test_403_on_live_session_does_not_relogin(client, fake):
@@ -247,5 +316,9 @@ def test_missing_roles_api_falls_back_to_home_page(client, fake):
 def test_wilma_notification_detection():
     notif = {"from": "jarvenpaa@inschool.fi", "subject": "Viesti Wilmasta: Retki"}
     assert mail._is_wilma_notification(notif)
-    assert not mail._is_wilma_notification({"from": "jarvenpaa@inschool.fi", "subject": "Tiedote"})
-    assert not mail._is_wilma_notification({"from": "x@example.com", "subject": "Viesti Wilmasta: Retki"})
+    assert not mail._is_wilma_notification(
+        {"from": "jarvenpaa@inschool.fi", "subject": "Tiedote"}
+    )
+    assert not mail._is_wilma_notification(
+        {"from": "x@example.com", "subject": "Viesti Wilmasta: Retki"}
+    )

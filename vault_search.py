@@ -80,10 +80,13 @@ def search(
     cmd: list[str] = [
         rg,
         "--json",
-        "--type", "md",
+        "--type",
+        "md",
         "--smart-case",
-        "--context", str(context_lines),
-        "--max-count", str(max_results),
+        "--context",
+        str(context_lines),
+        "--max-count",
+        str(max_results),
     ]
     for pat in cfg.vault_search_excludes:
         cmd.extend(["--glob", f"!{pat}"])
@@ -102,7 +105,9 @@ def search(
     )
     # rg exits 0 on matches, 1 on no matches, 2 on real error.
     if proc.returncode not in (0, 1):
-        log.error("vault_search: rg exit %d: %.500s", proc.returncode, proc.stderr.strip())
+        log.error(
+            "vault_search: rg exit %d: %.500s", proc.returncode, proc.stderr.strip()
+        )
         raise RuntimeError(f"rg failed (exit {proc.returncode}): {proc.stderr.strip()}")
 
     hits: list[dict[str, Any]] = []
@@ -173,7 +178,11 @@ def search(
 
     log.info(
         "vault_search: query=%r rg_exit=%d hits=%d truncated=%s excludes=%d latency=%.2fs",
-        query, proc.returncode, len(hits), truncated, len(cfg.vault_search_excludes),
+        query,
+        proc.returncode,
+        len(hits),
+        truncated,
+        len(cfg.vault_search_excludes),
         time.monotonic() - t0,
     )
     return {
@@ -210,7 +219,9 @@ def read(path: str) -> dict[str, Any]:
         truncated = True
 
     rel = str(candidate.relative_to(vault))
-    log.info("vault_search: read %s (%d chars, truncated=%s)", rel, len(body), truncated)
+    log.info(
+        "vault_search: read %s (%d chars, truncated=%s)", rel, len(body), truncated
+    )
     return {
         "path": rel,
         "body": body,

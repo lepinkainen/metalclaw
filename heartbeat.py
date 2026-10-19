@@ -362,7 +362,9 @@ def create_action(
         _write_ledger_locked(ledger)
     log.info(
         "heartbeat action created id=%s kind=%s channel=%s",
-        action.id, action.kind, action.channel,
+        action.id,
+        action.kind,
+        action.channel,
     )
     return action
 
@@ -387,7 +389,9 @@ def cancel(action_id: str) -> HeartbeatAction | None:
         return None
 
 
-def _archive_completed(action: HeartbeatAction, ledger: HeartbeatLedger, completed_at: str) -> None:
+def _archive_completed(
+    action: HeartbeatAction, ledger: HeartbeatLedger, completed_at: str
+) -> None:
     snapshot = action.to_dict()
     snapshot["completed_at"] = completed_at
     ledger.completed.append(snapshot)
@@ -437,7 +441,9 @@ def _within_active_hours(now: datetime, window: tuple[int, int] | None) -> bool:
     return h >= start or h < end
 
 
-def is_action_due(action: HeartbeatAction, last_run_iso: str | None, now: datetime) -> bool:
+def is_action_due(
+    action: HeartbeatAction, last_run_iso: str | None, now: datetime
+) -> bool:
     if action.kind == ActionKind.AT:
         try:
             target = parse_iso(action.at or "")
@@ -463,7 +469,7 @@ def is_action_due(action: HeartbeatAction, last_run_iso: str | None, now: dateti
             return False
         try:
             tz = ZoneInfo(sched.timezone)
-        except (ZoneInfoNotFoundError, ValueError):
+        except ZoneInfoNotFoundError, ValueError:
             return False
         local_now = now.astimezone(tz)
         weekday = _WEEKDAYS[local_now.weekday()]
@@ -491,7 +497,9 @@ def is_action_due(action: HeartbeatAction, last_run_iso: str | None, now: dateti
 # --- Tick logic ---
 
 
-def _build_action_messages(action: HeartbeatAction, now: datetime, build_system_prompt) -> list[dict]:
+def _build_action_messages(
+    action: HeartbeatAction, now: datetime, build_system_prompt
+) -> list[dict]:
     local = now.astimezone() if now.tzinfo else now
     now_str = local.strftime("%Y-%m-%d %H:%M")
     system = build_system_prompt(now_str)
@@ -512,7 +520,9 @@ def _build_action_messages(action: HeartbeatAction, now: datetime, build_system_
     ]
 
 
-def _resolve_channel(action_channel: str | None) -> tuple[str | None, channels.Channel | None]:
+def _resolve_channel(
+    action_channel: str | None,
+) -> tuple[str | None, channels.Channel | None]:
     cfg = get_config()
     target = action_channel or cfg.heartbeat_default_channel
     if not target:
@@ -520,7 +530,9 @@ def _resolve_channel(action_channel: str | None) -> tuple[str | None, channels.C
     return target, channels.for_scope(target)
 
 
-async def _run_action(action: HeartbeatAction, now: datetime, chat_fn, build_system_prompt) -> str:
+async def _run_action(
+    action: HeartbeatAction, now: datetime, chat_fn, build_system_prompt
+) -> str:
     messages = _build_action_messages(action, now, build_system_prompt)
     loop = asyncio.get_running_loop()
     return await loop.run_in_executor(None, lambda: chat_fn(messages))
@@ -541,7 +553,8 @@ async def run_tick(*, now: datetime | None = None) -> dict[str, str]:
     if not _within_active_hours(now.astimezone(), cfg.heartbeat_active_hours):
         log.info(
             "heartbeat tick skipped: outside active hours %s (local hour=%d)",
-            cfg.heartbeat_active_hours, now.astimezone().hour,
+            cfg.heartbeat_active_hours,
+            now.astimezone().hour,
         )
         return {}
 
@@ -562,15 +575,27 @@ async def run_tick(*, now: datetime | None = None) -> dict[str, str]:
         if not due:
             log.debug(
                 "heartbeat action %s not due: kind=%s last_run=%s at=%s every=%s schedule=%s",
-                action.id, action.kind, last_run_iso, action.at, action.every, action.schedule,
+                action.id,
+                action.kind,
+                last_run_iso,
+                action.at,
+                action.every,
+                action.schedule,
             )
             continue
         n_due += 1
-        log.info("heartbeat action %s due: kind=%s channel=%s", action.id, action.kind, action.channel)
+        log.info(
+            "heartbeat action %s due: kind=%s channel=%s",
+            action.id,
+            action.kind,
+            action.channel,
+        )
         action_t0 = time.monotonic()
 
         try:
-            reply = await _run_action(action, now, chat_loop.chat, chat_loop.build_system_prompt)
+            reply = await _run_action(
+                action, now, chat_loop.chat, chat_loop.build_system_prompt
+            )
         except Exception:
             log.exception("heartbeat action %s: chat turn failed", action.id)
             n_failed += 1
@@ -578,7 +603,9 @@ async def run_tick(*, now: datetime | None = None) -> dict[str, str]:
         n_ran += 1
         log.info(
             "heartbeat action %s ran in %.2fs reply=%d chars",
-            action.id, time.monotonic() - action_t0, len(reply),
+            action.id,
+            time.monotonic() - action_t0,
+            len(reply),
         )
         log.debug("heartbeat action %s reply: %.500s", action.id, reply)
 
@@ -587,7 +614,11 @@ async def run_tick(*, now: datetime | None = None) -> dict[str, str]:
             clean = clean.replace(SENTINEL, "").strip()
             if len(clean) <= _ACK_MAX_CHARS:
                 if clean:
-                    log.info("heartbeat action %s: ack suppressed, dropped text: %r", action.id, clean)
+                    log.info(
+                        "heartbeat action %s: ack suppressed, dropped text: %r",
+                        action.id,
+                        clean,
+                    )
                 clean = ""
         if not clean:
             n_suppressed += 1
@@ -602,14 +633,18 @@ async def run_tick(*, now: datetime | None = None) -> dict[str, str]:
         target_scope, channel = _resolve_channel(action.channel)
         log.info(
             "heartbeat action %s: notify target=%r (action.channel=%r default=%r) channel=%s",
-            action.id, target_scope, action.channel, cfg.heartbeat_default_channel,
+            action.id,
+            target_scope,
+            action.channel,
+            cfg.heartbeat_default_channel,
             channel.name if channel else None,
         )
         if channel is None:
             n_failed += 1
             log.warning(
                 "heartbeat action %s: no channel resolves for %r — keeping active",
-                action.id, target_scope,
+                action.id,
+                target_scope,
             )
             continue
 
@@ -624,7 +659,12 @@ async def run_tick(*, now: datetime | None = None) -> dict[str, str]:
             continue
 
         n_notified += 1
-        log.info("heartbeat action %s: notified %s (%d chars)", action.id, target_scope, len(clean))
+        log.info(
+            "heartbeat action %s: notified %s (%d chars)",
+            action.id,
+            target_scope,
+            len(clean),
+        )
         replies[action.id] = clean
         state[action.id] = now.isoformat()
         if action.kind == ActionKind.AT:
@@ -633,7 +673,12 @@ async def run_tick(*, now: datetime | None = None) -> dict[str, str]:
     save_state(state)
     log.info(
         "heartbeat tick end: total=%d due=%d ran=%d suppressed=%d notified=%d failed=%d duration=%.2fs",
-        len(snapshot.actions), n_due, n_ran, n_suppressed, n_notified, n_failed,
+        len(snapshot.actions),
+        n_due,
+        n_ran,
+        n_suppressed,
+        n_notified,
+        n_failed,
         time.monotonic() - tick_t0,
     )
     return replies
@@ -668,7 +713,9 @@ def summary(max_chars: int = 400) -> str:
         if a.kind == ActionKind.AT:
             tail = f"at {a.at}"
         elif a.kind == ActionKind.CRON and a.schedule is not None:
-            tail = f"{','.join(a.schedule.days)} {a.schedule.time} {a.schedule.timezone}"
+            tail = (
+                f"{','.join(a.schedule.days)} {a.schedule.time} {a.schedule.timezone}"
+            )
         elif a.kind == ActionKind.EVERY:
             tail = f"every {a.every}s"
         else:

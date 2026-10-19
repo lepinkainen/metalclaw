@@ -58,35 +58,136 @@ ALL_FRONTENDS = frozenset({CLI, TELEGRAM, DISCORD})
 
 @dataclass(frozen=True)
 class CommandSpec:
-    name: str                       # canonical hyphenated form, e.g. "add-tool"
-    help_line: str                  # full /help line including arg syntax
-    short: str                      # 1-line description for completer / Telegram BotCommand
+    name: str  # canonical hyphenated form, e.g. "add-tool"
+    help_line: str  # full /help line including arg syntax
+    short: str  # 1-line description for completer / Telegram BotCommand
     frontends: frozenset[str]
     aliases: tuple[str, ...] = field(default=())  # extra spellings users may type
 
 
 COMMANDS: tuple[CommandSpec, ...] = (
-    CommandSpec("train",         "/train <station> [--line R] [--count 5]",                                "train departures: <station> [--line R] [--count 5]",            ALL_FRONTENDS),
-    CommandSpec("weather",       "/weather <location>",                                                    "weather for a location",                                         ALL_FRONTENDS),
-    CommandSpec("mail",          "/mail [--mailbox inbox] [--unread] [--from name] [--count 10]",          "list emails [--mailbox] [--unread] [--from] [--count]",          ALL_FRONTENDS),
-    CommandSpec("wilma",         "/wilma [--student name] [--unread] [--count 10] — list Wilma messages",  "list Wilma messages [--student] [--unread] [--count]",           ALL_FRONTENDS),
-    CommandSpec("search",        "/search <query> [--max 20] [--context 1] — search the Obsidian vault",   "search the Obsidian vault",                                      ALL_FRONTENDS),
-    CommandSpec("remember",      "/remember <key>=<value> — save a preference",                            "save a preference: <key>=<value>",                               ALL_FRONTENDS),
-    CommandSpec("forget",        "/forget <substring> — remove a memory entry",                            "remove a memory entry",                                          ALL_FRONTENDS),
-    CommandSpec("memory",        "/memory — show stored memory",                                           "show stored long-term memory",                                   ALL_FRONTENDS),
-    CommandSpec("manual",        "/manual [section] — show the user manual; /manual init to create it",    "show the user manual ('init' to create)",                        ALL_FRONTENDS),
-    CommandSpec("heartbeat",     "/heartbeat — show heartbeat config; /heartbeat run to fire now",         "show heartbeat config (or 'run' to fire now)",                   ALL_FRONTENDS),
-    CommandSpec("big",           "/big <query> — ask the escalation cloud model directly",                 "ask the escalation cloud model directly",                        ALL_FRONTENDS),
-    CommandSpec("add-tool",      "/add-tool <description> — write a new tool live (CLI/Telegram/Discord)", "add a new tool live: <description>",                             ALL_FRONTENDS, aliases=("add_tool", "addtool")),
-    CommandSpec("approve",       "/approve — accept a pending self-change",                                "approve a pending self-change",                                  ALL_FRONTENDS),
-    CommandSpec("approve-force", "/approve-force — accept a pending self-change despite failing gates",    "approve a pending self-change despite failing gates",            ALL_FRONTENDS, aliases=("approve_force",)),
-    CommandSpec("reject",        "/reject — discard a pending self-change",                                "reject a pending self-change",                                   ALL_FRONTENDS),
-    CommandSpec("diff",          "/diff — show diff of a pending self-change",                             "show diff of a pending self-change",                             ALL_FRONTENDS),
-    CommandSpec("self-edit",     "/self-edit <description> — make a general code change (CLI only)",       "make a general code change (full lint/build/test)",              frozenset({CLI})),
-    CommandSpec("think",         "/think — toggle display of model thinking (off by default)",             "toggle display of model thinking (off by default)",              frozenset({CLI})),
-    CommandSpec("tools",         "/tools [on|off] — show/toggle live tool-call status",                    "show/toggle live tool-call status: [on|off]",                    ALL_FRONTENDS),
-    CommandSpec("new",           "/new — reset this conversation",                                         "reset this conversation",                                        ALL_FRONTENDS),
-    CommandSpec("help",          "/help — this message",                                                   "show available commands",                                        ALL_FRONTENDS),
+    CommandSpec(
+        "train",
+        "/train <station> [--line R] [--count 5]",
+        "train departures: <station> [--line R] [--count 5]",
+        ALL_FRONTENDS,
+    ),
+    CommandSpec(
+        "weather", "/weather <location>", "weather for a location", ALL_FRONTENDS
+    ),
+    CommandSpec(
+        "mail",
+        "/mail [--mailbox inbox] [--unread] [--from name] [--count 10]",
+        "list emails [--mailbox] [--unread] [--from] [--count]",
+        ALL_FRONTENDS,
+    ),
+    CommandSpec(
+        "wilma",
+        "/wilma [--student name] [--unread] [--count 10] — list Wilma messages",
+        "list Wilma messages [--student] [--unread] [--count]",
+        ALL_FRONTENDS,
+    ),
+    CommandSpec(
+        "search",
+        "/search <query> [--max 20] [--context 1] — search the Obsidian vault",
+        "search the Obsidian vault",
+        ALL_FRONTENDS,
+    ),
+    CommandSpec(
+        "remember",
+        "/remember <key>=<value> — save a preference",
+        "save a preference: <key>=<value>",
+        ALL_FRONTENDS,
+    ),
+    CommandSpec(
+        "forget",
+        "/forget <substring> — remove a memory entry",
+        "remove a memory entry",
+        ALL_FRONTENDS,
+    ),
+    CommandSpec(
+        "memory",
+        "/memory — show stored memory",
+        "show stored long-term memory",
+        ALL_FRONTENDS,
+    ),
+    CommandSpec(
+        "manual",
+        "/manual [section] — show the user manual; /manual init to create it",
+        "show the user manual ('init' to create)",
+        ALL_FRONTENDS,
+    ),
+    CommandSpec(
+        "heartbeat",
+        "/heartbeat — show heartbeat config; /heartbeat run to fire now",
+        "show heartbeat config (or 'run' to fire now)",
+        ALL_FRONTENDS,
+    ),
+    CommandSpec(
+        "big",
+        "/big <query> — ask the escalation cloud model directly",
+        "ask the escalation cloud model directly",
+        ALL_FRONTENDS,
+    ),
+    CommandSpec(
+        "add-tool",
+        "/add-tool <description> — write a new tool live (CLI/Telegram/Discord)",
+        "add a new tool live: <description>",
+        ALL_FRONTENDS,
+        aliases=("add_tool", "addtool"),
+    ),
+    CommandSpec(
+        "approve",
+        "/approve — accept a pending self-change",
+        "approve a pending self-change",
+        ALL_FRONTENDS,
+    ),
+    CommandSpec(
+        "approve-force",
+        "/approve-force — accept a pending self-change despite failing gates",
+        "approve a pending self-change despite failing gates",
+        ALL_FRONTENDS,
+        aliases=("approve_force",),
+    ),
+    CommandSpec(
+        "reject",
+        "/reject — discard a pending self-change",
+        "reject a pending self-change",
+        ALL_FRONTENDS,
+    ),
+    CommandSpec(
+        "diff",
+        "/diff — show diff of a pending self-change",
+        "show diff of a pending self-change",
+        ALL_FRONTENDS,
+    ),
+    CommandSpec(
+        "self-edit",
+        "/self-edit <description> — make a general code change (CLI only)",
+        "make a general code change (full lint/build/test)",
+        frozenset({CLI}),
+    ),
+    CommandSpec(
+        "think",
+        "/think — toggle display of model thinking (off by default)",
+        "toggle display of model thinking (off by default)",
+        frozenset({CLI}),
+    ),
+    CommandSpec(
+        "tools",
+        "/tools [on|off] — show/toggle live tool-call status",
+        "show/toggle live tool-call status: [on|off]",
+        ALL_FRONTENDS,
+    ),
+    CommandSpec(
+        "new",
+        "/new — reset this conversation",
+        "reset this conversation",
+        ALL_FRONTENDS,
+    ),
+    CommandSpec(
+        "help", "/help — this message", "show available commands", ALL_FRONTENDS
+    ),
 )
 
 
@@ -121,9 +222,7 @@ def help_lines() -> list[str]:
 def telegram_bot_commands() -> list[tuple[str, str]]:
     """List for ``Application.bot.set_my_commands`` — Telegram needs ``[a-z][a-z0-9_]*`` so hyphens become underscores."""
     return [
-        (s.name.replace("-", "_"), s.short)
-        for s in COMMANDS
-        if TELEGRAM in s.frontends
+        (s.name.replace("-", "_"), s.short) for s in COMMANDS if TELEGRAM in s.frontends
     ]
 
 
@@ -147,7 +246,7 @@ def parse_telegram_scope(scope: str) -> int | None:
     if not scope.startswith(TELEGRAM_SCOPE_PREFIX):
         return None
     try:
-        return int(scope[len(TELEGRAM_SCOPE_PREFIX):])
+        return int(scope[len(TELEGRAM_SCOPE_PREFIX) :])
     except ValueError:
         return None
 
@@ -156,7 +255,7 @@ def parse_discord_scope(scope: str) -> int | None:
     if not scope.startswith(DISCORD_SCOPE_PREFIX):
         return None
     try:
-        return int(scope[len(DISCORD_SCOPE_PREFIX):])
+        return int(scope[len(DISCORD_SCOPE_PREFIX) :])
     except ValueError:
         return None
 
@@ -195,7 +294,12 @@ def parse_mail_args(args: str) -> dict:
     p.add_argument("--from", dest="from_search", default=None)
     p.add_argument("--count", type=int, default=10)
     ns = p.parse_args(shlex.split(args))
-    return {"mailbox": ns.mailbox, "unread_only": ns.unread, "from_search": ns.from_search, "limit": ns.count}
+    return {
+        "mailbox": ns.mailbox,
+        "unread_only": ns.unread,
+        "from_search": ns.from_search,
+        "limit": ns.count,
+    }
 
 
 def parse_wilma_args(args: str) -> dict:
@@ -205,7 +309,12 @@ def parse_wilma_args(args: str) -> dict:
     p.add_argument("--unread", action="store_true")
     p.add_argument("--count", type=int, default=10)
     ns = p.parse_args(shlex.split(args))
-    return {"student": ns.student, "folder": ns.folder, "unread_only": ns.unread, "limit": ns.count}
+    return {
+        "student": ns.student,
+        "folder": ns.folder,
+        "unread_only": ns.unread,
+        "limit": ns.count,
+    }
 
 
 def parse_search_args(args: str) -> dict:
@@ -258,7 +367,9 @@ def format_train_result(result: dict) -> str:
     if not departures:
         if line:
             return f"No upcoming {line} departures found for {station['name']} ({station['code']})."
-        return f"No upcoming departures found for {station['name']} ({station['code']})."
+        return (
+            f"No upcoming departures found for {station['name']} ({station['code']})."
+        )
 
     lines = [f"{header}:"]
     for dep in departures:
@@ -270,7 +381,9 @@ def format_train_result(result: dict) -> str:
         time_str = scheduled
         if dep.get("actual_time") and dep["actual_time"] != dep["scheduled_time"]:
             time_str += f" (actual {dep['actual_time'][11:16]})"
-        elif dep.get("estimated_time") and dep["estimated_time"] != dep["scheduled_time"]:
+        elif (
+            dep.get("estimated_time") and dep["estimated_time"] != dep["scheduled_time"]
+        ):
             time_str += f" (est. {dep['estimated_time'][11:16]})"
 
         cancelled = " [CANCELLED]" if dep.get("cancelled") else ""
@@ -346,11 +459,11 @@ def format_search_result(result: dict) -> str:
 
 # slash-command name -> (tool registry name, parser, formatter)
 TOOL_COMMANDS: dict[str, tuple] = {
-    "train":   ("train_departures", parse_train_args,   format_train_result),
-    "weather": ("weather",          parse_weather_args, format_weather_result),
-    "mail":    ("list_emails",      parse_mail_args,    format_mail_result),
-    "search":  ("search_vault",     parse_search_args,  format_search_result),
-    "wilma":   ("list_wilma_messages", parse_wilma_args, format_wilma_result),
+    "train": ("train_departures", parse_train_args, format_train_result),
+    "weather": ("weather", parse_weather_args, format_weather_result),
+    "mail": ("list_emails", parse_mail_args, format_mail_result),
+    "search": ("search_vault", parse_search_args, format_search_result),
+    "wilma": ("list_wilma_messages", parse_wilma_args, format_wilma_result),
 }
 
 
@@ -421,7 +534,9 @@ async def run_manual(send: SendFn, args: str) -> None:
             await send(f"manual not initialised — {res['hint']}")
             return
         available = ", ".join(res.get("available", []))
-        await send(f"unknown manual section '{res['requested']}'. available: {available}")
+        await send(
+            f"unknown manual section '{res['requested']}'. available: {available}"
+        )
         return
 
     if "markdown" in res:
@@ -444,7 +559,9 @@ def _format_action_line(action: heartbeat.HeartbeatAction) -> str:
         when = f"every {action.every}s"
     else:
         when = "(unscheduled)"
-    return f"  • {action.id} [{action.kind}] → {action.channel} | {when} | {action.prompt}"
+    return (
+        f"  • {action.id} [{action.kind}] → {action.channel} | {when} | {action.prompt}"
+    )
 
 
 async def run_heartbeat(
@@ -465,7 +582,9 @@ async def run_heartbeat(
         ),
     ]
     if warn_no_discord_channel and cfg.discord_heartbeat_channel is None:
-        lines.append("(no discord_heartbeat_channel configured — discord replies will drop)")
+        lines.append(
+            "(no discord_heartbeat_channel configured — discord replies will drop)"
+        )
 
     try:
         ledger = heartbeat.load_ledger()
@@ -667,7 +786,9 @@ class ToolStatusReporter:
     def __call__(self, name: str, args: dict, result: str) -> None:
         try:
             self._lines.append(format_tool_status(name, args))
-            fut = asyncio.run_coroutine_threadsafe(self._upsert(self._render()), self._loop)
+            fut = asyncio.run_coroutine_threadsafe(
+                self._upsert(self._render()), self._loop
+            )
             self._pending.append(fut)
         except Exception:
             log.exception("tool status schedule failed")
@@ -697,7 +818,10 @@ def parse_tools_arg(current: bool, arg: str) -> tuple[bool, str]:
     if a in ("on", "off"):
         new = a == "on"
     elif a == "":
-        return current, f"tool-call status is {'on' if current else 'off'} (/tools on|off)"
+        return (
+            current,
+            f"tool-call status is {'on' if current else 'off'} (/tools on|off)",
+        )
     else:
         return current, "usage: /tools [on|off]"
     return new, f"tool-call status {'on' if new else 'off'}"
@@ -727,7 +851,9 @@ async def run_add_tool(send: SendFn, request: str, scope: str) -> None:
         await send("usage: /add-tool <description of the tool to add>")
         return
     if not get_config().allow_self_modification:
-        log.warning("/add-tool refused: allow_self_modification=false (scope=%s)", scope)
+        log.warning(
+            "/add-tool refused: allow_self_modification=false (scope=%s)", scope
+        )
         await send(
             "self-modification is disabled (allow_self_modification: false in config.yaml)"
         )
@@ -745,7 +871,12 @@ async def run_add_tool(send: SendFn, request: str, scope: str) -> None:
         await send(f"aborted: {state.aborted}\n\n{state.plan_output}".strip())
         return
     _pending_self_change[scope] = state
-    log.info("/add-tool pending scope=%s slug=%s gates=%s", scope, state.slug, state.gate_results)
+    log.info(
+        "/add-tool pending scope=%s slug=%s gates=%s",
+        scope,
+        state.slug,
+        state.gate_results,
+    )
     await send(_format_self_change_summary(state))
 
 
@@ -755,7 +886,9 @@ async def run_approve(send: SendFn, scope: str, *, force: bool = False) -> None:
     if state is None:
         await send("no pending self-change")
         return
-    res = live_tool.finalise_add_tool_live(state, "approve-force" if force else "approve")
+    res = live_tool.finalise_add_tool_live(
+        state, "approve-force" if force else "approve"
+    )
     if res.ok:
         _pending_self_change.pop(scope, None)
     await send(res.message)
@@ -786,5 +919,3 @@ async def run_diff(send: SendFn, scope: str) -> None:
 
 def has_pending_self_change(scope: str) -> bool:
     return scope in _pending_self_change
-
-

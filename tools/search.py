@@ -12,7 +12,8 @@ log = logging.getLogger(__name__)
 class _SearchVaultArgs(BaseModel):
     query: str = Field(description="Ripgrep regex or literal text to search for.")
     max_results: int = Field(
-        default=20, description="Maximum number of hits to return (default 20, max 200)."
+        default=20,
+        description="Maximum number of hits to return (default 20, max 200).",
     )
     context_lines: int = Field(
         default=1,
@@ -34,9 +35,19 @@ def search_vault(
     max_results: int = 20,
     context_lines: int = 1,
 ) -> dict[str, Any]:
-    log.info("search_vault query=%r max_results=%d context=%d", query, max_results, context_lines)
-    out = vault_search.search(query, max_results=max_results, context_lines=context_lines)
-    log.info("search_vault done keys=%s", sorted(out) if isinstance(out, dict) else type(out).__name__)
+    log.info(
+        "search_vault query=%r max_results=%d context=%d",
+        query,
+        max_results,
+        context_lines,
+    )
+    out = vault_search.search(
+        query, max_results=max_results, context_lines=context_lines
+    )
+    log.info(
+        "search_vault done keys=%s",
+        sorted(out) if isinstance(out, dict) else type(out).__name__,
+    )
     return out
 
 
@@ -57,5 +68,8 @@ class _ReadNoteArgs(BaseModel):
 def read_note(path: str) -> dict[str, Any]:
     log.info("read_note path=%r", path)
     out = vault_search.read(path)
-    log.info("read_note done keys=%s", sorted(out) if isinstance(out, dict) else type(out).__name__)
+    log.info(
+        "read_note done keys=%s",
+        sorted(out) if isinstance(out, dict) else type(out).__name__,
+    )
     return out

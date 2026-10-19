@@ -43,13 +43,19 @@ def _run(cmd: list[str], cwd: Path, timeout: int = 60) -> tuple[int, str, str]:
     log.info("subprocess start: %.200s (cwd=%s timeout=%ds)", label, cwd, timeout)
     t0 = time.monotonic()
     try:
-        r = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, timeout=timeout, check=False)
+        r = subprocess.run(
+            cmd, cwd=cwd, capture_output=True, text=True, timeout=timeout, check=False
+        )
     except subprocess.TimeoutExpired:
         log.error("subprocess timed out after %ds: %.200s", timeout, label)
         return -1, "", f"timed out after {timeout}s"
     log.info(
         "subprocess exit=%d duration=%.2fs stdout=%d chars stderr=%d chars: %.200s",
-        r.returncode, time.monotonic() - t0, len(r.stdout), len(r.stderr), label,
+        r.returncode,
+        time.monotonic() - t0,
+        len(r.stdout),
+        len(r.stderr),
+        label,
     )
     if r.returncode != 0:
         log.debug("subprocess stderr: %.500s", r.stderr)
@@ -76,7 +82,9 @@ def run_self_change(request: str, repo_root: Path) -> SelfChangeResult:
     pre_untracked = _untracked(repo_root)
     log.info(
         "self-change start request=%.200r pre_dirty=%d pre_untracked=%d",
-        request, len(pre_tracked), len(pre_untracked),
+        request,
+        len(pre_tracked),
+        len(pre_untracked),
     )
 
     prompt = f"""You are acting as a coding assistant for the Metalclaw bot project.
@@ -158,7 +166,7 @@ Make the minimal changes needed to fulfil the request. Edit existing files or cr
     while True:
         try:
             choice = input("\n[approve / approve! / reject / diff]> ").strip().lower()
-        except (EOFError, KeyboardInterrupt):
+        except EOFError, KeyboardInterrupt:
             choice = "reject"
 
         if choice == "approve":
@@ -175,7 +183,11 @@ Make the minimal changes needed to fulfil the request. Edit existing files or cr
             _log_change(repo_root, result)
             break
         elif choice == "reject":
-            log.info("self-change rejected; reverting %d tracked, %d untracked", len(new_tracked), len(new_untracked))
+            log.info(
+                "self-change rejected; reverting %d tracked, %d untracked",
+                len(new_tracked),
+                len(new_untracked),
+            )
             result.approved = False
             if new_tracked:
                 _run(["git", "checkout", "--"] + sorted(new_tracked), repo_root)

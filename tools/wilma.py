@@ -14,9 +14,15 @@ class _ListWilmaMessagesArgs(BaseModel):
         default=None,
         description="Child's name (or part of it) or Wilma student number. Omit to cover all children.",
     )
-    folder: Literal["inbox", "archive", "outbox"] = Field(default="inbox", description="Wilma message folder.")
-    unread_only: bool = Field(default=False, description="Only messages not yet opened in Wilma.")
-    limit: int = Field(default=20, ge=1, le=100, description="Max messages per child, newest first.")
+    folder: Literal["inbox", "archive", "outbox"] = Field(
+        default="inbox", description="Wilma message folder."
+    )
+    unread_only: bool = Field(
+        default=False, description="Only messages not yet opened in Wilma."
+    )
+    limit: int = Field(
+        default=20, ge=1, le=100, description="Max messages per child, newest first."
+    )
 
 
 @tool(
@@ -27,7 +33,10 @@ class _ListWilmaMessagesArgs(BaseModel):
     args=_ListWilmaMessagesArgs,
 )
 def list_wilma_messages(
-    student: str | None = None, folder: str = "inbox", unread_only: bool = False, limit: int = 20
+    student: str | None = None,
+    folder: str = "inbox",
+    unread_only: bool = False,
+    limit: int = 20,
 ) -> dict[str, Any]:
     client = wilma.get_client()
     out = []
@@ -36,7 +45,13 @@ def list_wilma_messages(
         if unread_only:
             msgs = [m for m in msgs if m["unread"]]
         msgs.sort(key=lambda m: m["sent_at"] or "", reverse=True)
-        out.append({"student": s["number"], "student_name": s["name"], "messages": msgs[:limit]})
+        out.append(
+            {
+                "student": s["number"],
+                "student_name": s["name"],
+                "messages": msgs[:limit],
+            }
+        )
     log.info("list_wilma_messages folder=%s students=%d", folder, len(out))
     return {"folder": folder, "students": out}
 
@@ -63,7 +78,12 @@ def read_wilma_message(message_id: int, student: str | None = None) -> dict[str,
             raise
         except wilma.WilmaError as e:
             # Messages are filed per child; another child's prefix may be the right one.
-            log.info("read_wilma_message id=%s not under student=%s: %s", message_id, s["number"], e)
+            log.info(
+                "read_wilma_message id=%s not under student=%s: %s",
+                message_id,
+                s["number"],
+                e,
+            )
             last_error = e
             continue
         return {"student": s["number"], "student_name": s["name"], **msg}
@@ -81,7 +101,9 @@ class _FindWilmaMessageArgs(BaseModel):
         default=None,
         description="Send time from the notification, e.g. '19.10.2026 16:08' or ISO. Narrows ambiguous matches.",
     )
-    student: str | None = Field(default=None, description="Child's name or student number, if known.")
+    student: str | None = Field(
+        default=None, description="Child's name or student number, if known."
+    )
 
 
 @tool(
@@ -92,11 +114,15 @@ class _FindWilmaMessageArgs(BaseModel):
     ),
     args=_FindWilmaMessageArgs,
 )
-def find_wilma_message(subject: str, sent_at: str | None = None, student: str | None = None) -> dict[str, Any]:
+def find_wilma_message(
+    subject: str, sent_at: str | None = None, student: str | None = None
+) -> dict[str, Any]:
     client = wilma.get_client()
     candidates = []
     for s in wilma.resolve_students(client, student):
-        for m in wilma.match_messages(client.list_messages(s["number"]), subject, sent_at):
+        for m in wilma.match_messages(
+            client.list_messages(s["number"]), subject, sent_at
+        ):
             candidates.append((s, m))
     # A message sent to every guardian shows up once per child — same content, keep one.
     unique = {(m["subject"], m["sent_at"], m["sender"]): (s, m) for s, m in candidates}
@@ -106,7 +132,10 @@ def find_wilma_message(subject: str, sent_at: str | None = None, student: str | 
     if len(unique) > 1:
         return {
             "status": "ambiguous",
-            "candidates": [{"student": s["number"], "student_name": s["name"], **m} for s, m in unique.values()],
+            "candidates": [
+                {"student": s["number"], "student_name": s["name"], **m}
+                for s, m in unique.values()
+            ],
         }
     s, m = next(iter(unique.values()))
     students = sorted({c[0]["name"] or c[0]["number"] or "" for c in candidates} - {""})

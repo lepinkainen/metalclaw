@@ -62,7 +62,9 @@ def tool(
             },
             args_model=args,
         )
-        log.debug("registry: tool registered name=%s (total=%d)", func.__name__, len(TOOLS))
+        log.debug(
+            "registry: tool registered name=%s (total=%d)", func.__name__, len(TOOLS)
+        )
         return func
 
     return decorator

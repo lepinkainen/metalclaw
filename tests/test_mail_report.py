@@ -30,13 +30,19 @@ class _Resp:
         pass
 
     def json(self):
-        return {"methodResponses": [["Email/get", {"list": [_raw(i) for i in self.ids]}, "g"]]}
+        return {
+            "methodResponses": [
+                ["Email/get", {"list": [_raw(i) for i in self.ids]}, "g"]
+            ]
+        }
 
 
 @pytest.fixture
 def fm(monkeypatch, tmp_path):
     monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path))
-    monkeypatch.setattr(mail, "_fm_session", lambda: {"api_url": "u", "account_id": "a", "token": "t"})
+    monkeypatch.setattr(
+        mail, "_fm_session", lambda: {"api_url": "u", "account_id": "a", "token": "t"}
+    )
     monkeypatch.setattr(mail, "_fm_mailboxes", lambda: MBS)
     monkeypatch.setattr(mail, "_last_candidates", set())
     state = {"ids": ["1", "2"], "bodies": []}
@@ -75,12 +81,26 @@ def test_mark_rejects_unknown(fm):
 def test_wilma_notification_gets_hint(fm, monkeypatch):
     from types import SimpleNamespace
 
-    monkeypatch.setattr(mail, "get_config", lambda: SimpleNamespace(wilma_url="https://w.example"))
+    monkeypatch.setattr(
+        mail, "get_config", lambda: SimpleNamespace(wilma_url="https://w.example")
+    )
 
     def post(url, headers, json):
         raw = [_raw("1"), _raw("2")]
-        raw[0].update(subject="Viesti Wilmasta: Hei", **{"from": [{"name": "W", "email": "x@inschool.fi"}]})
-        return type("R", (), {"raise_for_status": lambda s: None, "json": lambda s: {"methodResponses": [["Email/get", {"list": raw}, "g"]]}})()
+        raw[0].update(
+            subject="Viesti Wilmasta: Hei",
+            **{"from": [{"name": "W", "email": "x@inschool.fi"}]},
+        )
+        return type(
+            "R",
+            (),
+            {
+                "raise_for_status": lambda s: None,
+                "json": lambda s: {
+                    "methodResponses": [["Email/get", {"list": raw}, "g"]]
+                },
+            },
+        )()
 
     monkeypatch.setattr(mail.HTTP, "post", post)
     by_id = {e["id"]: e for e in mail.check_new_mail()["emails"]}

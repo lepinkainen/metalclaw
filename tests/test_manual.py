@@ -43,7 +43,9 @@ def test_init_manual_copies_template_then_read_succeeds(vault):
 def test_init_manual_refuses_overwrite(vault):
     manual_tool.init_manual()
     original = (vault / "manual.md").read_text(encoding="utf-8")
-    (vault / "manual.md").write_text(original + "\n## Custom\nuser edit\n", encoding="utf-8")
+    (vault / "manual.md").write_text(
+        original + "\n## Custom\nuser edit\n", encoding="utf-8"
+    )
 
     second = manual_tool.init_manual()
     assert second["status"] == "exists"

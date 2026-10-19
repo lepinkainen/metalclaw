@@ -31,13 +31,15 @@ class FakeProvider:
 
 
 def test_loop_terminates_on_empty_tool_calls():
-    provider = FakeProvider([
-        AssistantMessage(
-            text="hello",
-            tool_calls=[],
-            raw={"role": "assistant", "content": "hello"},
-        ),
-    ])
+    provider = FakeProvider(
+        [
+            AssistantMessage(
+                text="hello",
+                tool_calls=[],
+                raw={"role": "assistant", "content": "hello"},
+            ),
+        ]
+    )
     messages = [
         {"role": "system", "content": "sys"},
         {"role": "user", "content": "hi"},
@@ -51,18 +53,22 @@ def test_loop_terminates_on_empty_tool_calls():
 def test_loop_dispatches_tool_call_and_feeds_result_back():
     """Run a real registered tool (roll_die) through the fake provider."""
     call = ToolCall(id="call-1", name="roll_die", arguments={"sides": 6})
-    provider = FakeProvider([
-        AssistantMessage(
-            text="",
-            tool_calls=[call],
-            raw={"role": "assistant", "tool_calls": [{"id": "call-1"}]},
+    provider = (
+        FakeProvider(
+            [
+                AssistantMessage(
+                    text="",
+                    tool_calls=[call],
+                    raw={"role": "assistant", "tool_calls": [{"id": "call-1"}]},
+                ),
+                AssistantMessage(
+                    text="rolled",
+                    tool_calls=[],
+                    raw={"role": "assistant", "content": "rolled"},
+                ),
+            ]
         ),
-        AssistantMessage(
-            text="rolled",
-            tool_calls=[],
-            raw={"role": "assistant", "content": "rolled"},
-        ),
-    ]),
+    )
     provider = provider[0]
 
     messages = [{"role": "user", "content": "roll a d6"}]
@@ -76,13 +82,15 @@ def test_loop_dispatches_tool_call_and_feeds_result_back():
 
 
 def test_loop_excludes_tools_from_schema():
-    provider = FakeProvider([
-        AssistantMessage(text="ok", tool_calls=[], raw={"role": "assistant", "content": "ok"}),
-    ])
-    messages = [{"role": "user", "content": "hi"}]
-    _chat_with_provider(
-        provider, messages, exclude_tools={"escalate_to_big_model"}
+    provider = FakeProvider(
+        [
+            AssistantMessage(
+                text="ok", tool_calls=[], raw={"role": "assistant", "content": "ok"}
+            ),
+        ]
     )
+    messages = [{"role": "user", "content": "hi"}]
+    _chat_with_provider(provider, messages, exclude_tools={"escalate_to_big_model"})
     schemas_passed = provider.calls[0][1]
     names = {s["function"]["name"] for s in schemas_passed}
     assert "escalate_to_big_model" not in names
@@ -113,10 +121,12 @@ def test_active_session_messages_contextvar_is_set_during_chat():
 
 
 def test_split_system_extracts_first_message_only():
-    sys, hist = _split_system([
-        {"role": "system", "content": "S"},
-        {"role": "user", "content": "U"},
-    ])
+    sys, hist = _split_system(
+        [
+            {"role": "system", "content": "S"},
+            {"role": "user", "content": "U"},
+        ]
+    )
     assert sys == "S"
     assert hist == [{"role": "user", "content": "U"}]
 
@@ -159,7 +169,9 @@ def test_run_tool_rejects_unknown_field():
     assert "Rolled" in str(out)
 
 
-def test_add_user_instruction_tool_routes_to_memory_and_refreshes(tmp_path, monkeypatch):
+def test_add_user_instruction_tool_routes_to_memory_and_refreshes(
+    tmp_path, monkeypatch
+):
     import config as _config
 
     cfg_path = tmp_path / "config.yaml"
@@ -174,21 +186,29 @@ def test_add_user_instruction_tool_routes_to_memory_and_refreshes(tmp_path, monk
     _config.reset_cache()
     try:
         call = ToolCall(
-            id="c1", name="add_user_instruction",
+            id="c1",
+            name="add_user_instruction",
             arguments={"text": "Reply in Finnish."},
         )
-        provider = FakeProvider([
-            AssistantMessage(text="", tool_calls=[call],
-                             raw={"role": "assistant", "tool_calls": [{"id": "c1"}]}),
-            AssistantMessage(text="ok", tool_calls=[],
-                             raw={"role": "assistant", "content": "ok"}),
-        ])
+        provider = FakeProvider(
+            [
+                AssistantMessage(
+                    text="",
+                    tool_calls=[call],
+                    raw={"role": "assistant", "tool_calls": [{"id": "c1"}]},
+                ),
+                AssistantMessage(
+                    text="ok", tool_calls=[], raw={"role": "assistant", "content": "ok"}
+                ),
+            ]
+        )
         messages = [
             {"role": "system", "content": "old-system"},
             {"role": "user", "content": "from now on Finnish"},
         ]
         _chat_with_provider(provider, messages)
         import memory as _memory
+
         assert _memory.load().instructions == ["Reply in Finnish."]
         second_system = provider.calls[1][2]
         assert "Reply in Finnish." in second_system
@@ -213,13 +233,15 @@ def test_chat_resets_session_when_provider_switches_mid_session(monkeypatch):
 
     def _make_provider(name, model_override=None):
         providers_built.append(name)
-        return FakeProvider([
-            AssistantMessage(
-                text="hi",
-                tool_calls=[],
-                raw={"role": "assistant", "content": "hi"},
-            ),
-        ])
+        return FakeProvider(
+            [
+                AssistantMessage(
+                    text="hi",
+                    tool_calls=[],
+                    raw={"role": "assistant", "content": "hi"},
+                ),
+            ]
+        )
 
     monkeypatch.setattr(chat_loop, "get_config", _get_cfg)
     monkeypatch.setattr(chat_loop, "get_provider", _make_provider)
@@ -264,13 +286,15 @@ def test_chat_does_not_reset_when_provider_unchanged(monkeypatch):
     monkeypatch.setattr(
         chat_loop,
         "get_provider",
-        lambda name, model_override=None: FakeProvider([
-            AssistantMessage(
-                text="ok",
-                tool_calls=[],
-                raw={"role": "assistant", "content": "ok"},
-            ),
-        ]),
+        lambda name, model_override=None: FakeProvider(
+            [
+                AssistantMessage(
+                    text="ok",
+                    tool_calls=[],
+                    raw={"role": "assistant", "content": "ok"},
+                ),
+            ]
+        ),
     )
 
     messages = [
@@ -302,15 +326,22 @@ def test_memory_mutator_refreshes_system_prompt_mid_loop(tmp_path, monkeypatch):
     _config.reset_cache()
     try:
         call = ToolCall(
-            id="c1", name="set_user_preference",
+            id="c1",
+            name="set_user_preference",
             arguments={"key": "tone", "value": "terse"},
         )
-        provider = FakeProvider([
-            AssistantMessage(text="", tool_calls=[call],
-                             raw={"role": "assistant", "tool_calls": [{"id": "c1"}]}),
-            AssistantMessage(text="ok", tool_calls=[],
-                             raw={"role": "assistant", "content": "ok"}),
-        ])
+        provider = FakeProvider(
+            [
+                AssistantMessage(
+                    text="",
+                    tool_calls=[call],
+                    raw={"role": "assistant", "tool_calls": [{"id": "c1"}]},
+                ),
+                AssistantMessage(
+                    text="ok", tool_calls=[], raw={"role": "assistant", "content": "ok"}
+                ),
+            ]
+        )
         messages = [
             {"role": "system", "content": "old-system"},
             {"role": "user", "content": "remember tone=terse"},

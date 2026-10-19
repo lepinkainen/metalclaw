@@ -66,6 +66,7 @@ class ForgetResult:
     lists every candidate in the same display format so the caller can refine
     the matcher.
     """
+
     status: ForgetStatus
     entry: str | None = None
     matches: list[str] = field(default_factory=list)
@@ -264,6 +265,7 @@ def _mutate(
 def set_preference(key: str, value: str) -> None:
     def apply(mem: Memory) -> None:
         mem.preferences[key] = value
+
     _mutate(apply, "memory write op=set_preference key=%s", key)
 
 
@@ -271,6 +273,7 @@ def add_fact(text: str) -> None:
     def apply(mem: Memory) -> None:
         if text not in mem.facts:
             mem.facts.append(text)
+
     _mutate(apply, "memory write op=add_fact text=%r", text[:60])
 
 
@@ -278,6 +281,7 @@ def add_instruction(text: str) -> None:
     def apply(mem: Memory) -> None:
         if text not in mem.instructions:
             mem.instructions.append(text)
+
     _mutate(apply, "memory write op=add_instruction text=%r", text[:60])
 
 
@@ -310,7 +314,8 @@ def forget(matcher: str) -> ForgetResult:
             display = [f"[{kind}] {disp}" for kind, _, disp in candidates]
             log.info(
                 "memory write op=forget status=ambiguous matcher=%r match_count=%d",
-                matcher, len(candidates),
+                matcher,
+                len(candidates),
             )
             return ForgetResult(status=ForgetStatus.AMBIGUOUS, matches=display)
 

@@ -31,7 +31,9 @@ def set_user_preference(key: str, value: str) -> dict[str, Any]:
 
 
 class _AddUserFactArgs(BaseModel):
-    text: str = Field(description="The fact to remember. May contain Obsidian [[wikilinks]].")
+    text: str = Field(
+        description="The fact to remember. May contain Obsidian [[wikilinks]]."
+    )
 
 
 @tool(
@@ -94,7 +96,9 @@ class _ForgetUserMemoryArgs(BaseModel):
 def forget_user_memory(matcher: str) -> dict[str, Any]:
     log.info("forget_user_memory matcher=%r", matcher)
     res = memory.forget(matcher)
-    log.info("forget_user_memory status=%s matches=%d", res.status, len(res.matches or []))
+    log.info(
+        "forget_user_memory status=%s matches=%d", res.status, len(res.matches or [])
+    )
     out: dict[str, Any] = {"status": res.status, "matcher": matcher}
     if res.entry is not None:
         out["entry"] = res.entry

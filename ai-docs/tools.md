@@ -13,18 +13,18 @@ The function `__name__` is the registry key — also what providers see as the t
 
 ```python
 {
-  "type": "function",
-  "function": {
-    "name": "weather",
-    "description": "...",
-    "parameters": {
-      "type": "object",
-      "properties": {
-        "location": {"type": "string", "description": "..."},
-      },
-      "required": ["location"],
+    "type": "function",
+    "function": {
+        "name": "weather",
+        "description": "...",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "location": {"type": "string", "description": "..."},
+            },
+            "required": ["location"],
+        },
     },
-  },
 }
 ```
 

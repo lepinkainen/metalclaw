@@ -50,7 +50,10 @@ def _split_thinking(text: str) -> tuple[str, str]:
     if thinking_parts:
         log.debug(
             "think-strip: %d block(s), removed %d chars, reply %d -> %d chars",
-            len(thinking_parts), len(text) - len(clean), len(text), len(clean),
+            len(thinking_parts),
+            len(text) - len(clean),
+            len(text),
+            len(clean),
         )
     return "\n".join(thinking_parts).strip(), clean
 
@@ -122,7 +125,9 @@ def _refresh_system_prompt(messages: list[dict]) -> None:
         messages[0] = {"role": "system", "content": prompt}
     else:
         messages.insert(0, {"role": "system", "content": prompt})
-    log.debug("system prompt refreshed (%d chars, %d messages)", len(prompt), len(messages))
+    log.debug(
+        "system prompt refreshed (%d chars, %d messages)", len(prompt), len(messages)
+    )
 
 
 _MEMORY_MUTATORS = frozenset(
@@ -220,9 +225,7 @@ def _chat_with_provider(
     exclude_tools: frozenset[str] | set[str] = frozenset(),
 ) -> str:
     """Run the tool-call loop against `provider`, mutating `messages` in place."""
-    tool_schemas = [
-        t.schema for name, t in TOOLS.items() if name not in exclude_tools
-    ]
+    tool_schemas = [t.schema for name, t in TOOLS.items() if name not in exclude_tools]
     system, history = _split_system(messages)
     token = _active_session_messages.set(messages)
     pname = getattr(provider, "name", type(provider).__name__)
@@ -230,7 +233,12 @@ def _chat_with_provider(
     turn_t0 = time.monotonic()
     log.info(
         "turn start provider=%s model=%s scope=%s history=%d messages tools=%d system=%d chars",
-        pname, pmodel, current_scope.get(), len(history), len(tool_schemas), len(system),
+        pname,
+        pmodel,
+        current_scope.get(),
+        len(history),
+        len(tool_schemas),
+        len(system),
     )
     iteration = 0
     try:
@@ -240,11 +248,20 @@ def _chat_with_provider(
             try:
                 am = provider.chat_once(history, tool_schemas, system)
             except Exception:
-                log.exception("provider call failed provider=%s model=%s iteration=%d", pname, pmodel, iteration)
+                log.exception(
+                    "provider call failed provider=%s model=%s iteration=%d",
+                    pname,
+                    pmodel,
+                    iteration,
+                )
                 raise
             log.info(
                 "provider call #%d provider=%s latency=%.2fs text=%d chars tool_calls=%d",
-                iteration, pname, time.monotonic() - call_t0, len(am.text), len(am.tool_calls),
+                iteration,
+                pname,
+                time.monotonic() - call_t0,
+                len(am.text),
+                len(am.tool_calls),
             )
             raw = am.raw
             if isinstance(raw, list):
@@ -255,7 +272,10 @@ def _chat_with_provider(
             if not am.tool_calls:
                 log.info(
                     "turn end provider=%s iterations=%d duration=%.2fs reply=%d chars",
-                    pname, iteration, time.monotonic() - turn_t0, len(am.text),
+                    pname,
+                    iteration,
+                    time.monotonic() - turn_t0,
+                    len(am.text),
                 )
                 log.debug("turn reply: %.500s", am.text)
                 messages[:] = (
@@ -270,13 +290,17 @@ def _chat_with_provider(
                 tool_t0 = time.monotonic()
                 result = _run_tool(tc.name, tc.arguments)
                 result_json = _tool_result_json(result)
-                failed = isinstance(result, str) and result.startswith("Error:") or (
-                    isinstance(result, dict) and "error" in result
+                failed = (
+                    isinstance(result, str)
+                    and result.startswith("Error:")
+                    or (isinstance(result, dict) and "error" in result)
                 )
                 log.info(
                     "tool %s %s in %.2fs result=%d chars",
-                    tc.name, "FAILED" if failed else "ok",
-                    time.monotonic() - tool_t0, len(result_json),
+                    tc.name,
+                    "FAILED" if failed else "ok",
+                    time.monotonic() - tool_t0,
+                    len(result_json),
                 )
                 log.debug("tool %s result: %.500s", tc.name, result_json)
                 if on_tool_call:
@@ -289,7 +313,10 @@ def _chat_with_provider(
             if memory_dirty:
                 now = datetime.now().strftime("%Y-%m-%d %H:%M")
                 system = build_system_prompt(now)
-                log.info("system prompt rebuilt mid-loop after memory/heartbeat mutator (%d chars)", len(system))
+                log.info(
+                    "system prompt rebuilt mid-loop after memory/heartbeat mutator (%d chars)",
+                    len(system),
+                )
     finally:
         _active_session_messages.reset(token)
 
@@ -321,13 +348,18 @@ def _check_session_provider(messages: list[dict], provider_name: str) -> bool:
     kept: list[dict] = []
     if messages and messages[0].get("role") == "system":
         kept.append(messages[0])
-    if messages and messages[-1].get("role") == "user" and (
-        not kept or messages[-1] is not kept[0]
+    if (
+        messages
+        and messages[-1].get("role") == "user"
+        and (not kept or messages[-1] is not kept[0])
     ):
         kept.append(messages[-1])
     log.warning(
         "provider switch %s -> %s: dropped history %d -> %d messages",
-        stamped, provider_name, len(messages), len(kept),
+        stamped,
+        provider_name,
+        len(messages),
+        len(kept),
     )
     messages[:] = kept
     return True
@@ -362,7 +394,9 @@ def chat_via_escalation(
     big = get_provider(cfg.escalation_provider, model_override=cfg.escalation_model)
     log.info(
         "escalation start provider=%s model=%s messages=%d",
-        cfg.escalation_provider, cfg.escalation_model, len(messages),
+        cfg.escalation_provider,
+        cfg.escalation_model,
+        len(messages),
     )
     t0 = time.monotonic()
     try:
@@ -375,7 +409,9 @@ def chat_via_escalation(
     except Exception:
         log.exception("escalation failed after %.2fs", time.monotonic() - t0)
         raise
-    log.info("escalation end duration=%.2fs reply=%d chars", time.monotonic() - t0, len(out))
+    log.info(
+        "escalation end duration=%.2fs reply=%d chars", time.monotonic() - t0, len(out)
+    )
     return out
 
 
@@ -399,7 +435,9 @@ async def run_turn(
     messages.append({"role": "user", "content": user_text})
     log.info(
         "run_turn scope=%s session=%d messages user_text=%d chars",
-        current_scope.get(), len(messages), len(user_text),
+        current_scope.get(),
+        len(messages),
+        len(user_text),
     )
     log.debug("run_turn user text: %.500s", user_text)
     loop = asyncio.get_running_loop()

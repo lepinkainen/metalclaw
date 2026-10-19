@@ -61,7 +61,9 @@ def test_escalate_routes_through_provider(cfg_file, write_config, monkeypatch):
     assert "escalate_to_big_model" not in tool_names, "recursion guard failed"
     assert "roll_die" in tool_names
 
-    user_contents = [m["content"] for m in captured["messages"] if m.get("role") == "user"]
+    user_contents = [
+        m["content"] for m in captured["messages"] if m.get("role") == "user"
+    ]
     assert any("earlier turn" in c for c in user_contents), "session snapshot missing"
     assert any("hard one" in c and "too hard" in c for c in user_contents)
 

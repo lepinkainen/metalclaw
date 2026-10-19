@@ -47,7 +47,10 @@ def escalate_to_big_model(query: str, reason: str) -> dict[str, Any]:
     big = get_provider(cfg.escalation_provider, model_override=cfg.escalation_model)
     log.info(
         "escalate_to_big_model -> %s:%s (snapshot=%s, %d messages)",
-        cfg.escalation_provider, cfg.escalation_model, snapshot is not None, len(sub_messages),
+        cfg.escalation_provider,
+        cfg.escalation_model,
+        snapshot is not None,
+        len(sub_messages),
     )
     reply = chat_loop._chat_with_provider(
         big, sub_messages, exclude_tools={"escalate_to_big_model"}

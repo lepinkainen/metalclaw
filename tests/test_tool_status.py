@@ -14,7 +14,11 @@ from frontends.common import ToolStatusReporter, format_tool_status
         ("read_email", {"id": "M123abc"}, "📖 read_email(M123abc)"),
         ("search_vault", {"query": "dentist"}, '🔍 search_vault("dentist")'),
         ("mark_emails_reported", {}, "✅ mark_emails_reported"),
-        ("add_email_label", {"label": "bot/job-offer"}, "🏷️ add_email_label(bot/job-offer)"),
+        (
+            "add_email_label",
+            {"label": "bot/job-offer"},
+            "🏷️ add_email_label(bot/job-offer)",
+        ),
         ("set_user_preference", {}, "🧠 set_user_preference"),
         ("create_heartbeat_action", {}, "⏰ create_heartbeat_action"),
         ("roll_die", {}, "🎲 roll_die"),
@@ -120,7 +124,9 @@ def test_reporter_drain_awaits_updates_before_reply():
 
     async def turn():
         rep = ToolStatusReporter(asyncio.get_running_loop(), send, edit)
-        await asyncio.get_running_loop().run_in_executor(None, lambda: rep("roll_die", {}, "{}"))
+        await asyncio.get_running_loop().run_in_executor(
+            None, lambda: rep("roll_die", {}, "{}")
+        )
         await rep.drain()
         events.append(("reply", ""))
 

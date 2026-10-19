@@ -19,7 +19,12 @@ def _geocode(location: str) -> tuple[float, float, str]:
     resp = HTTP.get(_NOMINATIM, params={"q": location, "format": "json", "limit": 1})
     resp.raise_for_status()
     results = resp.json()
-    log.debug("weather: geocode %r -> %d hit(s) status=%s", location, len(results), getattr(resp, "status_code", None))
+    log.debug(
+        "weather: geocode %r -> %d hit(s) status=%s",
+        location,
+        len(results),
+        getattr(resp, "status_code", None),
+    )
     if not results:
         log.warning("weather: could not geocode %r", location)
         raise ValueError(f"Could not find location: {location}")
@@ -66,7 +71,9 @@ def _day_summary(entries: list[dict[str, Any]]) -> dict[str, Any]:
 
 
 class _WeatherArgs(BaseModel):
-    location: str = Field(description="City or place name (e.g. 'Tokyo', 'Oslo', 'New York')")
+    location: str = Field(
+        description="City or place name (e.g. 'Tokyo', 'Oslo', 'New York')"
+    )
 
 
 @tool(
@@ -80,7 +87,11 @@ def weather(location: str) -> dict[str, Any]:
     resp = HTTP.get(_METNO, params={"lat": lat, "lon": lon})
     resp.raise_for_status()
     timeseries = resp.json()["properties"]["timeseries"]
-    log.debug("weather: met.no status=%s entries=%d", getattr(resp, "status_code", None), len(timeseries))
+    log.debug(
+        "weather: met.no status=%s entries=%d",
+        getattr(resp, "status_code", None),
+        len(timeseries),
+    )
 
     today = datetime.now(UTC).date()
     tomorrow = today + timedelta(days=1)
@@ -129,6 +140,9 @@ def weather(location: str) -> dict[str, Any]:
 
     log.info(
         "weather done place=%r temp=%s today=%s tomorrow=%s",
-        display_name, temp, result["today"] is not None, result["tomorrow"] is not None,
+        display_name,
+        temp,
+        result["today"] is not None,
+        result["tomorrow"] is not None,
     )
     return result

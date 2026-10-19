@@ -18,6 +18,7 @@ def patched_post(monkeypatch):
         )
 
     import providers.ollama as op
+
     monkeypatch.setattr(op._CLIENT, "post", _stub_post)
     return captured
 
@@ -64,6 +65,7 @@ def test_fetch_model_defaults_parses_parameters(monkeypatch):
         )
 
     import providers.ollama as op
+
     monkeypatch.setattr(op._CLIENT, "post", _stub_post)
     out = fetch_model_defaults("http://x/api/chat", "gemma4:e4b")
     assert out == {"temperature": 1.0, "top_k": 64, "top_p": 0.95}
@@ -76,5 +78,6 @@ def test_fetch_model_defaults_returns_empty_on_error(monkeypatch):
         raise RuntimeError("boom")
 
     import providers.ollama as op
+
     monkeypatch.setattr(op._CLIENT, "post", _stub_post)
     assert fetch_model_defaults("http://x/api/chat", "gemma4:e4b") == {}

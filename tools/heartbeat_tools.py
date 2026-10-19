@@ -22,12 +22,8 @@ class _CronScheduleArgs(BaseModel):
             "'mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'."
         )
     )
-    time: str = Field(
-        description="Local fire time as 'HH:MM' (24h)."
-    )
-    timezone: str = Field(
-        description="IANA timezone, e.g. 'Europe/Helsinki', 'UTC'."
-    )
+    time: str = Field(description="Local fire time as 'HH:MM' (24h).")
+    timezone: str = Field(description="IANA timezone, e.g. 'Europe/Helsinki', 'UTC'.")
 
 
 class _CreateHeartbeatActionArgs(BaseModel):
@@ -105,7 +101,12 @@ def create_heartbeat_action(
 ) -> dict[str, Any]:
     log.info(
         "create_heartbeat_action kind=%s channel=%r at=%r every=%r schedule=%s prompt=%.200s",
-        kind, channel, at, every, schedule, prompt,
+        kind,
+        channel,
+        at,
+        every,
+        schedule,
+        prompt,
     )
     try:
         action_kind = heartbeat.ActionKind(kind)
@@ -117,7 +118,10 @@ def create_heartbeat_action(
     if action_kind == heartbeat.ActionKind.CRON:
         if not schedule:
             log.warning("create_heartbeat_action cron without schedule")
-            return {"error": "missing_schedule", "message": "kind=cron requires schedule"}
+            return {
+                "error": "missing_schedule",
+                "message": "kind=cron requires schedule",
+            }
         try:
             cron = heartbeat.CronSchedule(
                 days=heartbeat.normalise_weekdays(schedule.get("days") or []),
@@ -148,7 +152,9 @@ def create_heartbeat_action(
     except ValueError as e:
         log.warning("create_heartbeat_action rejected: %s", e)
         return {"error": "invalid_arguments", "message": str(e)}
-    log.info("create_heartbeat_action created id=%s channel=%s", action.id, resolved_channel)
+    log.info(
+        "create_heartbeat_action created id=%s channel=%s", action.id, resolved_channel
+    )
     return {"status": "created", "action": action.to_dict()}
 
 
@@ -170,7 +176,9 @@ def list_heartbeat_actions(include_completed: bool = False) -> dict[str, Any]:
     ledger = heartbeat.load_ledger()
     log.info(
         "list_heartbeat_actions active=%d completed=%d include_completed=%s",
-        len(ledger.actions), len(ledger.completed), include_completed,
+        len(ledger.actions),
+        len(ledger.completed),
+        include_completed,
     )
     out: dict[str, Any] = {"active": [a.to_dict() for a in ledger.actions]}
     if include_completed:
@@ -179,7 +187,9 @@ def list_heartbeat_actions(include_completed: bool = False) -> dict[str, Any]:
 
 
 class _CancelHeartbeatActionArgs(BaseModel):
-    action_id: str = Field(description="Six-character action id (from list_heartbeat_actions).")
+    action_id: str = Field(
+        description="Six-character action id (from list_heartbeat_actions)."
+    )
 
 
 @tool(

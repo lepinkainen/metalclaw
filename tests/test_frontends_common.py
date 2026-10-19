@@ -196,9 +196,7 @@ def test_run_heartbeat_status_lists_active_actions(vault):
 
 def test_run_heartbeat_warn_no_discord_channel(vault):
     send, captured = _send_capture()
-    asyncio.run(
-        common.run_heartbeat(send, "cli", "", warn_no_discord_channel=True)
-    )
+    asyncio.run(common.run_heartbeat(send, "cli", "", warn_no_discord_channel=True))
     out = "\n".join(captured)
     assert "no discord_heartbeat_channel" in out
 
@@ -208,17 +206,13 @@ def test_run_heartbeat_warn_no_discord_channel(vault):
 
 def test_run_big_empty_query(vault):
     send, captured = _send_capture()
-    asyncio.run(
-        common.run_big(send, contextlib.nullcontext(), [], "")
-    )
+    asyncio.run(common.run_big(send, contextlib.nullcontext(), [], ""))
     assert captured == ["usage: /big <query>"]
 
 
 def test_run_big_disabled_when_escalation_off(vault):
     send, captured = _send_capture()
-    asyncio.run(
-        common.run_big(send, contextlib.nullcontext(), [], "hi")
-    )
+    asyncio.run(common.run_big(send, contextlib.nullcontext(), [], "hi"))
     assert any("escalation disabled" in c for c in captured)
 
 
@@ -231,9 +225,7 @@ def test_run_big_routes_through_escalation(vault_with_escalation, monkeypatch):
 
     messages: list[dict] = [{"role": "system", "content": "x"}]
     send, captured = _send_capture()
-    asyncio.run(
-        common.run_big(send, contextlib.nullcontext(), messages, "hi")
-    )
+    asyncio.run(common.run_big(send, contextlib.nullcontext(), messages, "hi"))
 
     assert messages[-2] == {"role": "user", "content": "hi"}
     assert messages[-1] == {"role": "assistant", "content": "cloud reply"}
@@ -248,9 +240,7 @@ def test_run_big_rolls_back_on_exception(vault_with_escalation, monkeypatch):
 
     messages: list[dict] = [{"role": "system", "content": "x"}]
     send, captured = _send_capture()
-    asyncio.run(
-        common.run_big(send, contextlib.nullcontext(), messages, "hi")
-    )
+    asyncio.run(common.run_big(send, contextlib.nullcontext(), messages, "hi"))
 
     assert all(m.get("role") != "user" for m in messages)
     assert any("Error: boom" in c for c in captured)

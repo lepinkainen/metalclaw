@@ -48,7 +48,7 @@ def _load_known_chats() -> set[int]:
         return set()
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
+    except OSError, json.JSONDecodeError:
         log.exception("telegram: could not read known chats from %s", path)
         return set()
     return {int(x) for x in data} if isinstance(data, list) else set()
@@ -62,7 +62,11 @@ def _remember_chat(chat_id: int) -> None:
     if chat_id in _known_chats:
         return
     _known_chats.add(chat_id)
-    log.info("telegram: new chat remembered chat_id=%d (known=%d)", chat_id, len(_known_chats))
+    log.info(
+        "telegram: new chat remembered chat_id=%d (known=%d)",
+        chat_id,
+        len(_known_chats),
+    )
     _save_known_chats(_known_chats)
 
 
@@ -82,7 +86,9 @@ async def _tg_reply(update: Update, text: str) -> None:
     try:
         await reply(html_text, parse_mode="HTML")
     except Exception:
-        log.warning("telegram: HTML reply failed, falling back to plain text", exc_info=True)
+        log.warning(
+            "telegram: HTML reply failed, falling back to plain text", exc_info=True
+        )
         await reply(text)
     log.debug("telegram: replied %d chars", len(text))
 
@@ -90,6 +96,7 @@ async def _tg_reply(update: Update, text: str) -> None:
 def _send_for(update: Update) -> common.SendFn:
     async def _send(text: str) -> None:
         await _tg_reply(update, text)
+
     return _send
 
 
@@ -100,6 +107,7 @@ async def _typing(chat_id: int, bot):
     Telegram chat actions expire after ~5 seconds, so we refresh on a 4-second
     cadence. Errors are swallowed — this is best-effort UX.
     """
+
     async def _pulse() -> None:
         while True:
             try:
@@ -115,7 +123,7 @@ async def _typing(chat_id: int, bot):
         task.cancel()
         try:
             await task
-        except (asyncio.CancelledError, Exception):
+        except asyncio.CancelledError, Exception:
             log.debug("telegram: background task ended with error", exc_info=True)
 
 
@@ -133,7 +141,9 @@ class _TelegramChannel:
         log.info("telegram: notify chat_id=%d %d chars", chat_id, len(text))
         html_text = telegram_format.to_html(text)
         try:
-            await self._app.bot.send_message(chat_id=chat_id, text=html_text, parse_mode="HTML")
+            await self._app.bot.send_message(
+                chat_id=chat_id, text=html_text, parse_mode="HTML"
+            )
         except Exception:
             log.warning("telegram: HTML notify failed, retrying plain", exc_info=True)
             await self._app.bot.send_message(chat_id=chat_id, text=text)
@@ -184,7 +194,13 @@ async def _telegram_dispatch_command(
     scope = _telegram_scope_for(chat_id)
     send = _send_for(update)
     canon = common.canonicalize(cmd) or cmd
-    log.info("telegram: command /%s (canon=%s) chat_id=%d args=%d chars", cmd, canon, chat_id, len(args))
+    log.info(
+        "telegram: command /%s (canon=%s) chat_id=%d args=%d chars",
+        cmd,
+        canon,
+        chat_id,
+        len(args),
+    )
 
     if canon == "help":
         await _tg_reply(update, _TELEGRAM_HELP_TEXT)
@@ -197,7 +213,11 @@ async def _telegram_dispatch_command(
         old = _telegram_sessions.pop(chat_id, None)
         if old is not None:
             forget_session_provider(old)
-        log.info("telegram: session reset chat_id=%d (had_session=%s)", chat_id, old is not None)
+        log.info(
+            "telegram: session reset chat_id=%d (had_session=%s)",
+            chat_id,
+            old is not None,
+        )
         await _tg_reply(update, "Conversation reset.")
     elif canon == "remember":
         await common.run_remember(send, args)
@@ -237,7 +257,9 @@ async def _telegram_dispatch_command(
             log.info("telegram: /%s bad args: %s", cmd, e)
             await _tg_reply(update, str(e))
             return
-        log.info("telegram: tool command /%s -> %s params=%.200s", cmd, tool_name, params)
+        log.info(
+            "telegram: tool command /%s -> %s params=%.200s", cmd, tool_name, params
+        )
         tool_obj = TOOLS.get(tool_name)
         if tool_obj is None:
             log.warning("telegram: tool %s unavailable", tool_name)
@@ -247,9 +269,13 @@ async def _telegram_dispatch_command(
         try:
             if bot is not None:
                 async with _typing(chat_id, bot):
-                    result = await loop.run_in_executor(None, lambda: tool_obj.func(**params))
+                    result = await loop.run_in_executor(
+                        None, lambda: tool_obj.func(**params)
+                    )
             else:
-                result = await loop.run_in_executor(None, lambda: tool_obj.func(**params))
+                result = await loop.run_in_executor(
+                    None, lambda: tool_obj.func(**params)
+                )
         except Exception as e:
             log.exception("telegram: tool command /%s failed", cmd)
             await _tg_reply(update, f"Error: {e}")
@@ -260,7 +286,9 @@ async def _telegram_dispatch_command(
         await _tg_reply(update, f"Unknown command: /{cmd}  (try /help)")
 
 
-async def _telegram_handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+async def _telegram_handle_message(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> None:
     assert update.message is not None and update.message.text is not None
     assert update.effective_chat is not None
     text = update.message.text.strip()
@@ -268,7 +296,9 @@ async def _telegram_handle_message(update: Update, context: ContextTypes.DEFAULT
     user = update.effective_user
     log.info(
         "telegram: message chat_id=%d user=%s len=%d",
-        chat_id, getattr(user, "username", None) or getattr(user, "id", None), len(text),
+        chat_id,
+        getattr(user, "username", None) or getattr(user, "id", None),
+        len(text),
     )
     log.debug("telegram: message text: %.500s", text)
     _remember_chat(chat_id)
@@ -306,6 +336,7 @@ def _make_telegram_cmd_handler(cmd: str):
         await _telegram_dispatch_command(
             update, cmd, " ".join(context.args or []), context.bot
         )
+
     return handler
 
 
@@ -319,7 +350,9 @@ async def start_telegram(token: str) -> Application:
     # passes `concurrent_updates=True` to the builder below, add a per-chat
     # lock around session reads/writes the same way Discord does.
     app = Application.builder().token(token).build()
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, _telegram_handle_message))
+    app.add_handler(
+        MessageHandler(filters.TEXT & ~filters.COMMAND, _telegram_handle_message)
+    )
     for cmd, _desc in _TELEGRAM_BOT_COMMANDS:
         app.add_handler(CommandHandler(cmd, _make_telegram_cmd_handler(cmd)))
 

@@ -16,6 +16,7 @@ def get_provider(name: str, *, model_override: str | None = None) -> Provider:
     cfg = get_config()
     if name == "ollama":
         from providers.ollama import OllamaProvider
+
         log.debug("provider: building ollama model=%s", model_override or cfg.model)
         return OllamaProvider(
             url=cfg.ollama_url,
@@ -26,7 +27,10 @@ def get_provider(name: str, *, model_override: str | None = None) -> Provider:
         )
     if name == "litellm":
         from providers.litellm_provider import LiteLLMProvider
-        log.debug("provider: building litellm model=%s", model_override or cfg.litellm_model)
+
+        log.debug(
+            "provider: building litellm model=%s", model_override or cfg.litellm_model
+        )
         return LiteLLMProvider(
             model=model_override or cfg.litellm_model,
             aws_region=cfg.aws_region,

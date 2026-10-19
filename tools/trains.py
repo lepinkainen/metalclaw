@@ -21,26 +21,35 @@ def _find_station_code(name: str) -> tuple[str, str]:
     for s in resp.json():
         if not s.get("passengerTraffic"):
             continue
-        if needle in s["stationName"].lower() or needle == s["stationShortCode"].lower():
+        if (
+            needle in s["stationName"].lower()
+            or needle == s["stationShortCode"].lower()
+        ):
             return s["stationShortCode"], s["stationName"]
     log.warning("trains: no station matching %r", name)
     raise ValueError(f"No passenger station found matching: {name}")
 
 
 class _TrainDeparturesArgs(BaseModel):
-    station: str = Field(description="Station name or short code (e.g. 'Helsinki', 'Tampere', 'HKI')")
+    station: str = Field(
+        description="Station name or short code (e.g. 'Helsinki', 'Tampere', 'HKI')"
+    )
     line: str | None = Field(
         default=None,
         description="Optional commuter line letter to filter by (e.g. 'R', 'I', 'K', 'Z')",
     )
-    count: int = Field(default=5, description="Number of departures to return (default 5, max 20)")
+    count: int = Field(
+        default=5, description="Number of departures to return (default 5, max 20)"
+    )
 
 
 @tool(
     description="Get the next departing trains from a Finnish railway station by name. Can optionally filter by commuter line letter such as R, I, K, or Z.",
     args=_TrainDeparturesArgs,
 )
-def train_departures(station: str, count: int = 5, line: str | None = None) -> dict[str, Any]:
+def train_departures(
+    station: str, count: int = 5, line: str | None = None
+) -> dict[str, Any]:
     count = min(max(1, count), 20)
     log.info("train_departures station=%r line=%r count=%d", station, line, count)
     code, full_name = _find_station_code(station)
@@ -62,7 +71,11 @@ def train_departures(station: str, count: int = 5, line: str | None = None) -> d
     )
     resp.raise_for_status()
     trains = resp.json()
-    log.debug("trains: digitraffic status=%s trains=%d", getattr(resp, "status_code", None), len(trains))
+    log.debug(
+        "trains: digitraffic status=%s trains=%d",
+        getattr(resp, "status_code", None),
+        len(trains),
+    )
 
     if line:
         trains = [t for t in trains if (t.get("commuterLineID") or "").upper() == line]
@@ -71,7 +84,8 @@ def train_departures(station: str, count: int = 5, line: str | None = None) -> d
     for train in trains:
         dep_row = next(
             (
-                r for r in train.get("timeTableRows", [])
+                r
+                for r in train.get("timeTableRows", [])
                 if r["stationShortCode"] == code
                 and r["type"] == "DEPARTURE"
                 and r.get("commercialStop", True)
