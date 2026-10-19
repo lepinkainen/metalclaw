@@ -41,6 +41,10 @@ _ENV_OVERRIDES = {
     "TELEGRAM_BOT_TOKEN": "telegram_bot_token",
     "DISCORD_BOT_TOKEN": "discord_bot_token",
     "OLLAMA_URL": "ollama_url",
+    "WILMA_URL": "wilma_url",
+    "WILMA_USERNAME": "wilma_username",
+    "WILMA_PASSWORD": "wilma_password",
+    "WILMA_TOTP_SECRET": "wilma_totp_secret",
 }
 
 Provider = Literal["ollama", "litellm"]
@@ -52,6 +56,10 @@ class Config(BaseModel):
     vault_path: Path
     memory_subdir: str = "Metalclaw/Memory"
     fastmail_api_token: str | None = None
+    wilma_url: str | None = None
+    wilma_username: str | None = None
+    wilma_password: str | None = None
+    wilma_totp_secret: str | None = None
     telegram_bot_token: str | None = None
     discord_bot_token: str | None = None
     discord_chat_channels: tuple[int, ...] = ()

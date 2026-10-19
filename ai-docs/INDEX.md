@@ -35,6 +35,7 @@ self_change.py    183   spawn `claude -p`, gate via task lint/build/test, approv
 live_tool.py      290   /add-tool: spawn `claude -p`, focused gates, async approval
 telegram_format.py 146  CommonMark→Telegram HTML
 vault_search.py   205   ripgrep wrapper + read_note
+wilma.py          477   unofficial Wilma client: login/TOTP, students, messages, subject matching
 providers/base.py  40   Protocol, AssistantMessage, ToolCall
 providers/__init__ 32   get_provider() factory
 providers/ollama  71
@@ -49,6 +50,7 @@ tools/memory_tools 106   five memory mutator/reader tools
 tools/search.py    52   search_vault, read_note
 tools/trains.py   110   train_departures
 tools/weather.py  123
+tools/wilma.py    114   list_wilma_messages, read_wilma_message, find_wilma_message
 frontends/cli.py  331
 frontends/common  448   shared parsers/formatters/runners + scope helpers
 frontends/discord 308

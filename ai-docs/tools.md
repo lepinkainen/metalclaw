@@ -44,6 +44,9 @@ Ollama and litellm consume this directly (litellm normalises to per-backend form
 | `list_email_labels` | `tools/mail.py` | — | `list[dict]` | All mailboxes as `{path, role, total, unread}` sorted by path. Read-only. |
 | `add_email_label` | `tools/mail.py` | `email_ids: list[str]` (1-50), `label: str` | `dict` | Label must start with `bot/` (enforced by `_validate_bot_label`); missing `bot/...` mailboxes are created. `Email/set` patches `mailboxIds/<id>: true`. Returns `{label, updated, failed}`. |
 | `remove_email_label` | `tools/mail.py` | same | `dict` | Same `bot/` restriction; errors if label missing (never creates). Patches `mailboxIds/<id>: null`. |
+| `list_wilma_messages` | `tools/wilma.py` | `student?, folder="inbox", unread_only=False, limit=20` | `dict` | Per child `{student, student_name, messages[]}`; newest first. `student` = name substring or number. |
+| `read_wilma_message` | `tools/wilma.py` | `message_id: int, student?` | `dict` | Full body (markdown), recipients, replies. Without `student` tries each child. |
+| `find_wilma_message` | `tools/wilma.py` | `subject, sent_at?, student?` | `dict` | Resolves a "Viesti Wilmasta" notification email to the real message. `{status: found/ambiguous/not_found}`; dedups the same message across children (`students` lists them). `check_new_mail` adds `wilma_hint` to such emails when `wilma_url` is set. |
 | `set_user_preference` | `tools.py:618` | `key, value` | `dict` | → `memory.set_preference`. |
 | `add_user_fact` | `tools.py:635` | `text` | `dict` | → `memory.add_fact`. |
 | `add_user_instruction` | `tools.py:658` | `text` | `dict` | → `memory.add_instruction`. Behavioural rule. |
@@ -76,7 +79,7 @@ Each tool that wants a slash command needs:
 2. **Formatter**: `format_<name>_result(result: dict) -> str` — markdown-friendly for Discord/CLI; HTML conversion happens automatically for Telegram.
 3. **Registry entry**: `TOOL_COMMANDS["<slash>"] = ("<tool_registry_name>", parser, formatter)`.
 
-Currently: `train`, `weather`, `mail`, `search`. CLI wires via `_make_tool_handler` (`cli.py:87`); Telegram/Discord dispatch via `cmd in common.TOOL_COMMANDS` branch.
+Currently: `train`, `weather`, `mail`, `search`, `wilma`. CLI wires via `_make_tool_handler` (`cli.py:87`); Telegram/Discord dispatch via `cmd in common.TOOL_COMMANDS` branch.
 
 ## Adding a new tool
 

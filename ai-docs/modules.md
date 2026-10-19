@@ -75,6 +75,17 @@ Per-module symbol map. `→` = imports. `←` = imported by.
 - `read` refuses path traversal (`is_relative_to(vault)`) and non-`.md` suffixes.
 - Trims: `_LINE_CHAR_LIMIT = 300`, `_BODY_CHAR_LIMIT = 50_000`.
 
+## wilma.py — Wilma (school portal) client
+
+- Unofficial: speaks the web UI's cookie-session + JSON endpoints. Protocol mirrors github.com/aikarjal/wilmai (TS, MIT) — diff its changelog when Wilma breaks.
+- Login: `GET /login` hidden fields → `SESSIONID` (or `GET /token` → `Wilma2LoginID`) → `POST /login` form → `Wilma2SID` cookie. Redirect with `loginfailed` = bad creds. Redirect page containing `mfa-formkey` → `POST /api/v1/accounts/me/mfa/otp/check` with stdlib `totp(cfg.wilma_totp_secret)`.
+- Endpoints: `/api/v1/accounts/me/roles` (students; `passwd` role skipped), `/!<student>/messages/list[/archive|/outbox]`, `/!<student>/messages/<id>?format=json` (falls back to `/messages/<id>` HTML on 404).
+- **One live session per account**: every login cancels the previous one, browser included. So: lazy login, module singleton `get_client()` shared across threads (`RLock` serialises requests), re-login only on 401 / redirect to `/login` / 403-with-dead-session (`_session_alive` probes roles first so a single forbidden item doesn't log the parent out).
+- Rejected creds or missing TOTP secret set `_failed` → all later calls raise immediately until restart (repeated failed logins can lock the account).
+- Bodies: `ContentHtml` → markdown via `markdownify`, truncated at 20 000 chars. Timestamps → ISO in Europe/Helsinki.
+- `match_messages(msgs, subject, sent_at)`: strips `Viesti Wilmasta:` prefix, prefix-matches (notification subjects are truncated), ±15 min window when `sent_at` given.
+- `reset_client()` for tests; tests use `httpx.MockTransport(FakeWilma())` (`tests/test_wilma.py`).
+
 ## telegram_format.py — CommonMark → Telegram HTML
 
 - Public: `to_html(text) -> str`. Used only by `frontends/telegram.py`.

@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field
 
 from config import get_config, xdg_data_dir
 from registry import tool
+from wilma import is_notification_subject
 
 from ._http import HTTP
 
@@ -476,7 +477,13 @@ def check_new_mail() -> dict[str, Any]:
     )
     for e in emails:
         log.debug("check_new_mail candidate id=%s from=%s subject=%.100s", e["id"], e["from"], e["subject"])
+        if _is_wilma_notification(e) and get_config().wilma_url:
+            e["wilma_hint"] = "Wilma notification: call find_wilma_message(subject, sent_at) for the full message."
     return {"count": len(emails), "emails": emails}
+
+
+def _is_wilma_notification(email: dict[str, Any]) -> bool:
+    return "inschool.fi" in (email.get("from") or "").lower() and is_notification_subject(email.get("subject") or "")
 
 
 class _MarkReportedArgs(BaseModel):
