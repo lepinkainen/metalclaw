@@ -4,7 +4,7 @@ Currently exposes:
 - heartbeat-scope-string helpers (used by ``heartbeat.py`` to route alerts back
   to the right frontend; memory itself has no scope)
 - argparse-based parsers and plain-string formatters for the tool slash commands
-  (``/train``, ``/weather``, ``/mail``, ``/search``) and a ``TOOL_COMMANDS``
+  (``/train``, ``/weather``, ``/mail``, ``/search``, ``/wilma``) and a ``TOOL_COMMANDS``
   registry mapping slash name → ``(tool_name, parser, formatter)``
 
 The ``run_*`` slash-command helpers (remember/forget/memory/heartbeat/big) are
@@ -69,6 +69,7 @@ COMMANDS: tuple[CommandSpec, ...] = (
     CommandSpec("train",         "/train <station> [--line R] [--count 5]",                                "train departures: <station> [--line R] [--count 5]",            ALL_FRONTENDS),
     CommandSpec("weather",       "/weather <location>",                                                    "weather for a location",                                         ALL_FRONTENDS),
     CommandSpec("mail",          "/mail [--mailbox inbox] [--unread] [--from name] [--count 10]",          "list emails [--mailbox] [--unread] [--from] [--count]",          ALL_FRONTENDS),
+    CommandSpec("wilma",         "/wilma [--student name] [--unread] [--count 10] — list Wilma messages",  "list Wilma messages [--student] [--unread] [--count]",           ALL_FRONTENDS),
     CommandSpec("search",        "/search <query> [--max 20] [--context 1] — search the Obsidian vault",   "search the Obsidian vault",                                      ALL_FRONTENDS),
     CommandSpec("remember",      "/remember <key>=<value> — save a preference",                            "save a preference: <key>=<value>",                               ALL_FRONTENDS),
     CommandSpec("forget",        "/forget <substring> — remove a memory entry",                            "remove a memory entry",                                          ALL_FRONTENDS),
@@ -197,6 +198,16 @@ def parse_mail_args(args: str) -> dict:
     return {"mailbox": ns.mailbox, "unread_only": ns.unread, "from_search": ns.from_search, "limit": ns.count}
 
 
+def parse_wilma_args(args: str) -> dict:
+    p = _ArgParser(prog="/wilma", add_help=False)
+    p.add_argument("--student", default=None)
+    p.add_argument("--folder", default="inbox", choices=["inbox", "archive", "outbox"])
+    p.add_argument("--unread", action="store_true")
+    p.add_argument("--count", type=int, default=10)
+    ns = p.parse_args(shlex.split(args))
+    return {"student": ns.student, "folder": ns.folder, "unread_only": ns.unread, "limit": ns.count}
+
+
 def parse_search_args(args: str) -> dict:
     p = _ArgParser(prog="/search", add_help=False)
     p.add_argument("--max", dest="max_results", type=int, default=20)
@@ -294,6 +305,24 @@ def format_mail_result(result: dict) -> str:
     return "\n".join(lines)
 
 
+def format_wilma_result(result: dict) -> str:
+    blocks = []
+    for s in result.get("students", []):
+        header = f"**{s.get('student_name') or s.get('student') or 'Wilma'}** — {result.get('folder', 'inbox')}"
+        msgs = s.get("messages", [])
+        if not msgs:
+            blocks.append(f"{header}\n\nNo messages.")
+            continue
+        lines = [header, ""]
+        for m in msgs:
+            unread_tag = " [UNREAD]" if m.get("unread") else ""
+            sent = (m.get("sent_at") or "")[:16].replace("T", " ")
+            lines.append(f"- `{m['id']}` {sent}  {m.get('sender') or '?'}{unread_tag}")
+            lines.append(f"  {m['subject']}")
+        blocks.append("\n".join(lines))
+    return "\n\n".join(blocks) or "No Wilma students found."
+
+
 def format_search_result(result: dict) -> str:
     hits = result.get("hits", [])
     query = result.get("query", "")
@@ -321,6 +350,7 @@ TOOL_COMMANDS: dict[str, tuple] = {
     "weather": ("weather",          parse_weather_args, format_weather_result),
     "mail":    ("list_emails",      parse_mail_args,    format_mail_result),
     "search":  ("search_vault",     parse_search_args,  format_search_result),
+    "wilma":   ("list_wilma_messages", parse_wilma_args, format_wilma_result),
 }
 
 

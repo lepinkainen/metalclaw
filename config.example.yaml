@@ -13,6 +13,16 @@ memory_subdir: Metalclaw/Memory
 # Fastmail JMAP API token. Env FASTMAIL_API_TOKEN takes precedence if set.
 fastmail_api_token: fmu1-xxxxxxxxxxxxxxxx
 
+# Wilma (school information system) guardian login — enables the wilma tools.
+# Unofficial API. Wilma allows one session per account, so the bot logging in
+# may sign you out of Wilma in your browser (and vice versa).
+# Env WILMA_URL / WILMA_USERNAME / WILMA_PASSWORD / WILMA_TOTP_SECRET take precedence.
+# wilma_url: https://jarvenpaa.inschool.fi
+# wilma_username: you@example.com
+# wilma_password: xxxxxxxx
+# Only if two-step verification is on: the authenticator *setup key* (base32), not a 6-digit code.
+# wilma_totp_secret: JBSWY3DPEHPK3PXP
+
 # Telegram bot token from @BotFather. Env TELEGRAM_BOT_TOKEN takes precedence if set.
 telegram_bot_token: 123456:ABC-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
 

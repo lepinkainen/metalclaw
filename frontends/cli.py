@@ -241,6 +241,7 @@ _COMMAND_HANDLERS = {
     "weather":   _make_tool_handler(*common.TOOL_COMMANDS["weather"]),
     "mail":      _make_tool_handler(*common.TOOL_COMMANDS["mail"]),
     "search":    _make_tool_handler(*common.TOOL_COMMANDS["search"]),
+    "wilma":     _make_tool_handler(*common.TOOL_COMMANDS["wilma"]),
     "remember":  _handle_remember,
     "forget":    _handle_forget,
     "memory":    _handle_memory,

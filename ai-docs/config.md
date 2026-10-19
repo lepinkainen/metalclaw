@@ -17,6 +17,10 @@
 | `vault_path` | `Path` | **required** | Expanded via `expanduser()`. |
 | `memory_subdir` | `str` | `"Metalclaw/Memory"` | Joined to `vault_path` for `memory_dir` property. |
 | `fastmail_api_token` | `str?` | None | `FASTMAIL_API_TOKEN` env override. |
+| `wilma_url` | `str?` | None | `WILMA_URL` env. e.g. `https://jarvenpaa.inschool.fi`. |
+| `wilma_username` | `str?` | None | `WILMA_USERNAME` env. |
+| `wilma_password` | `str?` | None | `WILMA_PASSWORD` env. Never logged. |
+| `wilma_totp_secret` | `str?` | None | `WILMA_TOTP_SECRET` env. Base32 authenticator setup key; only if Wilma two-step login is on. |
 | `telegram_bot_token` | `str?` | None | `TELEGRAM_BOT_TOKEN` env. Frontend skipped if unset. |
 | `discord_bot_token` | `str?` | None | `DISCORD_BOT_TOKEN` env. Frontend skipped if unset. |
 | `discord_chat_channels` | `tuple[int, ...]` | `()` | Channels with always-respond behavior. |
@@ -44,6 +48,10 @@ _ENV_OVERRIDES = {
     "TELEGRAM_BOT_TOKEN": "telegram_bot_token",
     "DISCORD_BOT_TOKEN": "discord_bot_token",
     "OLLAMA_URL": "ollama_url",
+    "WILMA_URL": "wilma_url",
+    "WILMA_USERNAME": "wilma_username",
+    "WILMA_PASSWORD": "wilma_password",
+    "WILMA_TOTP_SECRET": "wilma_totp_secret",
 }
 ```
 

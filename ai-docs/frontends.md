@@ -37,7 +37,7 @@ Each frontend registers a `Channel` with `channels.register(...)` on startup:
 
 ## Slash commands
 
-Shared registry: `frontends/common.py:230 TOOL_COMMANDS` for `/train /weather /mail /search`.
+Shared registry: `frontends/common.py:230 TOOL_COMMANDS` for `/train /weather /mail /search /wilma`.
 Shared async runners: `run_remember`, `run_forget`, `run_memory`, `run_heartbeat`, `run_big`. Each takes a `SendFn = Callable[[str], Awaitable[None]]`.
 
 CLI does **not** delegate `/remember /forget /memory /heartbeat /big` to `common.run_*` — it has Rich-styled sync handlers (`cli.py:142-156`). The other frontends do delegate:
