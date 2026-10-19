@@ -47,7 +47,7 @@ def train_departures(station: str, count: int = 5, line: str | None = None) -> d
     log.debug("trains: resolved %r -> %s (%s)", station, code, full_name)
     line = line.strip().upper() if line else None
 
-    params = {
+    params: dict[str, int | str] = {
         "departing_trains": max(count, 20) if line else count,
         "departed_trains": 0,
         "arriving_trains": 0,

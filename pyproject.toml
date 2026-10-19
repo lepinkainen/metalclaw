@@ -20,4 +20,14 @@ dependencies = [
 ]
 
 [dependency-groups]
-dev = ["ruff", "pytest>=9.0.3"]
+dev = [
+    "ruff",
+    "pytest>=9.0.3",
+    "mypy>=2.4.0",
+    "types-pyyaml>=6.0.12.20260906",
+]
+
+[tool.mypy]
+python_version = "3.14"
+exclude = ["^\\.venv/"]
+disable_error_code = ["annotation-unchecked"]

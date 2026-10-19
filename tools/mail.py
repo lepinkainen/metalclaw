@@ -88,7 +88,9 @@ def _fm_mailboxes() -> dict[str, Any]:
         by_id[mb["id"]] = entry
     by_path: dict[str, dict[str, Any]] = {}
     for entry in by_id.values():
-        parts, cur, seen = [], entry, set()
+        parts: list[str] = []
+        cur: dict[str, Any] | None = entry
+        seen: set[str] = set()
         while cur is not None and cur["id"] not in seen:
             seen.add(cur["id"])
             parts.append(cur["name"])

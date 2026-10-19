@@ -4,6 +4,7 @@ tasks:
     silent: true
     cmds:
       - uv run ruff check . --quiet --fix
+      - uv run mypy . --no-error-summary
       - |
         if command -v gitleaks >/dev/null 2>&1; then
           gitleaks dir . --config .gitleaks.toml --no-banner --log-level error
@@ -20,6 +21,7 @@ tasks:
     desc: CI build — lint without autofix, tests, import check
     cmds:
       - uv run ruff check .
+      - uv run mypy .
       - task: test-ci
       - uv run python -c "import bot, tools, registry, self_change, memory, config"
   test-ci:

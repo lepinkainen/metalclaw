@@ -77,6 +77,7 @@ def known_chat_count() -> int:
 async def _tg_reply(update: Update, text: str) -> None:
     """Send a Telegram reply, rendering CommonMark as Telegram HTML."""
     html_text = telegram_format.to_html(text)
+    assert update.message is not None
     reply = update.message.reply_text
     try:
         await reply(html_text, parse_mode="HTML")
@@ -178,6 +179,7 @@ _TELEGRAM_HELP_TEXT = "\n".join(common.HELP_LINES)
 async def _telegram_dispatch_command(
     update: Update, cmd: str, args: str, bot=None
 ) -> None:
+    assert update.effective_chat is not None
     chat_id = update.effective_chat.id
     scope = _telegram_scope_for(chat_id)
     send = _send_for(update)
@@ -259,6 +261,8 @@ async def _telegram_dispatch_command(
 
 
 async def _telegram_handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    assert update.message is not None and update.message.text is not None
+    assert update.effective_chat is not None
     text = update.message.text.strip()
     chat_id = update.effective_chat.id
     user = update.effective_user
@@ -329,6 +333,7 @@ async def start_telegram(token: str) -> Application:
     except Exception as e:  # noqa: BLE001
         log.warning("failed to register Telegram bot commands: %s", e)
     await app.start()
+    assert app.updater is not None
     await app.updater.start_polling(allowed_updates=Update.ALL_TYPES)
     log.info("telegram: polling started (%d known chats)", len(_known_chats))
     return app
@@ -336,6 +341,7 @@ async def start_telegram(token: str) -> Application:
 
 async def stop_telegram(app: Application) -> None:
     log.info("telegram: stopping")
+    assert app.updater is not None
     await app.updater.stop()
     await app.stop()
     await app.shutdown()

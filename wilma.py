@@ -128,7 +128,7 @@ def parse_students_from_home(html: str) -> list[dict[str, str]]:
     """Older Wilmas without the roles API: guardian home page links each child as ``/!<number>/``."""
     out: dict[str, dict[str, str]] = {}
     for a in BeautifulSoup(html, "html.parser").find_all("a", href=True):
-        m = re.match(r"/!(\d+)/?$", a["href"])
+        m = re.match(r"/!(\d+)/?$", str(a["href"]))
         if m:
             out.setdefault(m.group(1), {"number": m.group(1), "name": _compact(a.get_text(" ")) or m.group(1)})
     return list(out.values())
@@ -257,11 +257,11 @@ class WilmaClient:
         resp = self._http.get("/login")
         if resp.status_code >= 400:
             return {}
-        fields = {}
+        fields: dict[str, str] = {}
         for inp in BeautifulSoup(resp.text, "html.parser").find_all("input"):
-            name = inp.get("name")
-            if name and name not in ("Login", "Password") and inp.get("type", "text").lower() in ("hidden", "submit"):
-                fields[name] = inp.get("value", "")
+            name = str(inp.get("name") or "")
+            if name and name not in ("Login", "Password") and str(inp.get("type", "text")).lower() in ("hidden", "submit"):
+                fields[name] = str(inp.get("value", ""))
         return fields
 
     def login(self) -> None:
@@ -455,7 +455,7 @@ def resolve_students(client: WilmaClient, student: str | None) -> list[dict[str,
     An account without role info (single student, older Wilma) yields one entry with
     ``number=None`` — requests then go unprefixed.
     """
-    students: list[dict[str, str | None]] = list(client.students()) or [{"number": None, "name": None}]
+    students: list[dict[str, str | None]] = [dict(s) for s in client.students()] or [{"number": None, "name": None}]
     if not student:
         return students
     needle = student.strip().lower()

@@ -5,6 +5,7 @@ import logging
 import re
 from collections.abc import Iterable
 from datetime import datetime
+from typing import cast
 
 import discord
 
@@ -137,7 +138,8 @@ class _DiscordChannel:
                 )
                 return
         log.info("discord: notify channel=%s %d chars (scope %s)", self._heartbeat_channel_id, len(text), scope)
-        await _discord_send(ch, text)
+        # ids come from the configured heartbeat channel, which is a text channel
+        await _discord_send(cast(discord.abc.Messageable, ch), text)
 
     def active_scopes(self) -> Iterable[str]:
         return tuple(common.discord_scope(cid) for cid in _known_discord_channels)

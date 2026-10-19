@@ -96,9 +96,8 @@ def _render_commands_appendix() -> str:
     if common.TOOL_COMMANDS:
         lines.append("Tool commands (route directly to the named tool):")
         lines.append("")
-        for slash_name, entry in common.TOOL_COMMANDS.items():
-            tool_name = entry[0]
-            lines.append(f"- `/{slash_name}` → `{tool_name}`")
+        for slash_name, cmd in common.TOOL_COMMANDS.items():
+            lines.append(f"- `/{slash_name}` → `{cmd[0]}`")
     return "\n".join(lines).rstrip() + "\n"
 
 
