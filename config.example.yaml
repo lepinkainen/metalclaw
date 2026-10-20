@@ -126,3 +126,38 @@ message_debounce_seconds: 1.0
 # vault_search_excludes:
 #   - "Notion Export/**"
 #   - "Journal/**"
+
+# External MCP servers whose tools become model tools named <name>_<tool>.
+# Header/env values support ${ENV_VAR} substitution at connect time (missing var =
+# that server is marked down; the bot runs on). Results are wrapped as untrusted and clipped at 20000 chars. Keep the
+# `include` allowlist tight: every schema costs prompt tokens on the local model.
+# A server that fails to start is logged + shown in /status; the bot runs on.
+# Restart the bot to reconnect a dead server.
+#
+# GitHub (hosted remote, read-only). Token: fine-grained PAT, read-only repo
+# permissions Metadata, Contents, Issues, Actions, Pull requests. Read-only is
+# enforced server-side by the /readonly path + X-MCP-Readonly, and X-MCP-Tools
+# limits the server to exactly the tools in `include`.
+# mcp_servers:
+#   - name: github                       # ^[a-z][a-z0-9_]{0,15}$, unique
+#     transport: http                    # http (streamable HTTP) | stdio
+#     url: https://api.githubcopilot.com/mcp/readonly
+#     headers:
+#       Authorization: "Bearer ${GITHUB_MCP_TOKEN}"
+#       X-MCP-Readonly: "true"
+#       X-MCP-Tools: get_me,search_repositories,list_issues,issue_read,actions_list
+#     include: [get_me, search_repositories, list_issues, issue_read, actions_list]
+#     # exclude: [...]                   # denylist; mutually exclusive with include
+#     hint: >-                           # optional; appended to the system prompt
+#       For questions about the user's own GitHub projects (CI status, open
+#       issues, issue summaries) use the github_* tools; call github_get_me
+#       first to learn their login. For issue counts use github_list_issues (repo metadata counts include PRs).
+#     # enabled: true
+#     # startup_timeout_seconds: 10
+#     # call_timeout_seconds: 60
+#   - name: fs                           # stdio example: command runs as the bot user
+#     transport: stdio
+#     command: uvx
+#     args: [some-mcp-server, --root, /data]
+#     env: {SOME_TOKEN: "${SOME_TOKEN}"}  # child gets an allow-listed env + these
+#     enabled: false

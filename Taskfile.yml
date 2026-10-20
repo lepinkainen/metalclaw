@@ -17,7 +17,7 @@ tasks:
     cmds:
       - task: lint
       - task: test
-      - uv run python -c "import bot, tools, registry, self_change, memory, config"
+      - uv run python -c "import bot, tools, registry, self_change, memory, config, mcp_client"
   build-ci:
     desc: CI build — lint without autofix, tests, import check
     cmds:
@@ -26,7 +26,7 @@ tasks:
       - gitleaks dir . --config .gitleaks.toml --no-banner --log-level error
       - uv run mypy .
       - task: test-ci
-      - uv run python -c "import bot, tools, registry, self_change, memory, config"
+      - uv run python -c "import bot, tools, registry, self_change, memory, config, mcp_client"
   test-ci:
     desc: Run tests (plain pytest output)
     cmd: uv run pytest -q

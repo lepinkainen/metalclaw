@@ -16,6 +16,7 @@ import discord
 from telegram.ext import Application
 
 import heartbeat
+import mcp_client
 import memory
 from config import get_config
 from frontends import common as _common
@@ -122,6 +123,11 @@ def _log_startup(cfg, args: argparse.Namespace, log_path: Path) -> None:
         (not args.no_discord) and bool(cfg.discord_bot_token),
         not args.daemon,
     )
+    log.info(
+        "startup: mcp servers=%s enabled=%s",
+        [s.name for s in cfg.mcp_servers],
+        [s.name for s in cfg.mcp_servers if s.enabled],
+    )
 
 
 async def _async_main(*, daemon: bool, with_telegram: bool, with_discord: bool) -> None:
@@ -140,6 +146,8 @@ async def _async_main(*, daemon: bool, with_telegram: bool, with_discord: bool) 
             len(migrated),
             ", ".join(migrated),
         )
+    # Before any frontend starts so the first turn already sees MCP tools.
+    await asyncio.to_thread(mcp_client.start, cfg.mcp_servers)
     tg_app: Application | None = None
     if with_telegram:
         if not cfg.telegram_bot_token:
@@ -188,6 +196,7 @@ async def _async_main(*, daemon: bool, with_telegram: bool, with_discord: bool) 
             await asyncio.wait_for(hb_task, timeout=5)
         except TimeoutError, asyncio.CancelledError:
             hb_task.cancel()
+        await asyncio.to_thread(mcp_client.stop)
         if tg_app is not None:
             await _stop_telegram(tg_app)
         if discord_client is not None and discord_task is not None:

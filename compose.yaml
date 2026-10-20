@@ -5,6 +5,7 @@ services:
     environment:
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN}
       DISCORD_BOT_TOKEN: ${DISCORD_BOT_TOKEN}
+      GITHUB_MCP_TOKEN: ${GITHUB_MCP_TOKEN:-}
       OLLAMA_URL: ${OLLAMA_URL:-http://host.docker.internal:11434/api/chat}
     extra_hosts:
       - "host.docker.internal:host-gateway"

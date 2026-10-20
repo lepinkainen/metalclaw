@@ -1,5 +1,6 @@
 import logging
 import os
+import re
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, Literal
@@ -49,6 +50,49 @@ _ENV_OVERRIDES = {
 
 Provider = Literal["ollama", "litellm"]
 
+_MCP_NAME_RE = re.compile(r"^[a-z][a-z0-9_]{0,15}$")
+
+
+class McpServer(BaseModel):
+    """One ``mcp_servers:`` entry. ``extra="forbid"`` so key typos fail loudly."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    name: str
+    transport: Literal["stdio", "http"]
+    url: str | None = None
+    headers: dict[str, str] = {}
+    command: str | None = None
+    args: tuple[str, ...] = ()
+    env: dict[str, str] = {}
+    include: tuple[str, ...] | None = None
+    exclude: tuple[str, ...] = ()
+    hint: str | None = None
+    enabled: bool = True
+    startup_timeout_seconds: float = 10
+    call_timeout_seconds: float = 60
+
+    @field_validator("name")
+    @classmethod
+    def _check_name(cls, v: str) -> str:
+        if not _MCP_NAME_RE.match(v):
+            raise ValueError(
+                f"mcp_servers name {v!r} must match {_MCP_NAME_RE.pattern}"
+            )
+        return v
+
+    @model_validator(mode="after")
+    def _check_transport(self) -> McpServer:
+        if self.transport == "http" and (not self.url or self.command):
+            raise ValueError(f"mcp_servers[{self.name}]: http needs url, not command")
+        if self.transport == "stdio" and (not self.command or self.url):
+            raise ValueError(f"mcp_servers[{self.name}]: stdio needs command, not url")
+        if self.include is not None and self.exclude:
+            raise ValueError(
+                f"mcp_servers[{self.name}]: include and exclude are mutually exclusive"
+            )
+        return self
+
 
 class Config(BaseModel):
     model_config = ConfigDict(frozen=True, extra="ignore")
@@ -84,6 +128,7 @@ class Config(BaseModel):
     allow_self_modification: bool = True
     show_tool_calls: bool = True
     message_debounce_seconds: float = 1.0
+    mcp_servers: tuple[McpServer, ...] = ()
 
     @property
     def memory_dir(self) -> Path:
@@ -144,6 +189,9 @@ class Config(BaseModel):
 
     @model_validator(mode="after")
     def _resolve_and_check(self) -> Config:
+        names = [s.name for s in self.mcp_servers]
+        if len(names) != len(set(names)):
+            raise ValueError(f"mcp_servers: duplicate names in {names}")
         provider_models = {
             "ollama": self.model,
             "litellm": self.litellm_model,

@@ -10,6 +10,7 @@ dependencies = [
     "litellm>=1.84",
     "markdown-it-py>=3.0",
     "markdownify>=0.13",
+    "mcp>=2.3,<3",
     "prompt_toolkit>=3.0",
     "pydantic>=2.6",
     "pydantic-settings>=2.14.2",

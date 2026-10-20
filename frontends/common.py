@@ -28,6 +28,7 @@ import channels
 import heartbeat
 import history
 import live_tool
+import mcp_client
 import memory
 from chat_loop import chat_via_escalation, run_turn, scoped_chat
 from config import get_config
@@ -739,6 +740,16 @@ def format_status() -> str:
         nxt = heartbeat.next_due(a, state.get(a.id), now)
         when = "never" if nxt is None else nxt.astimezone().strftime("%Y-%m-%d %H:%M")
         lines.append(f"  • {a.id} [{a.kind}] next: {when} | {a.prompt[:50]}")
+    servers = mcp_client.status()
+    if servers:
+        lines.append(f"mcp: {len(servers)} configured")
+        for m in servers:
+            line = f"  • {m['name']} {m['status']} {m['transport']} {len(m['tools'])} tools"
+            if m["tools"]:
+                line += f" ({', '.join(m['tools'])})"
+            if m["error"]:
+                line += f" — {m['error'][:120]}"
+            lines.append(line)
     recent = list(recent_warnings.records)
     lines.append(
         f"recent warnings/errors (last {len(recent)}):"

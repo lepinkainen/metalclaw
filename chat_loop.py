@@ -17,6 +17,7 @@ from pydantic import ValidationError
 
 import heartbeat
 import history as history_db
+import mcp_client
 import memory
 from config import get_config
 from providers import Provider, get_provider
@@ -109,6 +110,9 @@ def build_system_prompt(now: str) -> str:
     cfg = get_config()
     if cfg.escalation_enabled and cfg.provider == "ollama":
         base += "\n\n" + _ESCALATION_HINT
+    mcp_note = mcp_client.system_prompt_note()
+    if mcp_note:
+        base += "\n\n" + mcp_note
     mem_summary = memory.summary()
     if mem_summary:
         base += f"\n\nKnown about user:\n{mem_summary}"
