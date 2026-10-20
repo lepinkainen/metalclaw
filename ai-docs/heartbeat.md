@@ -87,7 +87,7 @@ Single-flight: a module-level `_tick_running` flag (not an `asyncio.Lock`, so it
 2. `state = await asyncio.to_thread(load_state)`; `snapshot = await asyncio.to_thread(load_ledger)`. Every ledger/state call in the tick (`mark_success`, `mark_failure`, `_archive_with_lock`, `prune_state`, the end-of-tick `load_ledger`) is wrapped in `asyncio.to_thread` because they take `flock`/SQLite locks that another process may hold (#33). `_fail` is therefore an `async` closure.
 3. For each `action` in snapshot:
    - `is_action_due(action, state[id].last_run, now)` → skip if not; due but `now < state[id].retry_at()` → skip (backoff, no model call).
-   - `_run_action(...)` runs `chat_loop.chat(messages)` in a thread executor.
+   - `_run_action(...)` (`heartbeat.py:768`) runs `chat_loop.chat(session)` in a thread executor on a **scope-less** session (`_build_action_session`, `heartbeat.py:736`) — heartbeat runs are never written to the `turns` table and never see a chat's history.
    - Strip reply. An empty reply **without** the sentinel counts as a failed run (`n_failed`, warning logged, state untouched, one-shot stays active) — small local models sometimes return `""` after a tool round. If `SENTINEL` appears anywhere, remove it; if ≤`_ACK_MAX_CHARS` (300) chars remain → suppress notify (longer leftovers are sent with the sentinel stripped); still update state; for `kind=at`, archive to `completed`.
    - Otherwise resolve channel via `_resolve_channel(action.channel)` → `(target_scope, channels.Channel)` (falls back to `cfg.heartbeat_default_channel`).
    - On notify success: `mark_success` (stamps `last_run`, clears failures); for `kind=at`, archive. On any failure: `mark_failure` → exponential backoff (see State); the action stays active and retries once the backoff elapses. `Channel.notify` implementations MUST raise on non-delivery (Discord: heartbeat channel unset / unresolvable / `send` error via `_discord_send(..., raise_on_error=True)`; Telegram: unparseable scope) — a silent `return` would be counted as delivered and archive the one-shot.
@@ -103,19 +103,20 @@ After memory summary, `heartbeat.summary()` is appended:
 
 ```
 Active heartbeat actions:
-ab12cd [at]    → cli            | at 2026-05-08T10:30:00+00:00 | Remind me to check the kettle
+ab12cd [at]    → telegram-12345 | at 2026-05-08T10:30:00+00:00 | Remind me to check the kettle
 ef34gh [cron]  → telegram-12345 | mon,thu 07:00 Europe/Helsinki | Summarise overnight email
-ij56kl [every] → cli            | every 1800s                   | Watch high-priority email
+ij56kl [every] → discord-987654 | every 1800s                   | Watch high-priority email
 ```
 
 Truncated at 400 chars with a `(call list_heartbeat_actions for full list)` hint. `chat_loop._MEMORY_MUTATORS` includes `create_heartbeat_action` / `cancel_heartbeat_action`, so the system prompt refreshes mid-loop after either tool runs — the model sees its own scheduling within the same turn.
 
 ## Scope ContextVar (`chat_loop.current_scope`)
 
-Each frontend wraps its `chat()` call in `scoped_chat(scope, lambda: chat(messages))`:
-- CLI → `"cli"`
-- Telegram → `common.telegram_scope(chat_id)`
-- Discord → `common.discord_scope(channel_id)`
+Each frontend wraps its `chat()` call in `scoped_chat(scope, lambda: chat(messages))` (`chat_loop.py:259`):
+- Telegram → `common.telegram_scope(chat_id)` = `"telegram-<chat_id>"`
+- Discord → `common.discord_scope(channel_id)` = `"discord-<channel_id>"`
+
+The same string is the session's `Session.scope` / `turns.session` key, so one identifier names a chat's conversation, its heartbeat channel and its `known_chats` row.
 
 `create_heartbeat_action` reads `chat_loop.current_scope.get()` to auto-fill the action's `channel` and `created_from` when the model omits them. Falls back to `cfg.heartbeat_default_channel`. The model never has to know which surface it's on.
 

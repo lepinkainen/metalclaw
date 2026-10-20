@@ -1,10 +1,12 @@
 import json
 import sqlite3
 import threading
+from collections.abc import Sequence
 from datetime import UTC, datetime
 from pathlib import Path
 
 from config import xdg_data_dir
+from messages import Message, message_from_dict, message_to_dict
 
 
 def _db_path() -> Path:
@@ -15,6 +17,8 @@ def _init(path: Path) -> sqlite3.Connection:
     # check_same_thread=False: tools run in executor threads; all access goes
     # through _LOCK below.
     conn = sqlite3.connect(path, check_same_thread=False)
+    # Legacy plain-text turn log (pre-``turns``); read by search only, never
+    # written any more.
     conn.execute("""
         CREATE TABLE IF NOT EXISTS messages (
             id      INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -24,6 +28,19 @@ def _init(path: Path) -> sqlite3.Connection:
             content TEXT    NOT NULL
         )
     """)
+    # Canonical conversation store: one row per ``messages.Message`` (JSON
+    # payload tagged by ``kind``) plus ``boundary`` rows written by ``/new``.
+    # A session's live history is every row after its latest boundary.
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS turns (
+            id      INTEGER PRIMARY KEY AUTOINCREMENT,
+            session TEXT    NOT NULL,
+            ts      TEXT    NOT NULL,
+            kind    TEXT    NOT NULL,
+            payload TEXT    NOT NULL DEFAULT '{}'
+        )
+    """)
+    conn.execute("CREATE INDEX IF NOT EXISTS turns_session_id ON turns (session, id)")
     conn.execute("""
         CREATE TABLE IF NOT EXISTS usage (
             id                INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -77,26 +94,105 @@ def _now() -> str:
     return datetime.now(UTC).isoformat()
 
 
-def record_message(session: str, role: str, content: str) -> None:
+# --- turns: canonical per-session conversation history ---
+
+_BOUNDARY = "boundary"
+
+
+def _last_boundary_id(db: sqlite3.Connection, session: str) -> int:
+    row = db.execute(
+        "SELECT COALESCE(MAX(id), 0) FROM turns WHERE session = ? AND kind = ?",
+        (session, _BOUNDARY),
+    ).fetchone()
+    return int(row[0])
+
+
+def turns_load(session: str) -> list[Message]:
+    """Live history for ``session``: every message after its latest ``/new``."""
+    with _LOCK:
+        db = _conn()
+        since = _last_boundary_id(db, session)
+        rows = db.execute(
+            "SELECT payload FROM turns WHERE session = ? AND id > ? AND kind != ? "
+            "ORDER BY id",
+            (session, since, _BOUNDARY),
+        ).fetchall()
+    return [message_from_dict(json.loads(payload)) for (payload,) in rows]
+
+
+def turns_append(session: str, new: Sequence[Message]) -> None:
+    """Persist ``new`` in order, atomically (all rows or none)."""
+    if not new:
+        return
+    ts = _now()
+    rows = [
+        (session, ts, d["kind"], json.dumps(d, ensure_ascii=False))
+        for d in (message_to_dict(m) for m in new)
+    ]
+    with _LOCK:
+        db = _conn()
+        try:
+            db.executemany(
+                "INSERT INTO turns (session, ts, kind, payload) VALUES (?, ?, ?, ?)",
+                rows,
+            )
+            db.commit()
+        except Exception:
+            db.rollback()
+            raise
+
+
+def turns_reset(session: str) -> None:
+    """Start a fresh conversation for ``session`` (older rows stay searchable)."""
     with _LOCK:
         db = _conn()
         db.execute(
-            "INSERT INTO messages (session, ts, role, content) VALUES (?, ?, ?, ?)",
-            (session, _now(), role, content),
+            "INSERT INTO turns (session, ts, kind) VALUES (?, ?, ?)",
+            (session, _now(), _BOUNDARY),
         )
         db.commit()
 
 
+def turns_count(session: str) -> int:
+    """Number of live (post-boundary) messages for ``session``."""
+    with _LOCK:
+        db = _conn()
+        since = _last_boundary_id(db, session)
+        row = db.execute(
+            "SELECT COUNT(*) FROM turns WHERE session = ? AND id > ? AND kind != ?",
+            (session, since, _BOUNDARY),
+        ).fetchone()
+    return int(row[0])
+
+
 def search_messages(query: str, limit: int) -> list[tuple[str, str, str, str]]:
-    """Case-insensitive substring match, newest first: (ts, session, role, content)."""
+    """Case-insensitive substring match over user text and assistant replies,
+    newest first: ``(ts, session, role, content)``.
+
+    Covers the ``turns`` table (tool calls / results excluded) and the legacy
+    ``messages`` table from before it existed.
+    """
     like = query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    pattern = f"%{like}%"
     with _LOCK:
         return (
             _conn()
             .execute(
-                "SELECT ts, session, role, content FROM messages "
-                "WHERE content LIKE ? ESCAPE '\\' ORDER BY id DESC LIMIT ?",
-                (f"%{like}%", limit),
+                """
+                SELECT ts, session, role, content FROM (
+                    SELECT ts, session, kind AS role,
+                           CASE kind
+                               WHEN 'user' THEN json_extract(payload, '$.content')
+                               ELSE json_extract(payload, '$.text')
+                           END AS content
+                    FROM turns WHERE kind IN ('user', 'assistant')
+                    UNION ALL
+                    SELECT ts, session, role, content FROM messages
+                )
+                WHERE content != '' AND content LIKE ? ESCAPE '\\'
+                ORDER BY ts DESC LIMIT ?
+                """,
+                (pattern, limit),
             )
             .fetchall()
         )

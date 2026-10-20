@@ -31,7 +31,8 @@
 | `litellm_model` | `str` | `"bedrock/anthropic.claude-haiku-4-5"` | litellm-prefixed model id. |
 | `aws_region` | `str?` | None | Threaded to litellm as `aws_region_name`. |
 | `aws_profile` | `str?` | None | Threaded to litellm as `aws_profile_name`. |
-| `show_tool_calls` | `bool` | `True` | Live tool-call status messages (Telegram/Discord) and CLI `/tools` initial state. Per-chat `/tools on\|off` overrides in memory. |
+| `litellm_prompt_caching` | `bool` | `True` | `LiteLLMProvider`: put `cache_control: ephemeral` on the system block and the last tool. Only takes effect for Claude model strings (`anthropic/…`, `bedrock/…anthropic.…`/`…claude…`); see `providers.md`. |
+| `show_tool_calls` | `bool` | `True` | Live tool-call status messages (Telegram/Discord). Per-chat `/tools on\|off` overrides in memory (not persisted). |
 | `message_debounce_seconds` | `float` | `1.0` | Telegram/Discord: quiet period before buffered non-command messages become ONE turn. `0` disables. Slash commands never debounced. |
 | `max_tool_iterations` | `int` | `25` | Chat loop: max tool-call rounds per turn; then one tool-less call forces a text answer. See `chat-loop.md`. |
 | `max_repeated_tool_calls` | `int` | `3` | Chat loop: identical consecutive tool-call sets at this count are refused with an `Error:` result instead of re-run. |

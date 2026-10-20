@@ -53,7 +53,7 @@ Ollama and litellm consume this directly (litellm normalises to per-backend form
 | `forget_user_memory` | `tools.py:678` | `matcher` | `dict` | → `memory.forget`. Returns `{status: removed/ambiguous/not_found, ...}`. |
 | `get_user_memory` | `tools.py:700` | none | `{markdown: str}` | Full memory file. |
 | `append_to_inbox` | `tools/inbox.py` | `text` | `dict` | Appends `- YYYY-MM-DD HH:MM — text` to `<vault_path>/INBOX.md` (fixed name, no path arg; created if missing; `fcntl.flock` on the append fd). Errors if `vault_path` is not a dir. |
-| `search_conversation_history` | `tools/conversation_history.py` | `query, limit=10` | `dict` | Case-insensitive LIKE over `history.db` messages (CLI + Telegram + Discord), newest first; content trimmed to 500 chars. |
+| `search_conversation_history` | `tools/conversation_history.py` | `query, limit=10` | `dict` | `history.search_messages`: case-insensitive LIKE over user text + assistant replies in the `turns` table (tool calls/results excluded) UNION the legacy `messages` table, newest first; content trimmed to 500 chars. `surface` = scope string, or `"cli"` for legacy bare-timestamp rows (`:44`). |
 | `search_vault` | `tools.py:725` | `query, max_results=20, context_lines=1` | `dict` | ripgrep wrapper via `vault_search.search`. |
 | `read_note` | `tools.py:748` | `path` | `dict` | Vault note read via `vault_search.read`. |
 | `escalate_to_big_model` | `tools.py:768` | `query, reason` | `dict` | Calls big model with current session snapshot. Returns `{status, model, reason, reply}`. Disabled if `cfg.escalation_enabled=False`. |
@@ -65,46 +65,54 @@ Not `@tool`-decorated: `mcp_client._register` writes `registry.Tool(func=<closur
 - `args_model=None` → no local validation; the server's `is_error` text comes back as `Error: ...`.
 - Result: `{"source": "mcp:<server>", "untrusted": true, "result": structured_content (unwrapped if just {"result": x}) or joined text}`; image/audio/blob → `[... N bytes omitted]` placeholders. Over 20000 chars (`_RESULT_CHAR_LIMIT`) → clipped JSON/text string ending `…[truncated N chars]`.
 - Timeout (`call_timeout_seconds`) / transport failure → `Error: mcp <server>.<tool> ...` string; failure stored in `status()` `error`.
-- Listed automatically by CLI `/tools` and `read_manual` (they iterate `TOOLS`). `/status` shows per-server up/down + tool names.
+- Listed automatically by `read_manual` / `/manual` (iterates `TOOLS`). `/status` shows per-server up/down + tool names.
 - Current real server: GitHub remote (read-only), `include: [get_me, search_repositories, list_issues, issue_read, actions_list]` → `github_get_me` etc. Remote tool names are consolidated with a `method` arg (`issue_read` method `get`/`get_comments`; `actions_list` method `list_workflow_runs`).
 
 ## `_MEMORY_MUTATORS` set
 
-`chat_loop.py:96` — must include any tool that mutates `memory.md`:
+`chat_loop.py:227` — must include any tool that mutates `memory.md` or the heartbeat ledger:
 ```python
-{"set_user_preference", "add_user_fact", "add_user_instruction", "forget_user_memory"}
+{
+    "set_user_preference",
+    "add_user_fact",
+    "add_user_instruction",
+    "forget_user_memory",
+    "create_heartbeat_action",
+    "cancel_heartbeat_action",
+}
 ```
 Adding a new memory-mutating tool? Update this set, else mid-loop system rebuild won't fire.
 
 ## Tool-result format
 
-`_run_tool` (`chat_loop.py:123`):
+`_run_tool` (`chat_loop.py:274`):
 - Catches all `Exception` and returns `f"Error: {e}"` as the result.
 - Otherwise returns the function's return value (any JSON-serializable shape).
 
-`_chat_with_provider` then serializes via `json.dumps(result, ensure_ascii=False)` into a `ToolResultMessage(call_id, name, content)`; the provider's `_to_wire` turns that into its envelope on the next call.
+`_chat_with_provider` then serializes via `json.dumps(result, ensure_ascii=False)` into a `ToolResultMessage(call_id, name, content)`; the provider's `_to_wire` turns that into its envelope on the next call. That same `content` string is what `Session.commit` persists to the `turns` table, **uncut** — keep tool outputs bounded (see `gotchas.md#turns-table-growth`).
 
 ## Slash command wiring (`frontends/common.py`)
 
 Each tool that wants a slash command needs:
 1. **Parser**: `parse_<name>_args(args: str) -> dict` (uses `argparse` via `_ArgParser` that raises `ValueError`, or manual parse for free-form).
-2. **Formatter**: `format_<name>_result(result: dict) -> str` — markdown-friendly for Discord/CLI; HTML conversion happens automatically for Telegram.
-3. **Registry entry**: `TOOL_COMMANDS["<slash>"] = ("<tool_registry_name>", parser, formatter)`.
+2. **Formatter**: `format_<name>_result(result: dict) -> str` — markdown-friendly for Discord; HTML conversion happens automatically for Telegram.
+3. **Registry entry**: `TOOL_COMMANDS["<slash>"] = ("<tool_registry_name>", parser, formatter)` (`frontends/common.py:462`).
+4. **Command spec**: a `CommandSpec` row in `common.COMMANDS` (`frontends/common.py:74`) so `/help`, Telegram's BotFather menu and `canonicalize()` know it.
 
-Currently: `train`, `weather`, `mail`, `search`, `wilma`. CLI wires via `_make_tool_handler` (`cli.py:87`); Telegram/Discord dispatch via `cmd in common.TOOL_COMMANDS` branch.
+Currently: `train`, `weather`, `mail`, `search`, `wilma`. Both frontends dispatch via the `canon in common.TOOL_COMMANDS` branch (`frontends/telegram.py:272 _dispatch_command_locked`, `frontends/discord.py:190 _discord_dispatch_command`), running the tool in an executor.
 
 ## Adding a new tool
 
-1. Define pydantic args model (or skip for zero-arg) in `tools.py`.
-2. Define function decorated with `@tool(description="...", args=Model)`. Keep description model-friendly — it's the prompt that decides when the tool fires.
+1. Define pydantic args model (or skip for zero-arg) in a new `tools/<domain>.py`; re-export from `tools/__init__.py` (or let `/add-tool` do both).
+2. Define function decorated with `@tool(description="...", args=Model)`. Keep description model-friendly — it's the prompt that decides when the tool fires. Keep results bounded: they are persisted verbatim in `turns`.
 3. If memory-mutating: add name to `_MEMORY_MUTATORS` in `chat_loop.py`.
-4. Optional slash command: add parser + formatter + `TOOL_COMMANDS` entry in `frontends/common.py`. Update each frontend's command list (Telegram bot menu, CLI `_COMMANDS` dict, help line in `common.HELP_LINES`).
+4. Optional slash command: add parser + formatter + `TOOL_COMMANDS` entry + `CommandSpec` in `frontends/common.py`; the Telegram bot menu and `/help` derive from `COMMANDS` automatically.
 5. Test: `tests/test_tools_registration.py` already verifies registration.
 6. Test: `tests/test_routing.py` for slash dispatch.
 
 ## httpx client lifetime
 
-`_HTTP = httpx.Client(headers={...}, timeout=15.0)` at module level in `tools/_http.py`. Shared across all tool modules. Connection pool persists for daemon process. Don't add a `close()` — recreating per-call doubles latency.
+`_HTTP = httpx.Client(headers={...}, timeout=15.0)` at module level in `tools/_http.py`. Shared across all tool modules. Connection pool persists for the lifetime of the process. Don't add a `close()` — recreating per-call doubles latency.
 
 ## Fastmail session caching
 
@@ -114,9 +122,9 @@ Currently: `train`, `weather`, `mail`, `search`, `wilma`. CLI wires via `_make_t
 
 `escalate_to_big_model(query, reason)`:
 1. Disabled if `cfg.escalation_enabled=False` → returns `{status: disabled}`.
-2. Reads `chat_loop._active_session.get()` (ContextVar, a `Session` copy): system + completed exchanges of the current turn, including earlier tool results from this turn, excluding the in-flight escalate call.
-3. Builds `sub_messages = list(snapshot) + [{"role":"user","content": f"[escalation: {reason}] {query}"}]`.
-4. Calls `chat_loop._chat_with_provider(big, sub_messages, exclude_tools={"escalate_to_big_model"})` — recursion-prevented.
+2. Reads `chat_loop._active_session.get()` (ContextVar, a scope-less `Session` copy): system + completed exchanges of the current turn, including earlier tool results from this turn, excluding the in-flight escalate call.
+3. `sub = snapshot.snapshot(); sub.append_user(f"[escalation: {reason}] {query}")`.
+4. Calls `chat_loop._chat_with_provider(big, sub, exclude_tools={"escalate_to_big_model"})` — recursion-prevented; `sub.commit` is in-memory (no scope).
 5. Returns `{"status":"ok","model":"<provider>:<model>","reason","reply"}`.
 
-The local model sees `reply` as a tool result and produces user-facing text. The escalation reply is **not** appended to the active session history — only the synthesized response is.
+The local model sees `reply` as a tool result and produces user-facing text. The escalation sub-conversation is **not** appended to the active session history (nor to `turns`) — only the tool result and the synthesized response are.

@@ -16,19 +16,20 @@ House rules — observed in code, enforce when editing.
 
 ## Async
 
-- Provider calls are blocking httpx/SDK — always dispatch via `loop.run_in_executor(None, lambda: chat(...))` from frontends and heartbeat.
+- Provider calls are blocking httpx/SDK — always dispatch via `chat_loop.run_turn` (→ `loop.run_in_executor`) from frontends; heartbeat has its own executor call.
+- SQLite work (`Session.load` / `Session.reset`, `history.*`) is blocking too: frontends call it via `asyncio.to_thread(...)`; `Session.commit` already runs inside the executor thread because `_chat_with_provider` does.
 - Don't `await` inside a tool function. Tools are sync; the loop wraps them.
-- `asyncio.create_task(heartbeat.run_tick())` in `/heartbeat run` — fire-and-forget, errors logged inside `run_tick`.
+- `heartbeat.spawn_tick()` in `/heartbeat run` — fire-and-forget with a strong ref, errors logged inside `run_tick`.
 
 ## Locking
 
 - All `memory.py` mutations through `_locked()` ctxmgr. Reads can use the cached `load()`.
-- No other module needs a process lock; SQLite history is single-connection per `SQLiteHistory` instance.
+- `history.db`: one shared connection behind `history._LOCK` (per process). Per-chat `asyncio.Lock`s in the frontends serialise `Session.load` → turn → `commit` for one scope; the DB has no cross-process scope lock.
 
 ## Errors
 
 - Tools: raise normally. `chat_loop._run_tool` catches and stringifies (`f"Error: {e}"`).
-- Frontends: catch in the message handler, post `"Error: {e}"` and `messages.pop()` to revert the user message.
+- Frontends: catch around `run_turn` in the message handler and post `"Error: {e}"`; `run_turn` itself pops the user message and nothing reaches the `turns` table (commit happens only on success).
 - Config: missing required fields → `ValueError` with actionable message (mention env var + yaml field).
 
 ## Logging
@@ -37,22 +38,23 @@ House rules — observed in code, enforce when editing.
 - Lazy %-formatting only (`log.info("x=%s", x)`), never f-strings. Truncate big payloads with `%.500s`.
 - Levels: INFO = decisions/outcomes/one-line summaries (turn start/end, tool call + duration, HTTP latency); DEBUG = payload detail (args, raw responses, cache hits); WARNING = recoverable oddities (validation refusals, fallbacks); `log.exception` in every `except` that swallows or converts an error.
 - NEVER log secrets: Fastmail token, bot tokens, API keys, Authorization headers. Message text / email subjects are fine. Log env-override *names*, not values.
-- `bot._setup_logging`: root at DEBUG; rotating file `$XDG_STATE_HOME/metalclaw/metalclaw.log` (default `~/.local/state/metalclaw/metalclaw.log`, 5 MB x 5) always on at DEBUG; console INFO in `--daemon`, WARNING in REPL, override via `METALCLAW_LOG_LEVEL`. Console shows one-line errors (no tracebacks); tracebacks are file-only.
+- `bot._setup_logging` (`bot.py:54`): root at DEBUG; rotating file `$XDG_STATE_HOME/metalclaw/metalclaw.log` (default `~/.local/state/metalclaw/metalclaw.log`, 5 MB x 5) always on at DEBUG; console INFO, override via `METALCLAW_LOG_LEVEL`. Console shows one-line errors (no tracebacks); tracebacks are file-only. Startup/status lines go through `log.info` — there is no console UI to print to.
 - Noisy libs (`httpx`, `httpcore`, `telegram`, `discord`, `litellm`, `asyncio`) pinned to WARNING in `_setup_logging`.
 
 ## Comments
 
 - Module docstrings only when the module's role isn't obvious from imports.
-- Inline comments explain **why**, not what. Ones that exist (`bot.py:43-44`, `tools.py:782-783`) document non-obvious decisions.
+- Inline comments explain **why**, not what. Ones that exist (`history.py:19-21` legacy table, `chat_loop.py:164` `_persisted`, `tools/escalation.py` lazy import) document non-obvious decisions.
 
 ## File operations
 
 - Atomic writes: `tempfile.mkstemp(prefix=".x-", dir=path.parent)` → write → `os.replace`. See `memory.py:162`.
 - No JSON state files. Per-record runtime state goes into `history.db` as a table with row-level upserts and a JSON `meta` column for debugging context (see `heartbeat_state`, `known_chats`). Legacy JSON files (`heartbeat_state.json`, `telegram_chats.json`) are imported once on first use and renamed `.bak`.
+- Conversation state likewise: append-only `turns` rows (canonical `messages.Message` as JSON via `message_to_dict`), never in-memory dicts in a frontend. New message kinds must round-trip through `message_to_dict` / `message_from_dict` (test: `tests/test_session_persistence.py::test_message_dict_round_trip`).
 
 ## Frontend ergonomics
 
-- CLI uses Rich (`rich.console.Console`, `rich.markdown.Markdown`). Text strings pass through unchanged; markdown rendered.
+- No terminal UI: `rich` and `prompt_toolkit` are not dependencies any more; don't reintroduce them for output.
 - Telegram needs HTML conversion (`telegram_format.to_html`) — Telegram's MarkdownV2 is too restrictive. Always fall back to plain text on render error (`telegram.py:73`).
 - Discord renders CommonMark natively; no conversion. Honor 2000-char limit via `_split_for_discord`.
 
@@ -74,3 +76,5 @@ House rules — observed in code, enforce when editing.
 - Don't introduce relative imports.
 - Don't read `cfg = get_config()` at module top-level — it forces import-time validation. Read inside functions.
 - Don't expect `session.system` to stay in sync with memory on its own — `run_turn` calls `_refresh_system_prompt(session)` before each user turn; do the same if you drive `chat()` directly.
+- Don't hold a loaded `Session` across turns or share it between coroutines — load per turn under the chat's lock, let `commit` persist, drop it.
+- Don't write to the legacy `messages` table or add fields to `Session` that must survive a restart without also persisting them (only `history` is stored; `system` is rebuilt, `_persisted` is derived).

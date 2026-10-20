@@ -4,21 +4,24 @@ Per-module symbol map. `→` = imports. `←` = imported by.
 
 ## bot.py — entrypoint
 
-- Public: `main()`, `_async_main()`.
-- Re-exports for tests: see `architecture.md#re-exports`.
-- → `heartbeat`, `memory`, `chat_loop`, `config`, `frontends.cli`, `frontends.telegram`, `frontends.discord`, `argparse`, `asyncio`, `logging`, `discord`, `telegram.ext.Application`.
-- ← (lazy) `tools.escalate_to_big_model:784`, `heartbeat.run_tick:243`.
+- Public: `main()`, `_async_main(*, with_telegram, with_discord)`, `_setup_logging() -> Path`. Headless: no REPL, no `--daemon` flag; waits on `asyncio.Event()` until Ctrl-C.
+- No re-exports for tests (see `architecture.md#test-imports`).
+- → `heartbeat`, `memory`, `mcp_client`, `config`, `frontends.common`, `frontends.telegram`, `frontends.discord`, `argparse`, `asyncio`, `logging`, `discord`, `telegram.ext.Application`.
+- ← nothing imports `bot` (tests import `bot._setup_logging` only in `tests/test_logging_setup.py`).
 
 ## chat_loop.py — provider-agnostic loop
 
-- Public: `Session` (dataclass: `system`, `history: list[Message]`; `append_user`, `append_exchange`, `snapshot`), `new_session()`, `chat(session, on_tool_call=None) -> str`, `chat_via_escalation(session) -> str`, `run_turn(session, text, chat_call)`, `build_system_prompt(now) -> str`, `_parse_command`, `_split_thinking`, `_refresh_system_prompt(session)`, `_run_tool`, `_chat_with_provider(provider, session, ...)`, `_active_session` (ContextVar[Session | None]).
-- Constants: `_SYSTEM_PROMPT_BASE` (chat_loop.py:49), `_ESCALATION_HINT` (chat_loop.py:67), `_MEMORY_MUTATORS = {"set_user_preference","add_user_fact","add_user_instruction","forget_user_memory"}` (chat_loop.py:96).
-- → `memory`, `config`, `messages`, `providers`, `registry`.
+- Public: `Session` (dataclass `chat_loop.py:146`: `system`, `history: list[Message]`, `scope: str | None`, private `_persisted: int`; classmethod `load(scope)` `:168`, staticmethod `reset(scope)` `:180`, `commit(work)` `:185`, `append_user`, `append_exchange`, `snapshot`), `new_session()`, `chat(session, on_tool_call=None) -> str`, `chat_via_escalation(session) -> str`, `run_turn(session, text, chat_call)` `:534`, `scoped_chat(scope, fn)` `:259`, `build_system_prompt(now) -> str` `:121`, `_parse_command` `:74`, `_split_thinking` `:59`, `_refresh_system_prompt(session)` `:217`, `_run_tool` `:274`, `_chat_with_provider(provider, session, ...)` `:309`, `_active_session` (ContextVar[Session | None]) `:248`, `current_scope` (ContextVar[str | None]) `:256`.
+- Constants: `_SYSTEM_PROMPT_BASE` (chat_loop.py:85), `_ESCALATION_HINT` (chat_loop.py:113), `_MEMORY_MUTATORS` (chat_loop.py:227; memory tools + `create_/cancel_heartbeat_action`).
+- Persistence: `Session.load` → `history_db.turns_load`; `commit` → `history_db.turns_append(scope, work.history[_persisted:])` then adopts `work`; `reset` → `history_db.turns_reset`. Scope `None` → in-memory only.
+- → `memory`, `config`, `messages`, `providers`, `registry`, `history` (imported as `history_db`), `heartbeat` (`format_now`, `summary`), `mcp_client`.
 
 ## messages.py — canonical messages
 
-- Frozen dataclasses `UserMessage`, `AssistantMessage(text, tool_calls, usage)`, `ToolResultMessage(call_id, name, content)`, `ToolCall`, `Usage`; `Message` union; `validate_exchange(assistant, results)`.
-- No project imports; imported by `providers`, `chat_loop`, tests.
+- Frozen dataclasses `UserMessage`, `AssistantMessage(text, tool_calls, usage)`, `ToolResultMessage(call_id, name, content)`, `ToolCall`, `Usage` (+ `cache_read_tokens`/`cache_write_tokens`); `Message` union; `validate_exchange(assistant, results)` `:94`.
+- Serialisation: `message_to_dict(message) -> dict` `:117` (JSON-ready, `kind` tag `user`/`assistant`/`tool_result`; `Usage` dropped) and `message_from_dict(data) -> Message` `:141` (`ValueError` on unknown kind). Used by `history.turns_append/turns_load`.
+- System-prompt split: `SYSTEM_CACHE_BOUNDARY` `:34`, `split_system_prompt` `:37`, `flatten_system_prompt` `:43`.
+- No project imports; imported by `providers`, `chat_loop`, `history`, tests.
 
 ## registry.py — tool registry
 
@@ -54,25 +57,32 @@ Per-module symbol map. `→` = imports. `←` = imported by.
 - Dataclasses: `ActionKind` (StrEnum), `CronSchedule`, `HeartbeatAction`, `HeartbeatLedger`, `ActionState` (one `heartbeat_state` row; `retry_at()`).
 - → `channels`, `config`, `history` (state rows), `yaml`, `asyncio`. (lazy) `chat_loop`.
 
-## history.py — sqlite prompt history
+## history.py — sqlite: sessions, usage, scheduler state, known chats
 
-- `SQLiteHistory(session)` extends `prompt_toolkit.history.History`. Methods: `load_history_strings()`, `store_string(s)`, `save_assistant(s)`.
-- DB: `$XDG_DATA_HOME/metalclaw/history.db`. Tables `messages(id, session, ts, role, content)`, `usage(id, ts, provider, model, prompt_tokens, completion_tokens, cost_usd NULL)` `heartbeat_state(action_id PK, last_run, failure_count, last_failed, updated_at, meta JSON)` and `known_chats(frontend, chat_id PK, first_seen, last_seen, meta JSON)`. `ts` is UTC ISO.
-- `session`: CLI = bare timestamp id; Telegram/Discord = `telegram-<chat_id>` / `discord-<channel_id>` (same strings as heartbeat scopes). `load_history_strings` excludes any session containing `-` so up-arrow history stays CLI-only.
-- Module fns (shared locked connection): `record_message`, `search_messages(query, limit)` (LIKE, newest first), `record_usage`, `usage_since(iso)` (grouped by provider/model), and the heartbeat-agnostic row ops `heartbeat_state_all/get`, `heartbeat_mark_success/failure` (upsert; failure uses `RETURNING failure_count`), `heartbeat_state_forget/prune/import`. `_merge_json` dict-updates a JSON `meta` column on every write (None values skipped, unparseable JSON kept under `_corrupt_meta`). `known_chat_touch(frontend, id, meta) -> created`, `known_chat_ids(frontend)`, `known_chats_all(frontend?)`, `known_chat_forget`, `known_chats_import` (INSERT OR IGNORE). No import of `heartbeat` or any frontend (would be circular).
+- DB: `$XDG_DATA_HOME/metalclaw/history.db`, one shared connection behind `_LOCK`. Tables (`history.py:16 _init`): `turns(id, session, ts, kind, payload JSON)` + index `turns_session_id(session, id)` `:35-43`; legacy `messages(id, session, ts, role, content)` `:23` (read-only now); `usage(id, ts, provider, model, prompt_tokens, completion_tokens, cost_usd NULL)` `:45`; `heartbeat_state(action_id PK, last_run, failure_count, last_failed, updated_at, meta JSON)` `:56`; `known_chats(frontend, chat_id PK, first_seen, last_seen, meta JSON)` `:66`. `ts` is UTC ISO.
+- `session` column = frontend scope string: `telegram-<chat_id>` / `discord-<channel_id>` (same strings as heartbeat scopes). Legacy `messages` rows from the removed CLI have bare-timestamp sessions.
+- **turns** (`history.py:96-166`): `_BOUNDARY = "boundary"`; `_last_boundary_id(db, session)`; `turns_load(session) -> list[Message]` (rows after the latest boundary, `message_from_dict`); `turns_append(session, new)` (one `executemany` + commit, rollback on error — all rows or none; `kind` = dict `kind`, `payload` = `json.dumps(message_to_dict(m))`); `turns_reset(session)` (inserts a boundary row; nothing deleted); `turns_count(session)` (live rows). Only `chat_loop.Session` calls these.
+- `search_messages(query, limit)` `:168` — LIKE (escaped) over a UNION ALL of `turns` (`kind IN ('user','assistant')`, text via `json_extract(payload, '$.content' | '$.text')`, empty text skipped — tool calls/results never match) and legacy `messages`; `ORDER BY ts DESC`.
+- `record_usage`, `usage_since(iso)` (grouped by provider/model); heartbeat-agnostic row ops `heartbeat_state_all/get`, `heartbeat_mark_success/failure` (upsert; failure uses `RETURNING failure_count`), `heartbeat_state_forget/prune/import`; `_merge_json` dict-updates a JSON `meta` column on every write (None values skipped, unparseable JSON kept under `_corrupt_meta`). `known_chat_touch(frontend, id, meta) -> created`, `known_chat_ids(frontend)`, `known_chats_all(frontend?)`, `known_chat_forget`, `known_chats_import` (INSERT OR IGNORE).
+- → `config` (`xdg_data_dir`), `messages`. No import of `chat_loop`, `heartbeat` or any frontend (would be circular). `record_message` and `SQLiteHistory` are gone.
 
-## self_change.py — `/add-tool` `/self-edit`
+## self_change.py — self-modification plumbing
 
-- Public: `run_self_change(request, repo_root) -> SelfChangeResult`.
-- Spawns `claude -p ... --allowedTools Edit,Write,Read` (timeout 300s). Snapshots dirty/untracked pre-run; rejects only revert delta.
-- Gates: `task lint`, `task build`, `task test`. `approve!` overrides.
-- Logs to `changes.jsonl`.
+- Public: `SelfModificationBusy`, `busy_slot()` ctxmgr (non-blocking acquire of `_BUSY: threading.Lock` `:24`, raises `SelfModificationBusy`), `is_busy()`.
+- Helpers imported by `live_tool`: `_read_file`, `_run(cmd, cwd, timeout=60)` (logs `claude -p` argv truncated — prompt embeds source), `_dirty_tracked(repo_root)`, `_untracked(repo_root)`.
+- No `run_self_change` any more (`/self-edit` was CLI-only and removed). → stdlib only.
 
-## tools.py — tool implementations
+## live_tool.py — `/add-tool`
+
+- Public: `LiveAddState`, `ApprovalResult`, `run_add_tool_live(request, repo_root) -> LiveAddState` (`:61`, takes `busy_slot()`; busy → aborted state), `finalise_add_tool_live(state, choice)` (`:141`; `approve` / `approve-force` / `reject` / `diff`).
+- Internals: `_build_prompt`, `_validate_delta` (exactly one new `tools/<slug>.py`, no tracked edits), `_revert_changes`, `_run_gates` (ruff on the file, import + `TOOLS` diff, schema sanity), `_append_to_init` / `_import_insert_line` / `_merge_into_all` (AST-aware idempotent `tools/__init__.py` edit), `_log_change` → `changes.jsonl` (`:373`).
+- → `self_change`, `registry`. ← `frontends.common` (`run_add_tool` / `run_approve` / `run_reject` / `run_diff`, pending state in `_pending_self_change[scope]`).
+
+## tools/ — tool implementations
 
 - Decorated with `@tool(...)`; auto-register on import. See `tools.md` for catalog.
-- → `httpx`, `pydantic`, `memory`, `vault_search`, `config`, `registry`. (lazy) `bot`, `providers` (escalate only).
-- HTTP client: module-level `_HTTP = httpx.Client(...)` (`tools.py:27`).
+- → `httpx`, `pydantic`, `memory`, `vault_search`, `config`, `registry`, `history` (conversation_history), `heartbeat` (heartbeat_tools). (lazy) `chat_loop`, `providers` (escalation only).
+- HTTP client: module-level `_HTTP = httpx.Client(...)` (`tools/_http.py`).
 - Fastmail session/mailboxes cached at `_FM_SESSION`, `_FM_MAILBOXES` (lazy).
 
 ## vault_search.py — Obsidian search
@@ -111,12 +121,11 @@ Per-module symbol map. `→` = imports. `←` = imported by.
 - `base.py` — `Provider` Protocol (`chat_once(history: Sequence[Message], tools, system)`); re-exports `AssistantMessage`, `ToolCall`, `Usage`, `Message` from `messages`.
 - `__init__.py` — `get_provider(name, *, model_override=None)` factory. 2-branch: `ollama` | `litellm`.
 - `ollama.py` — `OllamaProvider(url, model)`. `_to_wire` → Ollama dicts (`role=tool` + `name` per result, tool_calls without ids).
-- `litellm_provider.py` — `LiteLLMProvider(model, *, aws_region=None, aws_profile=None, num_retries=2)`. Uses `litellm.completion()` (OpenAI-shaped envelope across all backends). Module-level `litellm.drop_params=True` strips per-model unsupported kwargs. Tool-arg JSON parsed defensively; text content blocks joined, other blocks rejected. `_to_wire` → OpenAI envelope (`tool_call_id`, `arguments` as JSON string).
+- `litellm_provider.py` — `LiteLLMProvider(model, *, aws_region=None, aws_profile=None, num_retries=2, prompt_caching=True)`. Uses `litellm.completion()` (OpenAI-shaped envelope across all backends). Module-level `litellm.drop_params=True` strips per-model unsupported kwargs. Tool-arg JSON parsed defensively; text content blocks joined, other blocks rejected. `_to_wire` → OpenAI envelope (`tool_call_id`, `arguments` as JSON string).
 
 ## frontends/
 
 - `__init__.py` — empty.
-- `common.py` — scope helpers (`telegram_scope`, `discord_scope`, `parse_*_scope`, prefixes), arg parsers/formatters, `TOOL_COMMANDS` registry, `HELP_LINES`, async `run_remember`/`run_forget`/`run_memory`/`run_heartbeat`/`run_big`. Each `run_*` takes a `SendFn = Callable[[str], Awaitable[None]]`.
-- `cli.py` — `run_cli_repl()`, `_CLIChannel`, sync `_COMMAND_HANDLERS`, `_print_bot_markdown`, `_show_thinking` flag, `_cli_messages` global, REPO_ROOT for self_change. Uses `prompt_toolkit.PromptSession` + `rich.Console`.
-- `telegram.py` — `start_telegram(token)`, `stop_telegram(app)`, `_TelegramChannel(app)`, `_get_telegram_session(chat_id)`, `_typing(chat_id, bot)` async ctxmgr (4-second pulse), `_load_known_chats()` (reads `known_chats` rows, runs the one-time `telegram_chats.json` migration), `_remember_chat(chat_id, meta)` → `history.known_chat_touch`, `_chat_meta(update)`.
-- `discord.py` — `start_discord(token)`, `stop_discord(client, task)`, `_DiscordChannel(client, heartbeat_channel_id)`, `_split_for_discord(text, limit=2000)` (paragraph→line→word→hard-cut, fence-aware), `_discord_should_respond(message, bot_user)` gating, `_strip_bot_mention(text, bot_user_id)`, `_load_known_channels()` / `_remember_channel(channel_id, meta)` / `_channel_meta(message)` (`known_chats` rows, frontend=`discord`).
+- `common.py` — `TELEGRAM`/`DISCORD`/`ALL_FRONTENDS` `:60-62` (no CLI), `CommandSpec` + `COMMANDS` table `:66-198` (single source for `help_lines()`, `telegram_bot_commands()`, `canonicalize()`), scope helpers (`telegram_scope`, `discord_scope`, `parse_*_scope`, prefixes), arg parsers/formatters, `TOOL_COMMANDS` registry `:462`, `HELP_LINES`, async `run_remember`/`run_forget`/`run_memory`/`run_manual`/`run_heartbeat`/`run_big`/`run_status`/`run_usage`/`run_add_tool`/`run_approve`/`run_reject`/`run_diff`, `Debouncer` `:794`, `split_message`, `format_tool_status` + `ToolStatusReporter`, `format_status`/`format_usage`, `RecentWarnings`. Each `run_*` takes a `SendFn = Callable[[str], Awaitable[None]]`. `REPO_ROOT` for live_tool. `cli_command_table()` is gone.
+- `telegram.py` — `start_telegram(token)`, `stop_telegram(app)`, `_TelegramChannel(app)`, `_get_telegram_session(chat_id)` (`:235`; just `Session.load(_telegram_scope_for(chat_id))` — no session dict), `_chat_lock(chat_id)` `:110`, `_run_text_turn` `:399` (`to_thread(Session.load)` → `run_turn` → reply), `/new` → `Session.reset` `:300`, `_typing(chat_id, bot)` async ctxmgr (4-second pulse), `_load_known_chats()` (reads `known_chats` rows, runs the one-time `telegram_chats.json` migration), `_remember_chat(chat_id, meta)` → `history.known_chat_touch`, `_chat_meta(update)`.
+- `discord.py` — `start_discord(token)`, `stop_discord(client, task)`, `_DiscordChannel(client, heartbeat_channel_id)`, `_get_discord_session(channel_id)` (`:166`; `Session.load(_discord_scope_for(channel_id))`), `_session_lock(channel_id)` `:69`, `_run_text_turn` `:354`, `/new` → `Session.reset` `:217`, `_split_for_discord(text, limit=2000)` (paragraph→line→word→hard-cut, fence-aware), `_discord_should_respond(message, bot_user)` gating `:282`, `_strip_bot_mention(text, bot_user_id)` `:86`, `_load_known_channels()` / `_remember_channel(channel_id, meta)` / `_channel_meta(message)` (`known_chats` rows, frontend=`discord`).

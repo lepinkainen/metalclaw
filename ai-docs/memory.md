@@ -39,7 +39,9 @@ updated: 2026-05-07T08:32:14+00:00
 1. `threading.Lock` — process-wide, exclusive.
 2. `fcntl.flock(LOCK_EX)` on sidecar `memory.md.lock` — cross-process exclusive.
 
-Both required because `--daemon` and an interactive `bot.py` may run simultaneously.
+Both required because two processes (e.g. the running bot plus a one-off script or a second `bot.py` on another host sharing the vault) may write simultaneously.
+
+Conversation history is **not** here: it lives in the `turns` table of `history.db` (see `frontends.md#sessions`); memory.md holds only the distilled preferences/facts/instructions.
 
 ## Atomic write
 

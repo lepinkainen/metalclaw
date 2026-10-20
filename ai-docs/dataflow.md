@@ -2,57 +2,66 @@
 
 Sequence diagrams for the four hot paths.
 
-## 1. User turn (any frontend)
+## 1. User turn (Telegram / Discord)
 
 ```
 user types "What's the weather in Helsinki?"
         │
         ▼
-frontend handler (cli.py / telegram.py / discord.py)
+frontend handler (telegram.py / discord.py)
         │
         ├─ _parse_command(text) → None  (not a slash command)
-        ├─ run_turn(session, text, ...):
-        │     _refresh_system_prompt(session)   # rebuilds session.system
-        │     session.append_user(text)
+        ├─ Debouncer: quiet period → _run_text_turn(scope, joined_text)
+        ├─ async with <per-chat lock>:
+        │     session = await asyncio.to_thread(Session.load, scope)
+        │           ├─ history_db.turns_load(scope)      # rows after latest /new boundary → list[Message]
+        │           └─ system = build_system_prompt(format_now()); _persisted = len(history)
+        │     run_turn(session, text, lambda: scoped_chat(scope, lambda: chat(session, on_tool_call=...))):
+        │           session.append_user(text)           # in memory only
         ▼
-loop.run_in_executor(None, lambda: chat(session, on_tool_call=...))
+loop.run_in_executor(None, _work):   # _refresh_system_prompt(session); chat(...)
         │
         ▼
 chat() → _chat_with_provider(get_provider(cfg.provider), session)
         │
         ├─ tool_schemas = TOOLS values
-        ├─ work = session.snapshot()                       # work on a copy
+        ├─ work = session.snapshot()                       # scope-less copy
         ├─ _active_session.set(work.snapshot())
         ▼
 loop:
     _active_session.set(work.snapshot())                  # republish each round
     am = provider.chat_once(work.history, tool_schemas, work.system)   # provider._to_wire inside
     if not am.tool_calls:
-        work.history.append(am); session <- work          # commit
+        work.history.append(am)
+        session.commit(work)                              # turns_append(scope, work.history[_persisted:]) THEN adopt
         return am.text
     for tc in am.tool_calls:
-        result = _run_tool(tc.name, tc.arguments)        # tools.py funcs
+        result = _run_tool(tc.name, tc.arguments)        # tools/ funcs
         on_tool_call?(...)                                # frontend display hook
         if tc.name in _MEMORY_MUTATORS: memory_dirty = True
-    work.append_exchange(am, [ToolResultMessage(...)])    # validates call ids
+    work.append_exchange(am, [ToolResultMessage(...)])    # validates call ids; not yet persisted
     if memory_dirty: work.system = build_system_prompt(now)   # memory write visible next iter
         │
+        ├─ on exception anywhere above: nothing committed, run_turn pops the user msg, turns table unchanged
         ▼
-back to frontend: reply text → render → send
+back to frontend: _split_thinking → clean reply → render → send; session object dropped (next turn re-loads)
 ```
+
+`/new` → `asyncio.to_thread(Session.reset, scope)` → `turns_reset` inserts a `boundary` row; the next `Session.load` sees an empty history.
 
 ## 2. Escalation turn (`/big <q>` or model calls `escalate_to_big_model`)
 
 ### Via `/big`:
 ```
-common.run_big(send, typing_ctx, session, query)
-    ├─ run_turn: _refresh_system_prompt(session); session.append_user(query)
+frontend: session = await asyncio.to_thread(Session.load, scope)
+common.run_big(send, typing_ctx, session, query, scope=scope, on_tool_call=...)
+    ├─ run_turn: session.append_user(query); _refresh_system_prompt(session)
     ▼
 chat_via_escalation(session)
     ├─ big = get_provider(cfg.escalation_provider, model_override=cfg.escalation_model)
-    └─ _chat_with_provider(big, messages, exclude_tools={"escalate_to_big_model"})
+    └─ _chat_with_provider(big, session, exclude_tools={"escalate_to_big_model"})
     ▼
-(same loop as #1, but with the big provider; escalation tool is hidden)
+(same loop as #1, big provider, escalation tool hidden; session.commit persists the turn to the same scope)
 ```
 
 ### Via model tool call:
@@ -64,12 +73,12 @@ _run_tool("escalate_to_big_model", {...})
     ▼
 tools.escalate_to_big_model(query, reason):
     ├─ if not cfg.escalation_enabled: return {"status":"disabled"}
-    ├─ snapshot = chat_loop._active_session.get()    # ContextVar, Session | None
+    ├─ snapshot = chat_loop._active_session.get()    # ContextVar, Session | None (scope-less copy)
     ├─ sub = snapshot.snapshot(); sub.append_user(f"[escalation: {reason}] {query}")
     ├─ big = get_provider(cfg.escalation_provider, model_override=cfg.escalation_model)
-    └─ reply = chat_loop._chat_with_provider(big, sub_messages, exclude_tools={"escalate_to_big_model"})
-    ▼
-returns {"status":"ok","model":"...","reason","reply"} as the tool result
+    └─ reply = chat_loop._chat_with_provider(big, sub, exclude_tools={"escalate_to_big_model"})
+    ▼                                                 # sub.commit is in-memory; sub discarded
+returns {"status":"ok","model":"...","reason","reply"} as the tool result (this *is* persisted, as the outer turn's ToolResultMessage)
     ▼
 local provider sees the tool result and produces final user-facing text
 ```
@@ -87,7 +96,7 @@ run_tick()
          ├─ if not is_action_due(action, state.last_run.get(id), now): skip
          ├─ if now < state[id].retry_at(): skip           # backoff after failures, no model call
          ├─ session = _build_action_session(action, now, build_system_prompt)
-         │       ▲ system prompt (format_now(now) clock) + HEARTBEAT MODE postscript
+         │       ▲ scope-less: system prompt (format_now(now) clock) + HEARTBEAT MODE postscript; never written to turns
          ├─ reply = await _run_action(...)                # chat_loop.chat in executor
          │       on exception → mark_failure (row upsert), continue
          ├─ clean = reply.strip()

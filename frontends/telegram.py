@@ -25,9 +25,7 @@ import telegram_format
 from chat_loop import (
     Session,
     _parse_command,
-    build_system_prompt,
     chat,
-    format_now,
     run_turn,
     scoped_chat,
 )
@@ -37,7 +35,6 @@ from registry import TOOLS
 
 log = logging.getLogger(__name__)
 
-_telegram_sessions: dict[int, Session] = {}
 _telegram_chat_locks: dict[int, asyncio.Lock] = {}
 # In-memory mirror of the ``known_chats`` rows for frontend="telegram"
 # (history.db). Loaded in ``start_telegram``; every message touches the row.
@@ -236,11 +233,8 @@ class _TelegramChannel:
 
 
 def _get_telegram_session(chat_id: int) -> Session:
-    if chat_id not in _telegram_sessions:
-        log.info("telegram: new session chat_id=%d", chat_id)
-        now = format_now()
-        _telegram_sessions[chat_id] = Session(system=build_system_prompt(now))
-    return _telegram_sessions[chat_id]
+    """Per-chat conversation, rebuilt from the ``turns`` table on every turn."""
+    return Session.load(_telegram_scope_for(chat_id))
 
 
 # Per-chat live tool-status toggle; absent -> config.show_tool_calls.
@@ -303,12 +297,7 @@ async def _dispatch_command_locked(
     elif canon == "usage":
         await common.run_usage(send)
     elif canon == "new":
-        old = _telegram_sessions.pop(chat_id, None)
-        log.info(
-            "telegram: session reset chat_id=%d (had_session=%s)",
-            chat_id,
-            old is not None,
-        )
+        await asyncio.to_thread(Session.reset, _telegram_scope_for(chat_id))
         await _tg_reply(update, "Conversation reset.")
     elif canon == "remember":
         await common.run_remember(send, args)
@@ -325,7 +314,7 @@ async def _dispatch_command_locked(
         await common.run_big(
             send,
             typing_ctx,
-            _get_telegram_session(chat_id),
+            await asyncio.to_thread(_get_telegram_session, chat_id),
             args.strip(),
             scope=scope,
             on_tool_call=_tool_status_for(chat_id, bot) if bot is not None else None,
@@ -411,9 +400,8 @@ async def _run_text_turn(chat_id: int, text: str, ctx: tuple) -> None:
     """One chat turn for ``text``; replies to the latest message's ``update``."""
     update, context = ctx
     async with _chat_lock(chat_id):
-        messages = _get_telegram_session(chat_id)
         scope = _telegram_scope_for(chat_id)
-        history.record_message(scope, "user", text)
+        messages = await asyncio.to_thread(Session.load, scope)
         on_tool = _tool_status_for(chat_id, context.bot)
         try:
             async with _typing(chat_id, context.bot):
@@ -430,7 +418,6 @@ async def _run_text_turn(chat_id: int, text: str, ctx: tuple) -> None:
             return
         if on_tool is not None:
             await on_tool.drain()
-        history.record_message(scope, "assistant", clean_reply)
         log.info("telegram: reply chat_id=%d len=%d", chat_id, len(clean_reply))
         await _tg_reply(update, clean_reply)
 

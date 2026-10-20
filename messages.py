@@ -21,6 +21,8 @@ __all__ = [
     "Usage",
     "UserMessage",
     "flatten_system_prompt",
+    "message_from_dict",
+    "message_to_dict",
     "split_system_prompt",
     "validate_exchange",
 ]
@@ -110,3 +112,45 @@ def validate_exchange(
             "tool results do not match tool calls: "
             f"missing={sorted(missing)} unexpected={sorted(unexpected)}"
         )
+
+
+def message_to_dict(message: Message) -> dict:
+    """JSON-ready dict with a ``kind`` tag; ``Usage`` is bookkeeping and dropped."""
+    match message:
+        case UserMessage(content=content):
+            return {"kind": "user", "content": content}
+        case AssistantMessage(text=text, tool_calls=tool_calls):
+            return {
+                "kind": "assistant",
+                "text": text,
+                "tool_calls": [
+                    {"id": tc.id, "name": tc.name, "arguments": tc.arguments}
+                    for tc in tool_calls
+                ],
+            }
+        case ToolResultMessage(call_id=call_id, name=name, content=content):
+            return {
+                "kind": "tool_result",
+                "call_id": call_id,
+                "name": name,
+                "content": content,
+            }
+    raise TypeError(f"not a Message: {type(message).__name__}")
+
+
+def message_from_dict(data: dict) -> Message:
+    """Inverse of ``message_to_dict``; raises ``ValueError`` on an unknown kind."""
+    match data.get("kind"):
+        case "user":
+            return UserMessage(data["content"])
+        case "assistant":
+            return AssistantMessage(
+                text=data.get("text", ""),
+                tool_calls=tuple(
+                    ToolCall(tc["id"], tc["name"], dict(tc.get("arguments") or {}))
+                    for tc in data.get("tool_calls", ())
+                ),
+            )
+        case "tool_result":
+            return ToolResultMessage(data["call_id"], data["name"], data["content"])
+    raise ValueError(f"unknown message kind: {data.get('kind')!r}")

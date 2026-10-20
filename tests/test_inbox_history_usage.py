@@ -8,6 +8,7 @@ import config
 import heartbeat
 import history
 from frontends import common
+from messages import AssistantMessage, ToolCall, ToolResultMessage, UserMessage
 from tools.conversation_history import search_conversation_history
 from tools.inbox import append_to_inbox
 
@@ -43,15 +44,37 @@ def test_inbox_rejects_empty_and_missing_vault(vault, tmp_path):
 # --- conversation history ---
 
 
-def test_history_search_newest_first_across_surfaces():
-    history.record_message("20260101T000000", "user", "Hello CLI 100%")
-    history.record_message("telegram-5", "user", "hello telegram")
-    history.record_message("discord-9", "assistant", "nothing here")
+def _legacy_row(session: str, role: str, content: str, ts: str) -> None:
+    """Seed the pre-``turns`` plain-text table (never written by the app now)."""
+    with history._LOCK:
+        db = history._conn()
+        db.execute(
+            "INSERT INTO messages (session, ts, role, content) VALUES (?, ?, ?, ?)",
+            (session, ts, role, content),
+        )
+        db.commit()
+
+
+def test_history_search_newest_first_across_surfaces_and_legacy_rows():
+    _legacy_row(
+        "20260101T000000", "user", "Hello CLI 100%", "2020-01-01T00:00:00+00:00"
+    )
+    history.turns_append("telegram-5", [UserMessage("hello telegram")])
+    history.turns_append(
+        "discord-9",
+        [
+            AssistantMessage(text="", tool_calls=[ToolCall("c1", "roll_die", {})]),
+            ToolResultMessage("c1", "roll_die", '{"hello": "inside a tool result"}'),
+            AssistantMessage(text="nothing here"),
+        ],
+    )
     out = search_conversation_history("HELLO")["matches"]
+    # tool calls / results are not searchable; legacy CLI rows still are
     assert [m["surface"] for m in out] == ["telegram-5", "cli"]
     assert search_conversation_history("100%")["matches"][0]["surface"] == "cli"
     assert search_conversation_history("%")["matches"][0]["content"] == "Hello CLI 100%"
     assert len(search_conversation_history("hello", limit=1)["matches"]) == 1
+    assert search_conversation_history("nothing")["matches"][0]["role"] == "assistant"
 
 
 # --- usage ---
@@ -163,7 +186,7 @@ def test_telegram_debounces_messages_into_one_turn(cfg_file, write_config, monke
     monkeypatch.setattr(tg, "_typing", fake_typing)
     monkeypatch.setattr(tg, "_tool_status_for", lambda *_: None)
     monkeypatch.setattr(tg, "_remember_chat", lambda *_a, **_k: None)
-    monkeypatch.setattr(tg, "build_system_prompt", lambda _: "sys")
+    monkeypatch.setattr("chat_loop.build_system_prompt", lambda _: "sys")
 
     def upd(n, text):
         return SimpleNamespace(
@@ -182,8 +205,3 @@ def test_telegram_debounces_messages_into_one_turn(cfg_file, write_config, monke
     asyncio.run(run())
     assert turns == ["Remind me to buy this\nhttps://store.example/game"]
     assert replies == [(2, "ok")]
-    rows = history.search_messages("", 10)
-    assert [(r[1], r[2]) for r in rows] == [
-        ("telegram-77", "assistant"),
-        ("telegram-77", "user"),
-    ]

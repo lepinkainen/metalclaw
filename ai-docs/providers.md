@@ -46,6 +46,8 @@ validate_exchange(
 
 Session history holds only these. `AssistantMessage.tool_calls` accepts any sequence and is stored as a tuple. `usage` is bookkeeping, never serialised, ignored by `==`.
 
+`message_to_dict(message) -> dict` / `message_from_dict(data) -> Message` (`messages.py:117,141`) are the persistence codec for the `turns` table: `{"kind": "user", "content"}`, `{"kind": "assistant", "text", "tool_calls": [{id, name, arguments}]}`, `{"kind": "tool_result", "call_id", "name", "content"}`. `Usage` is dropped on the way out (it lives in the `usage` table instead). This is a *storage* format, not a wire format — providers still get the dataclasses and do their own `_to_wire`.
+
 ## Protocol (`providers/base.py`)
 
 ```python
@@ -59,7 +61,7 @@ class Provider(Protocol):
 
 Each implementation owns a private `_to_wire(history) -> list[dict]` (canonical → its wire shape) and parses its response into an `AssistantMessage`. No wire dict reaches the chat loop, so a session can switch provider between turns or escalate to a different provider with its full history, tool rounds included. Parsing normalises what it supports (litellm joins `text` content blocks) and raises on anything else (`ValueError` for unknown content blocks, `TypeError` for non-string content) rather than guessing.
 
-`usage`: Ollama fills tokens from `prompt_eval_count`/`eval_count` (cost None); litellm from `resp.usage` + `completion_cost`. `chat_loop._chat_with_provider` persists it via `history.record_usage` after every `chat_once` (failures logged, never raised).
+`usage`: Ollama fills tokens from `prompt_eval_count`/`eval_count` (cost None, cache fields None); litellm from `resp.usage` + `completion_cost`, cache fields from `usage.prompt_tokens_details.cached_tokens` / `.cache_write_tokens` (litellm folds Anthropic's `cache_read_input_tokens` / `cache_creation_input_tokens` there; None when absent). Only tokens + cost reach the `usage` table; cache counts are logged at DEBUG. `chat_loop._chat_with_provider` persists it via `history.record_usage` after every `chat_once` (failures logged, never raised).
 
 ## Factory (`providers/__init__.py:4`)
 

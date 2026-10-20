@@ -13,9 +13,7 @@ import history
 from chat_loop import (
     Session,
     _parse_command,
-    build_system_prompt,
     chat,
-    format_now,
     run_turn,
     scoped_chat,
 )
@@ -25,7 +23,6 @@ from registry import TOOLS
 
 log = logging.getLogger(__name__)
 
-_discord_sessions: dict[int, Session] = {}
 _discord_session_locks: dict[int, asyncio.Lock] = {}
 # In-memory mirror of the ``known_chats`` rows for frontend="discord"
 # (history.db). Loaded in ``start_discord``; every handled message touches the row.
@@ -167,11 +164,8 @@ class _DiscordChannel:
 
 
 def _get_discord_session(channel_id: int) -> Session:
-    if channel_id not in _discord_sessions:
-        log.info("discord: new session channel_id=%d", channel_id)
-        now = format_now()
-        _discord_sessions[channel_id] = Session(system=build_system_prompt(now))
-    return _discord_sessions[channel_id]
+    """Per-channel conversation, rebuilt from the ``turns`` table on every turn."""
+    return Session.load(_discord_scope_for(channel_id))
 
 
 # Per-channel live tool-status toggle; absent -> config.show_tool_calls.
@@ -220,12 +214,7 @@ async def _discord_dispatch_command(
     elif canon == "usage":
         await common.run_usage(send)
     elif canon == "new":
-        old = _discord_sessions.pop(channel_id, None)
-        log.info(
-            "discord: session reset channel_id=%d (had_session=%s)",
-            channel_id,
-            old is not None,
-        )
+        await asyncio.to_thread(Session.reset, _discord_scope_for(channel_id))
         await _discord_send(message.channel, "Conversation reset.")
     elif canon == "remember":
         await common.run_remember(send, args)
@@ -243,7 +232,7 @@ async def _discord_dispatch_command(
         await common.run_big(
             send,
             message.channel.typing(),
-            _get_discord_session(channel_id),
+            await asyncio.to_thread(_get_discord_session, channel_id),
             args.strip(),
             scope=scope,
             on_tool_call=_tool_status_for(message.channel),
@@ -365,9 +354,8 @@ async def _discord_handle_message(
 async def _run_text_turn(channel_id: int, text: str, message: discord.Message) -> None:
     """One chat turn for ``text``; replies in the channel of the latest message."""
     async with _session_lock(channel_id):
-        messages = _get_discord_session(channel_id)
         scope = _discord_scope_for(channel_id)
-        history.record_message(scope, "user", text)
+        messages = await asyncio.to_thread(Session.load, scope)
         on_tool = _tool_status_for(message.channel)
         try:
             async with message.channel.typing():
@@ -384,7 +372,6 @@ async def _run_text_turn(channel_id: int, text: str, message: discord.Message) -
             return
         if on_tool is not None:
             await on_tool.drain()
-        history.record_message(scope, "assistant", clean_reply)
         log.info("discord: reply channel_id=%d len=%d", channel_id, len(clean_reply))
         await _discord_send(message.channel, clean_reply)
 

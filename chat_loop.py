@@ -149,12 +149,49 @@ class Session:
     ``history`` holds only ``messages.Message`` values (frozen), never a
     provider's wire dicts, so the active provider may change between turns
     without any reset. The system prompt is kept apart so it can be rebuilt
-    without touching history. Single owner per chat; frontends hold one per
-    Telegram chat / Discord channel, heartbeat builds one per action run.
+    without touching history.
+
+    A session with a ``scope`` is backed by the ``turns`` table in history.db:
+    ``Session.load(scope)`` rebuilds it from the rows after the latest ``/new``
+    boundary and ``commit()`` appends the new messages, so conversations
+    survive restarts and no frontend keeps sessions in memory. Heartbeat runs
+    and tests use scope-less, in-memory sessions.
     """
 
     system: str = ""
     history: list[Message] = field(default_factory=list)
+    scope: str | None = None
+    # How many leading ``history`` entries are already in the turns table.
+    _persisted: int = field(default=0, repr=False, compare=False)
+
+    @classmethod
+    def load(cls, scope: str) -> Session:
+        """Session for ``scope`` with its persisted history and a fresh system prompt."""
+        msgs = history_db.turns_load(scope)
+        log.debug("session load scope=%s messages=%d", scope, len(msgs))
+        return cls(
+            system=build_system_prompt(format_now()),
+            history=msgs,
+            scope=scope,
+            _persisted=len(msgs),
+        )
+
+    @staticmethod
+    def reset(scope: str) -> None:
+        """``/new``: start an empty conversation for ``scope`` (rows stay searchable)."""
+        history_db.turns_reset(scope)
+        log.info("session reset scope=%s", scope)
+
+    def commit(self, work: Session) -> None:
+        """Adopt ``work`` (a finished turn on a snapshot) and persist what is new.
+
+        Persist first: if the write fails the caller's exception path leaves
+        ``self`` untouched, exactly like a provider error.
+        """
+        if self.scope is not None:
+            history_db.turns_append(self.scope, work.history[self._persisted :])
+        self.system, self.history = work.system, work.history
+        self._persisted = len(self.history)
 
     def append_user(self, text: str) -> None:
         self.history.append(UserMessage(text))
@@ -279,8 +316,9 @@ def _chat_with_provider(
     """Run the tool-call loop against `provider`.
 
     Works on a copy of ``session`` and commits it (plus any mid-loop
-    system-prompt rebuild) back to ``session`` only on a normal return, so a
-    provider exception leaves the session exactly as it was.
+    system-prompt rebuild) back to ``session`` via ``Session.commit`` only on
+    a normal return, so a provider exception leaves the session (and the
+    turns table) exactly as it was.
     """
     tool_schemas = [t.schema for name, t in TOOLS.items() if name not in exclude_tools]
     work = session.snapshot()
@@ -359,7 +397,7 @@ def _chat_with_provider(
                 )
                 if am.text:
                     work.history.append(AssistantMessage(text=am.text, usage=am.usage))
-                session.system, session.history = work.system, work.history
+                session.commit(work)
                 return am.text or (
                     f"Error: stopped after {max_iterations} tool-call rounds "
                     "without a final answer."
@@ -375,7 +413,7 @@ def _chat_with_provider(
                     len(am.text),
                 )
                 log.debug("turn reply: %.500s", am.text)
-                session.system, session.history = work.system, work.history
+                session.commit(work)
                 return am.text
 
             signature = tuple(
