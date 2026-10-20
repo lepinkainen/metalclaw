@@ -10,6 +10,7 @@ import channels
 import config
 import heartbeat
 from chat_loop import Session, run_turn
+from messages import UserMessage
 
 
 @pytest.fixture
@@ -49,7 +50,7 @@ def test_run_turn_refreshes_system_prompt_off_the_loop_thread(monkeypatch):
     def chat_call() -> str:
         seen["chat"] = threading.get_ident()
         assert session.system == "refreshed", "refresh must precede the chat call"
-        assert session.history[-1] == {"role": "user", "content": "hi"}
+        assert session.history[-1] == UserMessage("hi")
         return "ok"
 
     raw, _, clean = asyncio.run(run_turn(session, "hi", chat_call))

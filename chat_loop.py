@@ -9,7 +9,7 @@ import json
 import logging
 import re
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 from typing import Any
@@ -22,6 +22,13 @@ import mcp_client
 import memory
 from config import get_config
 from heartbeat import format_now
+from messages import (
+    AssistantMessage,
+    Message,
+    ToolResultMessage,
+    UserMessage,
+    validate_exchange,
+)
 from providers import Provider, get_provider
 from registry import TOOLS
 
@@ -130,25 +137,31 @@ def build_system_prompt(now: str) -> str:
 
 @dataclass
 class Session:
-    """One conversation: the system prompt plus provider-shaped history.
+    """One conversation: the system prompt plus canonical message history.
 
-    ``history`` holds the wire-format messages each provider appends
-    (``AssistantMessage.raw`` / ``format_tool_results``); the system prompt is
-    kept apart so it can be rebuilt without touching history. ``provider_name``
-    is stamped by ``chat()`` so a mid-session ``provider:`` switch can drop the
-    foreign-format history. Single owner per chat; frontends hold one per
+    ``history`` holds only ``messages.Message`` values (frozen), never a
+    provider's wire dicts, so the active provider may change between turns
+    without any reset. The system prompt is kept apart so it can be rebuilt
+    without touching history. Single owner per chat; frontends hold one per
     CLI / Telegram chat / Discord channel, heartbeat builds one per action run.
     """
 
     system: str = ""
-    history: list[dict] = field(default_factory=list)
-    provider_name: str | None = None
+    history: list[Message] = field(default_factory=list)
 
     def append_user(self, text: str) -> None:
-        self.history.append({"role": "user", "content": text})
+        self.history.append(UserMessage(text))
+
+    def append_exchange(
+        self, assistant: AssistantMessage, results: Sequence[ToolResultMessage]
+    ) -> None:
+        """Commit one tool round, refusing unmatched / duplicate result ids."""
+        validate_exchange(assistant, results)
+        self.history.append(assistant)
+        self.history.extend(results)
 
     def snapshot(self) -> Session:
-        """Point-in-time copy for tools (``provider_name`` not carried)."""
+        """Point-in-time copy for tools; entries are frozen so they are shared."""
         return Session(system=self.system, history=list(self.history))
 
 
@@ -258,14 +271,13 @@ def _chat_with_provider(
 ) -> str:
     """Run the tool-call loop against `provider`.
 
-    Works on a copy of ``session.history`` and commits it (plus any mid-loop
+    Works on a copy of ``session`` and commits it (plus any mid-loop
     system-prompt rebuild) back to ``session`` only on a normal return, so a
     provider exception leaves the session exactly as it was.
     """
     tool_schemas = [t.schema for name, t in TOOLS.items() if name not in exclude_tools]
-    system = session.system
-    history = list(session.history)
-    token = _active_session.set(Session(system=system, history=list(history)))
+    work = session.snapshot()
+    token = _active_session.set(work.snapshot())
     pname = getattr(provider, "name", type(provider).__name__)
     pmodel = getattr(provider, "model", None)
     turn_t0 = time.monotonic()
@@ -274,9 +286,9 @@ def _chat_with_provider(
         pname,
         pmodel,
         current_scope.get(),
-        len(history),
+        len(work.history),
         len(tool_schemas),
-        len(system),
+        len(work.system),
     )
     cfg = get_config()
     max_iterations = cfg.max_tool_iterations
@@ -299,10 +311,10 @@ def _chat_with_provider(
                     pname,
                 )
             # Republish so tools run in this round see completed exchanges.
-            _active_session.set(Session(system=system, history=list(history)))
+            _active_session.set(work.snapshot())
             call_t0 = time.monotonic()
             try:
-                am = provider.chat_once(history, schemas, system)
+                am = provider.chat_once(work.history, schemas, work.system)
             except Exception:
                 log.exception(
                     "provider call failed provider=%s model=%s iteration=%d",
@@ -331,26 +343,23 @@ def _chat_with_provider(
                 except Exception:
                     log.exception("usage: could not record")
             if capped and am.tool_calls:
-                # Model ignored the empty tool list. Do not record its
-                # tool_calls (no results would follow -> broken history);
-                # surface what we have.
+                # Model ignored the empty tool list. Its tool calls get no
+                # results, so they must not enter history; keep any text it
+                # produced as a plain assistant turn and surface what we have.
                 log.error(
                     "tool loop: model still emitted %d tool call(s) after cap; giving up",
                     len(am.tool_calls),
                 )
-                session.system, session.history = system, history
+                if am.text:
+                    work.history.append(AssistantMessage(text=am.text, usage=am.usage))
+                session.system, session.history = work.system, work.history
                 return am.text or (
                     f"Error: stopped after {max_iterations} tool-call rounds "
                     "without a final answer."
                 )
 
-            raw = am.raw
-            if isinstance(raw, list):
-                history.extend(raw)
-            elif raw is not None:
-                history.append(raw)
-
             if not am.tool_calls:
+                work.history.append(am)
                 log.info(
                     "turn end provider=%s iterations=%d duration=%.2fs reply=%d chars",
                     pname,
@@ -359,7 +368,7 @@ def _chat_with_provider(
                     len(am.text),
                 )
                 log.debug("turn reply: %.500s", am.text)
-                session.system, session.history = system, history
+                session.system, session.history = work.system, work.history
                 return am.text
 
             signature = tuple(
@@ -377,7 +386,7 @@ def _chat_with_provider(
                     repeat_count,
                 )
 
-            results: list[tuple] = []
+            results: list[ToolResultMessage] = []
             memory_dirty = False
             for tc in am.tool_calls:
                 log.debug("tool call: %s args=%.500s", tc.name, tc.arguments)
@@ -407,45 +416,22 @@ def _chat_with_provider(
                 log.debug("tool %s result: %.500s", tc.name, result_json)
                 if on_tool_call:
                     on_tool_call(tc.name, tc.arguments, result_json)
-                results.append((tc, result_json))
+                results.append(
+                    ToolResultMessage(call_id=tc.id, name=tc.name, content=result_json)
+                )
                 if tc.name in _MEMORY_MUTATORS:
                     memory_dirty = True
-            history.extend(provider.format_tool_results(results))
+            work.append_exchange(am, results)
 
             if memory_dirty:
                 now = format_now()
-                system = build_system_prompt(now)
+                work.system = build_system_prompt(now)
                 log.info(
                     "system prompt rebuilt mid-loop after memory/heartbeat mutator (%d chars)",
-                    len(system),
+                    len(work.system),
                 )
     finally:
         _active_session.reset(token)
-
-
-def _check_session_provider(session: Session, provider_name: str) -> bool:
-    """Stamp the session; if the provider switched, drop tainted history.
-
-    Ollama and litellm both produce OpenAI-shaped envelopes, but tool-call ids
-    and tool-result formats differ enough that history must be reset on a
-    swap. Keeps only the trailing user turn (wire-format-agnostic). Returns
-    True if a reset happened.
-    """
-    stamped = session.provider_name
-    session.provider_name = provider_name
-    if stamped is None or stamped == provider_name:
-        return False
-    history = session.history
-    kept = [history[-1]] if history and history[-1].get("role") == "user" else []
-    log.warning(
-        "provider switch %s -> %s: dropped history %d -> %d messages",
-        stamped,
-        provider_name,
-        len(history),
-        len(kept),
-    )
-    session.history = kept
-    return True
 
 
 def chat(
@@ -454,39 +440,12 @@ def chat(
 ) -> str:
     """Run one turn via the configured provider, handle tool calls, return final text.
 
-    Appends tool-call/result entries to ``session.history``. If the configured
-    provider changed since this session's last turn, prior history is dropped
-    (current user turn preserved) so the new provider does not choke on
-    foreign wire formats.
+    History is canonical, so a ``provider:`` change between turns needs no
+    reset: the new provider just serialises the same messages its own way.
     """
     cfg = get_config()
-    _check_session_provider(session, cfg.provider)
     provider = get_provider(cfg.provider)
     return _chat_with_provider(provider, session, on_tool_call=on_tool_call)
-
-
-def strip_tool_history(messages: list[dict]) -> list[dict]:
-    """Return a copy of `messages` with only wire-format-agnostic turns.
-
-    Tool-call history is provider-specific (Ollama tool messages carry no
-    ``tool_call_id``; litellm assistant tool_calls carry ids and JSON-string
-    arguments). When a session built on one provider is handed to another,
-    drop ``role: tool`` messages entirely and keep assistant turns as plain
-    text only, so the receiving provider never sees a foreign payload.
-    """
-    out: list[dict] = []
-    for m in messages:
-        role = m.get("role")
-        if role == "tool":
-            continue
-        if role == "assistant":
-            text = m.get("content")
-            if not isinstance(text, str) or not text.strip():
-                continue
-            out.append({"role": "assistant", "content": text})
-            continue
-        out.append(m)
-    return out
 
 
 def chat_via_escalation(
@@ -495,21 +454,13 @@ def chat_via_escalation(
 ) -> str:
     """Run a chat turn through the escalation provider, no recursion into itself.
 
-    When the escalation provider differs from the session's provider the turn
-    runs on a sanitised copy of the history (see `strip_tool_history`) and only
-    the final assistant text is appended back to ``session``, so neither
-    provider's tool-call wire format ever leaks into the other's session.
+    The escalation provider sees the full canonical history, tool rounds
+    included, and its own turn is committed to ``session`` like any other.
     """
     cfg = get_config()
     if not cfg.escalation_enabled:
         raise RuntimeError("escalation is disabled in config")
     big = get_provider(cfg.escalation_provider, model_override=cfg.escalation_model)
-    cross_provider = cfg.escalation_provider != cfg.provider
-    work = (
-        Session(system=session.system, history=strip_tool_history(session.history))
-        if cross_provider
-        else session
-    )
     log.info(
         "escalation start provider=%s model=%s messages=%d",
         cfg.escalation_provider,
@@ -520,20 +471,17 @@ def chat_via_escalation(
     try:
         out = _chat_with_provider(
             big,
-            work,
+            session,
             on_tool_call=on_tool_call,
             exclude_tools={"escalate_to_big_model"},
         )
     except Exception:
         log.exception("escalation failed after %.2fs", time.monotonic() - t0)
         raise
-    if cross_provider:
-        session.history.append({"role": "assistant", "content": out})
     log.info(
-        "escalation end duration=%.2fs reply=%d chars cross_provider=%s",
+        "escalation end duration=%.2fs reply=%d chars",
         time.monotonic() - t0,
         len(out),
-        cross_provider,
     )
     return out
 

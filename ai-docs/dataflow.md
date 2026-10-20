@@ -18,25 +18,24 @@ frontend handler (cli.py / telegram.py / discord.py)
 loop.run_in_executor(None, lambda: chat(session, on_tool_call=...))
         │
         ▼
-chat() → _check_session_provider(session) → _chat_with_provider(provider, session)
+chat() → _chat_with_provider(get_provider(cfg.provider), session)
         │
         ├─ tool_schemas = TOOLS values
-        ├─ system = session.system; history = list(session.history)   # work on a copy
-        ├─ _active_session.set(Session(system, list(history)))
+        ├─ work = session.snapshot()                       # work on a copy
+        ├─ _active_session.set(work.snapshot())
         ▼
 loop:
-    _active_session.set(Session(system, list(history)))   # republish each round
-    am = provider.chat_once(history, tool_schemas, system)
-    history += am.raw
+    _active_session.set(work.snapshot())                  # republish each round
+    am = provider.chat_once(work.history, tool_schemas, work.system)   # provider._to_wire inside
     if not am.tool_calls:
-        messages[:] = [system_msg] + history
+        work.history.append(am); session <- work          # commit
         return am.text
     for tc in am.tool_calls:
         result = _run_tool(tc.name, tc.arguments)        # tools.py funcs
         on_tool_call?(...)                                # frontend display hook
         if tc.name in _MEMORY_MUTATORS: memory_dirty = True
-    history += provider.format_tool_results(...)
-    if memory_dirty: system = build_system_prompt(now)   # memory write visible next iter
+    work.append_exchange(am, [ToolResultMessage(...)])    # validates call ids
+    if memory_dirty: work.system = build_system_prompt(now)   # memory write visible next iter
         │
         ▼
 back to frontend: reply text → render → send

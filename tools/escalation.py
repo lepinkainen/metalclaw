@@ -39,15 +39,9 @@ def escalate_to_big_model(query: str, reason: str) -> dict[str, Any]:
     if snapshot is None:
         sub = chat_loop.Session()
         sub.append_user(query)
-    elif cfg.escalation_provider != cfg.provider:
-        # Session history is in the local provider's wire format; the cloud
-        # provider would choke on it (missing tool_call_id / id). Keep text only.
-        sub = chat_loop.Session(
-            system=snapshot.system,
-            history=chat_loop.strip_tool_history(snapshot.history),
-        )
-        sub.append_user(f"[escalation: {reason}] {query}")
     else:
+        # Canonical history: the cloud provider serialises it itself, tool
+        # rounds from the local model included.
         sub = snapshot.snapshot()
         sub.append_user(f"[escalation: {reason}] {query}")
 

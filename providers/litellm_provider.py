@@ -1,10 +1,18 @@
 import json
 import logging
 import time
+from collections.abc import Sequence
 
 import litellm
 
-from providers.base import AssistantMessage, ToolCall, Usage
+from messages import (
+    AssistantMessage,
+    Message,
+    ToolCall,
+    ToolResultMessage,
+    Usage,
+    UserMessage,
+)
 
 # Silently strip kwargs the underlying model does not understand. Lets one
 # provider module front a heterogeneous Bedrock catalog (Claude, Nova, Llama,
@@ -33,16 +41,46 @@ class LiteLLMProvider:
         if aws_profile:
             self._extra["aws_profile_name"] = aws_profile
 
+    @staticmethod
+    def _to_wire(history: Sequence[Message]) -> list[dict]:
+        """Canonical messages -> OpenAI-shaped chat messages (litellm envelope)."""
+        out: list[dict] = []
+        for m in history:
+            if isinstance(m, UserMessage):
+                out.append({"role": "user", "content": m.content})
+            elif isinstance(m, AssistantMessage):
+                entry: dict = {"role": "assistant", "content": m.text}
+                if m.tool_calls:
+                    entry["tool_calls"] = [
+                        {
+                            "id": tc.id,
+                            "type": "function",
+                            "function": {
+                                "name": tc.name,
+                                "arguments": json.dumps(tc.arguments),
+                            },
+                        }
+                        for tc in m.tool_calls
+                    ]
+                out.append(entry)
+            elif isinstance(m, ToolResultMessage):
+                out.append(
+                    {"role": "tool", "tool_call_id": m.call_id, "content": m.content}
+                )
+            else:  # pragma: no cover - exhaustiveness guard
+                raise TypeError(f"unsupported message type: {type(m).__name__}")
+        return out
+
     def chat_once(
         self,
-        messages: list[dict],
+        history: Sequence[Message],
         tools: list[dict],
         system: str,
     ) -> AssistantMessage:
         payload: list[dict] = []
         if system:
             payload.append({"role": "system", "content": system})
-        payload.extend(messages)
+        payload.extend(self._to_wire(history))
 
         kwargs: dict = {
             "model": self.model,
@@ -87,7 +125,6 @@ class LiteLLMProvider:
         msg = resp.choices[0].message
 
         tool_calls: list[ToolCall] = []
-        raw_tool_calls: list[dict] = []
         for tc in getattr(msg, "tool_calls", None) or []:
             args_str = tc.function.arguments or ""
             try:
@@ -100,35 +137,29 @@ class LiteLLMProvider:
                 )
                 args = {}
             tool_calls.append(ToolCall(id=tc.id, name=tc.function.name, arguments=args))
-            raw_tool_calls.append(
-                {
-                    "id": tc.id,
-                    "type": "function",
-                    "function": {"name": tc.function.name, "arguments": args_str},
-                }
-            )
 
         content = getattr(msg, "content", "") or ""
-        raw: dict = {"role": "assistant", "content": content}
-        if raw_tool_calls:
-            raw["tool_calls"] = raw_tool_calls
+        if isinstance(content, list):
+            # Content-block responses: keep text blocks, reject anything else.
+            texts = []
+            for block in content:
+                btype = block.get("type") if isinstance(block, dict) else None
+                if btype == "text":
+                    texts.append(block.get("text", ""))
+                else:
+                    raise ValueError(f"litellm: unsupported content block {btype!r}")
+            content = "".join(texts)
+        elif not isinstance(content, str):
+            raise TypeError(
+                f"litellm: unsupported content type {type(content).__name__}"
+            )
 
         return AssistantMessage(
             text=content,
-            tool_calls=tool_calls,
-            raw=raw,
+            tool_calls=tuple(tool_calls),
             usage=Usage(
                 getattr(usage, "prompt_tokens", None) or 0,
                 getattr(usage, "completion_tokens", None) or 0,
                 cost,
             ),
         )
-
-    def format_tool_results(
-        self,
-        results: list[tuple[ToolCall, str]],
-    ) -> list[dict]:
-        return [
-            {"role": "tool", "tool_call_id": call.id, "content": result_json}
-            for call, result_json in results
-        ]

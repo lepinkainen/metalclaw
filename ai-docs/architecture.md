@@ -63,8 +63,8 @@ Tests import directly from the module that defines the symbol — `chat_loop`, `
 ## Provider abstraction invariants
 
 - Each session sticks to **one** provider — history shape is opaque to the rest of the app.
-- `provider.chat_once(messages, tools, system)` returns `AssistantMessage(text, tool_calls, raw, usage)`; `usage` (`providers.base.Usage`) is recorded to the `usage` table by `_chat_with_provider`. `raw` is appended to history verbatim.
-- `provider.format_tool_results(results)` returns a list of dicts to extend history with — provider chooses shape (Ollama/OpenAI: `role=tool` per result; Anthropic: single `role=user` block with `tool_result` blocks).
+- `provider.chat_once(history, tools, system)` takes canonical `messages.Message` values and returns `AssistantMessage(text, tool_calls, usage)`; `usage` is recorded to the `usage` table by `_chat_with_provider`. The reply itself is appended to history (frozen, so shared with snapshots).
+- Tool results become `ToolResultMessage(call_id, name, content)` entries via `Session.append_exchange`; each provider's private `_to_wire` renders them in its own envelope on the next call.
 
 ## Single-user invariant
 

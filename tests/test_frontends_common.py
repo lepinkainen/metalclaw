@@ -7,6 +7,7 @@ import config
 import memory
 from chat_loop import Session
 from frontends import common
+from messages import AssistantMessage, UserMessage
 
 
 def _send_capture():
@@ -219,7 +220,7 @@ def test_run_big_disabled_when_escalation_off(vault):
 
 def test_run_big_routes_through_escalation(vault_with_escalation, monkeypatch):
     def fake_escalate(session: Session, on_tool_call=None) -> str:
-        session.history.append({"role": "assistant", "content": "cloud reply"})
+        session.history.append(AssistantMessage(text="cloud reply"))
         return "cloud reply"
 
     monkeypatch.setattr(common, "chat_via_escalation", fake_escalate)
@@ -228,8 +229,8 @@ def test_run_big_routes_through_escalation(vault_with_escalation, monkeypatch):
     send, captured = _send_capture()
     asyncio.run(common.run_big(send, contextlib.nullcontext(), session, "hi"))
 
-    assert session.history[-2] == {"role": "user", "content": "hi"}
-    assert session.history[-1] == {"role": "assistant", "content": "cloud reply"}
+    assert session.history[-2] == UserMessage("hi")
+    assert session.history[-1] == AssistantMessage(text="cloud reply")
     assert captured[-1] == "cloud reply"
 
 

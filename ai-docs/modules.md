@@ -11,9 +11,14 @@ Per-module symbol map. `→` = imports. `←` = imported by.
 
 ## chat_loop.py — provider-agnostic loop
 
-- Public: `Session` (dataclass: `system`, `history`, `provider_name`; `append_user`, `snapshot`), `new_session()`, `chat(session, on_tool_call=None) -> str`, `chat_via_escalation(session) -> str`, `run_turn(session, text, chat_call)`, `build_system_prompt(now) -> str`, `_parse_command`, `_split_thinking`, `_refresh_system_prompt(session)`, `_run_tool`, `_chat_with_provider(provider, session, ...)`, `_active_session` (ContextVar[Session | None]).
+- Public: `Session` (dataclass: `system`, `history: list[Message]`; `append_user`, `append_exchange`, `snapshot`), `new_session()`, `chat(session, on_tool_call=None) -> str`, `chat_via_escalation(session) -> str`, `run_turn(session, text, chat_call)`, `build_system_prompt(now) -> str`, `_parse_command`, `_split_thinking`, `_refresh_system_prompt(session)`, `_run_tool`, `_chat_with_provider(provider, session, ...)`, `_active_session` (ContextVar[Session | None]).
 - Constants: `_SYSTEM_PROMPT_BASE` (chat_loop.py:49), `_ESCALATION_HINT` (chat_loop.py:67), `_MEMORY_MUTATORS = {"set_user_preference","add_user_fact","add_user_instruction","forget_user_memory"}` (chat_loop.py:96).
-- → `memory`, `config`, `providers`, `registry`.
+- → `memory`, `config`, `messages`, `providers`, `registry`.
+
+## messages.py — canonical messages
+
+- Frozen dataclasses `UserMessage`, `AssistantMessage(text, tool_calls, usage)`, `ToolResultMessage(call_id, name, content)`, `ToolCall`, `Usage`; `Message` union; `validate_exchange(assistant, results)`.
+- No project imports; imported by `providers`, `chat_loop`, tests.
 
 ## registry.py — tool registry
 
@@ -103,10 +108,10 @@ Per-module symbol map. `→` = imports. `←` = imported by.
 
 ## providers/
 
-- `base.py` — `Provider` Protocol, `AssistantMessage(text, tool_calls, raw)`, `ToolCall(id, name, arguments)`.
+- `base.py` — `Provider` Protocol (`chat_once(history: Sequence[Message], tools, system)`); re-exports `AssistantMessage`, `ToolCall`, `Usage`, `Message` from `messages`.
 - `__init__.py` — `get_provider(name, *, model_override=None)` factory. 2-branch: `ollama` | `litellm`.
-- `ollama.py` — `OllamaProvider(url, model)`. Native tool-calls dict shape; `format_tool_results` → `role=tool` per result.
-- `litellm_provider.py` — `LiteLLMProvider(model, *, aws_region=None, aws_profile=None, num_retries=2)`. Uses `litellm.completion()` (OpenAI-shaped envelope across all backends). Module-level `litellm.drop_params=True` strips per-model unsupported kwargs. Tool-arg JSON parsed defensively. `format_tool_results` uses `tool_call_id` envelope.
+- `ollama.py` — `OllamaProvider(url, model)`. `_to_wire` → Ollama dicts (`role=tool` + `name` per result, tool_calls without ids).
+- `litellm_provider.py` — `LiteLLMProvider(model, *, aws_region=None, aws_profile=None, num_retries=2)`. Uses `litellm.completion()` (OpenAI-shaped envelope across all backends). Module-level `litellm.drop_params=True` strips per-model unsupported kwargs. Tool-arg JSON parsed defensively; text content blocks joined, other blocks rejected. `_to_wire` → OpenAI envelope (`tool_call_id`, `arguments` as JSON string).
 
 ## frontends/
 

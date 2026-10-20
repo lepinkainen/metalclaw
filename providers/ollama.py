@@ -1,11 +1,20 @@
+import json
 import logging
 import time
 import uuid
+from collections.abc import Sequence
 from typing import Any
 
 import httpx
 
-from providers.base import AssistantMessage, ToolCall, Usage
+from messages import (
+    AssistantMessage,
+    Message,
+    ToolCall,
+    ToolResultMessage,
+    Usage,
+    UserMessage,
+)
 
 log = logging.getLogger(__name__)
 
@@ -29,16 +38,37 @@ class OllamaProvider:
         self.top_p = top_p
         self.top_k = top_k
 
+    @staticmethod
+    def _to_wire(history: Sequence[Message]) -> list[dict[str, Any]]:
+        """Canonical messages -> Ollama /api/chat message dicts."""
+        out: list[dict[str, Any]] = []
+        for m in history:
+            if isinstance(m, UserMessage):
+                out.append({"role": "user", "content": m.content})
+            elif isinstance(m, AssistantMessage):
+                entry: dict[str, Any] = {"role": "assistant", "content": m.text}
+                if m.tool_calls:
+                    entry["tool_calls"] = [
+                        {"function": {"name": tc.name, "arguments": tc.arguments}}
+                        for tc in m.tool_calls
+                    ]
+                out.append(entry)
+            elif isinstance(m, ToolResultMessage):
+                out.append({"role": "tool", "name": m.name, "content": m.content})
+            else:  # pragma: no cover - exhaustiveness guard
+                raise TypeError(f"unsupported message type: {type(m).__name__}")
+        return out
+
     def chat_once(
         self,
-        messages: list[dict],
+        history: Sequence[Message],
         tools: list[dict],
         system: str,
     ) -> AssistantMessage:
         payload_messages: list[dict[str, Any]] = []
         if system:
             payload_messages.append({"role": "system", "content": system})
-        payload_messages.extend(messages)
+        payload_messages.extend(self._to_wire(history))
 
         payload: dict[str, Any] = {
             "model": self.model,
@@ -93,8 +123,6 @@ class OllamaProvider:
             args = fn.get("arguments") or {}
             if isinstance(args, str):
                 # Defensive: some Ollama builds emit JSON-string arguments.
-                import json
-
                 args = json.loads(args) if args.strip() else {}
             tool_calls.append(
                 ToolCall(
@@ -104,23 +132,19 @@ class OllamaProvider:
                 )
             )
 
+        content = msg.get("content", "") or ""
+        if not isinstance(content, str):
+            # Reject rather than guess: Ollama chat replies are plain text.
+            raise TypeError(
+                f"ollama: unsupported content type {type(content).__name__}"
+            )
         return AssistantMessage(
-            text=msg.get("content", "") or "",
-            tool_calls=tool_calls,
-            raw=msg,
+            text=content,
+            tool_calls=tuple(tool_calls),
             usage=Usage(
                 body.get("prompt_eval_count") or 0, body.get("eval_count") or 0
             ),
         )
-
-    def format_tool_results(
-        self,
-        results: list[tuple[ToolCall, str]],
-    ) -> list[dict]:
-        return [
-            {"role": "tool", "name": call.name, "content": result_json}
-            for call, result_json in results
-        ]
 
 
 def fetch_model_defaults(chat_url: str, model: str) -> dict[str, Any]:

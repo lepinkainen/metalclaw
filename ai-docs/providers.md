@@ -1,35 +1,63 @@
 # providers
 
-## Protocol (`providers/base.py`)
+## Canonical messages (`messages.py`)
 
 ```python
-@dataclass
+@dataclass(frozen=True)
 class ToolCall:
     id: str
     name: str
     arguments: dict
 
 
-@dataclass
+@dataclass(frozen=True)
+class Usage:
+    prompt_tokens: int
+    completion_tokens: int
+    cost_usd: float | None = None
+
+
+@dataclass(frozen=True)
+class UserMessage:
+    content: str
+
+
+@dataclass(frozen=True)
 class AssistantMessage:
     text: str
-    tool_calls: list[ToolCall] = []
-    raw: dict | list[dict] | None = None  # appended to history verbatim
-    usage: Usage | None = None  # prompt/completion tokens + cost_usd (None = unknown)
+    tool_calls: tuple[ToolCall, ...] = ()
+    usage: Usage | None(compare=False)
 
 
+@dataclass(frozen=True)
+class ToolResultMessage:
+    call_id: str
+    name: str
+    content: str  # JSON-encoded
+
+
+Message = UserMessage | AssistantMessage | ToolResultMessage
+validate_exchange(
+    assistant, results
+)  # ValueError on missing / unexpected / duplicate call ids
+```
+
+Session history holds only these. `AssistantMessage.tool_calls` accepts any sequence and is stored as a tuple. `usage` is bookkeeping, never serialised, ignored by `==`.
+
+## Protocol (`providers/base.py`)
+
+```python
 class Provider(Protocol):
     name: str
 
     def chat_once(
-        messages: list[dict], tools: list[dict], system: str
+        history: Sequence[Message], tools: list[dict], system: str
     ) -> AssistantMessage: ...
-    def format_tool_results(results: list[tuple[ToolCall, str]]) -> list[dict]: ...
 ```
 
-`usage`: Ollama fills tokens from `prompt_eval_count`/`eval_count` (cost None); litellm from `resp.usage` + `completion_cost`. `chat_loop._chat_with_provider` persists it via `history.record_usage` after every `chat_once` (failures logged, never raised).
+Each implementation owns a private `_to_wire(history) -> list[dict]` (canonical → its wire shape) and parses its response into an `AssistantMessage`. No wire dict reaches the chat loop, so a session can switch provider between turns or escalate to a different provider with its full history, tool rounds included. Parsing normalises what it supports (litellm joins `text` content blocks) and raises on anything else (`ValueError` for unknown content blocks, `TypeError` for non-string content) rather than guessing.
 
-`raw` shape is provider-specific. The chat loop treats history as opaque — only the active provider parses it. `chat()` stamps `Session.provider_name` and drops tainted history when the active provider switches mid-session (`chat_loop._check_session_provider`).
+`usage`: Ollama fills tokens from `prompt_eval_count`/`eval_count` (cost None); litellm from `resp.usage` + `completion_cost`. `chat_loop._chat_with_provider` persists it via `history.record_usage` after every `chat_once` (failures logged, never raised).
 
 ## Factory (`providers/__init__.py:4`)
 
@@ -48,10 +76,9 @@ Raises `ValueError` on unknown name.
 
 - Endpoint: `cfg.ollama_url` (default `http://localhost:11434/api/chat`).
 - httpx client: module-level `_CLIENT = httpx.Client(timeout=120.0)`.
-- Request: `{"model", "messages": [system?, *history], "tools": tools or None, "stream": False}`.
-- Response: `response.json()["message"]`. If `tool_calls` arrives as a JSON string (some Ollama builds), `json.loads` it (`ollama.py:46`).
-- `raw` = the entire `message` dict.
-- `format_tool_results` → `[{"role":"tool", "name": call.name, "content": result_json}, ...]`.
+- Request: `{"model", "messages": [system?, *_to_wire(history)], "tools": tools or None, "stream": False}`.
+- `_to_wire`: `UserMessage` → `{"role":"user","content"}`; `AssistantMessage` → `{"role":"assistant","content": text, "tool_calls": [{"function": {"name", "arguments": dict}}]?}` (no ids: Ollama does not echo them); `ToolResultMessage` → `{"role":"tool", "name", "content"}`.
+- Response: `response.json()["message"]`. If tool-call `arguments` arrives as a JSON string (some Ollama builds), `json.loads` it. Missing tool-call ids get `ollama-<uuid12>` so results can be paired.
 
 ## LiteLLMProvider (`providers/litellm_provider.py`)
 
@@ -65,8 +92,8 @@ Raises `ValueError` on unknown name.
   - System prompt placed as the first message in the list (litellm normalises Anthropic's separate-kwarg shape internally).
   - Tools passed through as-is (registry already in OpenAI tool-schema shape).
   - Tool-call `arguments` come back as JSON strings → parsed defensively (`json.loads`, falls back to `{}` on JSONDecodeError).
-  - `raw` shape mirrors `OllamaProvider` / OpenAI envelope: `{"role": "assistant", "content": ..., "tool_calls": [...]?}`.
-- `format_tool_results` → `[{"role":"tool", "tool_call_id": call.id, "content": result_json}, ...]` (OpenAI envelope).
+  - Content-block responses: `text` blocks are joined, any other block type raises `ValueError`.
+- `_to_wire` (OpenAI envelope): `AssistantMessage` → `{"role":"assistant","content": text, "tool_calls": [{"id", "type":"function", "function": {"name", "arguments": json.dumps(args)}}]?}`; `ToolResultMessage` → `{"role":"tool", "tool_call_id", "content"}`.
 
 ## Adding a model
 
@@ -74,7 +101,7 @@ No code change. Set `litellm_model` in `config.yaml` (or `escalation_model`) to 
 
 ## Adding a non-litellm provider
 
-1. Create `providers/<name>.py` exposing class with `.name` and the two methods.
+1. Create `providers/<name>.py` exposing a class with `.name`, `chat_once(history, tools, system)`, and a private `_to_wire(history)`. Parse the response into `messages.AssistantMessage`; never return wire dicts.
 2. Add config field if a non-credential knob is needed (model name typically lives in `provider`-specific yaml field or as an extra method param).
 3. Add branch in `get_provider`.
 4. Update `Provider` Literal in `config.py:38`.

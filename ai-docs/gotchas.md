@@ -18,11 +18,11 @@ Tests import directly from the defining module — `chat_loop._chat_with_provide
 
 ## `messages` mutation contract
 
-- `chat()` and `chat_via_escalation()` take a `Session` and commit `session.history` / `session.system` only on a normal return — a provider exception leaves the session as it was. Cross-provider escalation works on a `strip_tool_history` copy and appends only the final assistant text (foreign tool-call payloads must never enter the session).
+- `chat()` and `chat_via_escalation()` take a `Session` and commit `session.history` / `session.system` only on a normal return — a provider exception leaves the session as it was. History is canonical (`messages.py`), so escalation and provider switches replay it as-is.
 - `_parse_command("/")` returns `("", "")` (unknown command), never raises.
 - `run_turn` appends the user message then calls `chat`. On exception it pops it to revert.
 - `session.system` is **rebuilt** by `_refresh_system_prompt` before each turn AND mid-loop on memory writes — don't rely on it being stable across a turn. There is no system message inside `history`.
-- `Session.provider_name` is the provider stamp; a stale `id()`-keyed global no longer exists, so sessions need no cleanup call on `/new`.
+- Never put a provider wire dict in `session.history`; go through `append_user` / `append_exchange` / `AssistantMessage`. `append_exchange` raises `ValueError` if result ids don't match the assistant's tool calls.
 
 ## ContextVar `_active_session`
 
@@ -32,9 +32,9 @@ Set by `_chat_with_provider` and republished before each provider call (a point-
 
 `_MEMORY_MUTATORS` (`chat_loop.py:96`) is a hard-coded frozenset of tool **names**. If you add a memory-mutating tool, add its name here, else mid-loop system rebuild won't fire.
 
-## Anthropic tool-result shape is different
+## Tool-result shapes live in the providers
 
-Ollama/OpenAI append one history entry per tool result. **Anthropic appends one `role=user` entry containing all results.** Don't assume `len(format_tool_results(results)) == len(results)`.
+Ollama tool results carry `name`, the OpenAI envelope carries `tool_call_id`, Anthropic-native would be one `role=user` entry with `tool_result` blocks. All of that is inside each provider's `_to_wire`; the loop stores one `ToolResultMessage` per call and never sees a wire dict.
 
 ## Discord 2000-char split + fences
 
@@ -84,9 +84,9 @@ Never call `asyncio.create_task(heartbeat.run_tick())` directly — use `heartbe
 
 Set by `run_cli_repl` (`cli.py:213`). `/big` reads it via `_cli_messages_ref()`. Only one CLI session at a time — fine for a single-user REPL but not safe for concurrent CLI sessions.
 
-## Provider history is opaque
+## Provider history is canonical
 
-The chat loop appends `am.raw` and `provider.format_tool_results(...)` outputs to history without inspecting them. **Sessions don't survive a provider switch** — `messages` accumulated under Ollama can't be replayed under Anthropic. If config-flips a provider mid-session, expect breakage.
+Sessions survive a provider switch: history is `messages.Message` values and each provider serialises them itself. One caveat: Ollama-era tool-call ids look like `ollama-<hex>`; the OpenAI envelope accepts any string, so this is fine, but don't assume ids follow a provider's own format.
 
 ## MCP tools are dynamic
 

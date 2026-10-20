@@ -11,6 +11,7 @@ import mcp_client
 import registry
 from chat_loop import Session, _chat_with_provider
 from config import McpServer
+from messages import UserMessage
 from providers.base import AssistantMessage, ToolCall
 
 srv = MCPServer("fake")
@@ -164,14 +165,9 @@ def test_chat_loop_end_to_end(mcp):
             assert any(t["function"]["name"] == "t_add" for t in tools)
             return next(self.replies)
 
-        def format_tool_results(self, results):
-            return [
-                {"role": "tool", "tool_call_id": c.id, "content": j} for c, j in results
-            ]
-
-    session = Session(history=[{"role": "user", "content": "3+4"}])
+    session = Session(history=[UserMessage("3+4")])
     assert _chat_with_provider(Stub(), session) == "7"
-    assert '"result": 7' in session.history[-1]["content"]
+    assert '"result": 7' in session.history[-2].content  # the tool result
 
 
 def test_schema_mapping():

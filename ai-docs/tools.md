@@ -82,7 +82,7 @@ Adding a new memory-mutating tool? Update this set, else mid-loop system rebuild
 - Catches all `Exception` and returns `f"Error: {e}"` as the result.
 - Otherwise returns the function's return value (any JSON-serializable shape).
 
-`_chat_with_provider` then serializes via `json.dumps(result, ensure_ascii=False)` before passing to `provider.format_tool_results`.
+`_chat_with_provider` then serializes via `json.dumps(result, ensure_ascii=False)` into a `ToolResultMessage(call_id, name, content)`; the provider's `_to_wire` turns that into its envelope on the next call.
 
 ## Slash command wiring (`frontends/common.py`)
 

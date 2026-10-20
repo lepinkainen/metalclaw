@@ -1,6 +1,7 @@
 import tools
 from chat_loop import Session, _active_session
-from providers.base import AssistantMessage
+from messages import ToolResultMessage, UserMessage
+from providers.base import AssistantMessage, ToolCall
 
 
 def test_escalate_returns_disabled_when_off(cfg_file, write_config):
@@ -28,11 +29,7 @@ def test_escalate_routes_through_provider(cfg_file, write_config, monkeypatch):
             return AssistantMessage(
                 text="cloud says hi",
                 tool_calls=[],
-                raw={"role": "assistant", "content": "cloud says hi"},
             )
-
-        def format_tool_results(self, results):
-            return []
 
     def fake_get_provider(name, *, model_override=None):
         captured["provider_name"] = name
@@ -42,10 +39,7 @@ def test_escalate_routes_through_provider(cfg_file, write_config, monkeypatch):
     monkeypatch.setattr("providers.get_provider", fake_get_provider)
 
     # Simulate an active session so the snapshot is exercised.
-    session = Session(
-        system="you are local",
-        history=[{"role": "user", "content": "earlier turn"}],
-    )
+    session = Session(system="you are local", history=[UserMessage("earlier turn")])
     token = _active_session.set(session)
     try:
         out = tools.escalate_to_big_model(query="hard one", reason="too hard")
@@ -62,7 +56,7 @@ def test_escalate_routes_through_provider(cfg_file, write_config, monkeypatch):
     assert "roll_die" in tool_names
 
     user_contents = [
-        m["content"] for m in captured["messages"] if m.get("role") == "user"
+        m.content for m in captured["messages"] if isinstance(m, UserMessage)
     ]
     assert any("earlier turn" in c for c in user_contents), "session snapshot missing"
     assert any("hard one" in c and "too hard" in c for c in user_contents)
@@ -83,11 +77,7 @@ def test_escalate_with_no_active_session(cfg_file, write_config, monkeypatch):
             return AssistantMessage(
                 text="ok",
                 tool_calls=[],
-                raw={"role": "assistant", "content": "ok"},
             )
-
-        def format_tool_results(self, results):
-            return []
 
     monkeypatch.setattr("providers.get_provider", lambda *a, **k: StubProvider())
 
@@ -95,7 +85,9 @@ def test_escalate_with_no_active_session(cfg_file, write_config, monkeypatch):
     assert out["status"] == "ok"
 
 
-def test_escalate_strips_foreign_tool_history(cfg_file, write_config, monkeypatch):
+def test_escalate_passes_full_history_across_providers(
+    cfg_file, write_config, monkeypatch
+):
     write_config(
         cfg_file,
         provider="ollama",
@@ -110,42 +102,32 @@ def test_escalate_strips_foreign_tool_history(cfg_file, write_config, monkeypatc
 
         def chat_once(self, messages, tools_, system):
             captured["messages"] = list(messages)
-            return AssistantMessage(text="ok", tool_calls=[], raw=None)
-
-        def format_tool_results(self, results):
-            return []
+            return AssistantMessage(text="ok")
 
     monkeypatch.setattr("providers.get_provider", lambda *a, **k: StubProvider())
 
-    # Ollama-shaped history: tool_calls without ids, tool result without tool_call_id
-    session = Session(
-        system="sys",
-        history=[
-            {"role": "user", "content": "roll a die"},
-            {
-                "role": "assistant",
-                "content": "",
-                "tool_calls": [{"function": {"name": "roll_die", "arguments": {}}}],
-            },
-            {"role": "tool", "name": "roll_die", "content": "4"},
-            {"role": "assistant", "content": "You rolled a 4."},
-        ],
+    call = ToolCall(id="c1", name="roll_die", arguments={})
+    session = Session(system="sys")
+    session.append_user("roll a die")
+    session.append_exchange(
+        AssistantMessage(text="", tool_calls=[call]),
+        [ToolResultMessage(call_id="c1", name="roll_die", content="4")],
     )
+    session.history.append(AssistantMessage(text="You rolled a 4."))
     token = _active_session.set(session)
     try:
         out = tools.escalate_to_big_model(query="q", reason="r")
     finally:
         _active_session.reset(token)
     assert out["status"] == "ok"
-    roles = [m["role"] for m in captured["messages"]]
-    assert "tool" not in roles
-    assert all("tool_calls" not in m for m in captured["messages"])
-    assert {"role": "assistant", "content": "You rolled a 4."} in captured["messages"]
+    # Canonical history crosses providers intact, tool round included.
+    assert captured["messages"][:-1] == session.history
+    assert captured["messages"][-1] == UserMessage("[escalation: r] q")
     # original session untouched
     assert len(session.history) == 4
 
 
-def test_chat_via_escalation_cross_provider_appends_text_only(
+def test_chat_via_escalation_cross_provider_commits_turn(
     cfg_file, write_config, monkeypatch
 ):
     from chat_loop import chat_via_escalation
@@ -162,30 +144,26 @@ def test_chat_via_escalation_cross_provider_appends_text_only(
         name = "stub"
 
         def chat_once(self, messages, tools_, system):
-            assert all(m["role"] != "tool" for m in messages)
-            return AssistantMessage(
-                text="big answer",
-                tool_calls=[],
-                raw={"role": "assistant", "content": "big answer", "tool_calls": []},
-            )
-
-        def format_tool_results(self, results):
-            return []
+            assert any(isinstance(m, ToolResultMessage) for m in messages)
+            return AssistantMessage(text="big answer")
 
     monkeypatch.setattr("chat_loop.get_provider", lambda *a, **k: StubProvider())
 
     session = Session(
         system="sys",
         history=[
-            {"role": "user", "content": "earlier"},
-            {"role": "tool", "name": "roll_die", "content": "4"},
-            {"role": "user", "content": "now"},
+            UserMessage("earlier"),
+            AssistantMessage(
+                text="", tool_calls=[ToolCall(id="t", name="roll_die", arguments={})]
+            ),
+            ToolResultMessage(call_id="t", name="roll_die", content="4"),
+            UserMessage("now"),
         ],
     )
     out = chat_via_escalation(session)
     assert out == "big answer"
-    assert session.history[-1] == {"role": "assistant", "content": "big answer"}
-    assert len(session.history) == 4  # original history intact, only text appended
+    assert session.history[-1] == AssistantMessage(text="big answer")
+    assert len(session.history) == 5  # original history intact, reply appended
 
 
 def test_escalation_after_tool_round_sees_tool_result(
@@ -213,11 +191,7 @@ def test_escalation_after_tool_round_sees_tool_result(
             return AssistantMessage(
                 text="big answer",
                 tool_calls=[],
-                raw={"role": "assistant", "content": "big answer"},
             )
-
-        def format_tool_results(self, results):
-            return []
 
     monkeypatch.setattr("providers.get_provider", lambda *a, **k: BigStub())
 
@@ -237,17 +211,14 @@ def test_escalation_after_tool_round_sees_tool_result(
                     AssistantMessage(
                         text="",
                         tool_calls=[die],
-                        raw={"role": "assistant", "content": "", "tool_calls": ["die"]},
                     ),
                     AssistantMessage(
                         text="",
                         tool_calls=[esc],
-                        raw={"role": "assistant", "content": "", "tool_calls": ["esc"]},
                     ),
                     AssistantMessage(
                         text="final",
                         tool_calls=[],
-                        raw={"role": "assistant", "content": "final"},
                     ),
                 ]
             )
@@ -255,18 +226,19 @@ def test_escalation_after_tool_round_sees_tool_result(
         def chat_once(self, messages, tools_, system):
             return next(self._replies)
 
-        def format_tool_results(self, results):
-            return [{"role": "tool", "name": c.name, "content": r} for c, r in results]
-
-    session = Session(
-        system="sys", history=[{"role": "user", "content": "roll and interpret"}]
-    )
+    session = Session(system="sys", history=[UserMessage("roll and interpret")])
     out = _chat_with_provider(LocalStub(), session)
     assert out == "final"
 
     seen = big_seen["messages"]
-    tool_msgs = [m for m in seen if m.get("role") == "tool"]
-    assert [m["name"] for m in tool_msgs] == ["roll_die"], "tool result missing"
+    tool_msgs = [m for m in seen if isinstance(m, ToolResultMessage)]
+    assert [m.name for m in tool_msgs] == ["roll_die"], "tool result missing"
     # The assistant message carrying the unresolved escalate call is excluded.
-    assert not any(m.get("tool_calls") == ["esc"] for m in seen)
-    assert seen[-1]["role"] == "user" and "interpret the roll" in seen[-1]["content"]
+    assert not any(
+        isinstance(m, AssistantMessage)
+        and any(tc.name == "escalate_to_big_model" for tc in m.tool_calls)
+        for m in seen
+    )
+    assert (
+        isinstance(seen[-1], UserMessage) and "interpret the roll" in seen[-1].content
+    )

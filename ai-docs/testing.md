@@ -44,7 +44,7 @@ def test_x(cfg_file, write_config):
 
 - Mock the client: monkeypatch `providers.ollama._CLIENT.post`, `providers.litellm_provider.litellm.completion`.
 - Assert request shape (model, messages, tools, system position).
-- Assert `AssistantMessage.raw` round-trips through `format_tool_results` correctly.
+- Assert `_to_wire(history)` emits the exact wire dicts (that is what adapter tests verify); chat-loop tests use typed `messages.py` values instead.
 
 ## Memory tests
 
@@ -70,16 +70,11 @@ class StubProvider:
     def __init__(self, replies):
         self.replies = iter(replies)
 
-    def chat_once(self, messages, tools, system):
+    def chat_once(self, history, tools, system):
         return next(self.replies)
-
-    def format_tool_results(self, results):
-        return [
-            {"role": "tool", "tool_call_id": c.id, "content": j} for c, j in results
-        ]
 ```
 
-Pass to `_chat_with_provider(stub, messages)` to drive multi-turn tool-call sequences without an LLM.
+Pass to `_chat_with_provider(stub, Session(history=[UserMessage("hi")]))` to drive multi-turn tool-call sequences without an LLM. Replies are `AssistantMessage(text=..., tool_calls=[ToolCall(...)])`; the loop builds the `ToolResultMessage`s itself.
 
 ## CI gates (`task test` + `task lint` + `task build`)
 

@@ -10,7 +10,7 @@ AI-only architecture docs. Dense, indexed, cross-referenced. No human-friendly p
 | `modules.md` | Need per-module symbol map: exports, key fns, deps in/out. |
 | `chat-loop.md` | Editing `chat_loop.py`, debugging tool-call loop, system prompt, escalation. |
 | `tools.md` | Adding/modifying tools, slash-command wiring, schema gen. |
-| `providers.md` | Adding/modifying provider, history shape, tool-result formatting. |
+| `providers.md` | Adding/modifying provider, canonical message model, per-provider `_to_wire`. |
 | `memory.md` | Editing `memory.py`, locking, parse/render, migration. |
 | `frontends.md` | CLI/Telegram/Discord delta, session map, response gating. |
 | `heartbeat.md` | Scheduler, scope file format, channel routing, sentinel. |
@@ -38,7 +38,8 @@ telegram_format.py 146  CommonMark→Telegram HTML
 vault_search.py   205   ripgrep wrapper + read_note
 mcp_client.py     ~300  MCP client: loop thread, server owner tasks, TOOLS bridge, result wrap
 wilma.py          477   unofficial Wilma client: login/TOTP, students, messages, subject matching
-providers/base.py  40   Protocol, AssistantMessage, ToolCall
+messages.py       ~90   canonical frozen messages: User/Assistant/ToolResult, ToolCall, Usage, validate_exchange
+providers/base.py  25   Provider Protocol (chat_once over Sequence[Message]); re-exports messages types
 providers/__init__ 32   get_provider() factory
 providers/ollama  71
 providers/litellm 87

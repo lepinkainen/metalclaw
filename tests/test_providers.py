@@ -7,6 +7,7 @@ from chat_loop import (
     _chat_with_provider,
     _run_tool,
 )
+from messages import ToolResultMessage, UserMessage
 from providers.base import AssistantMessage, ToolCall
 
 
@@ -15,19 +16,11 @@ class FakeProvider:
 
     def __init__(self, replies: list[AssistantMessage]) -> None:
         self._replies: Iterator[AssistantMessage] = iter(replies)
-        self.calls: list[tuple[list[dict], list[dict], str]] = []
-        self.tool_results_seen: list[list[tuple[ToolCall, str]]] = []
+        self.calls: list[tuple[list, list[dict], str]] = []
 
-    def chat_once(self, messages, tools_, system):
-        self.calls.append((list(messages), list(tools_), system))
+    def chat_once(self, history, tools_, system):
+        self.calls.append((list(history), list(tools_), system))
         return next(self._replies)
-
-    def format_tool_results(self, results):
-        self.tool_results_seen.append(list(results))
-        return [
-            {"role": "tool", "name": call.name, "content": result_json}
-            for call, result_json in results
-        ]
 
 
 def test_loop_terminates_on_empty_tool_calls():
@@ -36,15 +29,14 @@ def test_loop_terminates_on_empty_tool_calls():
             AssistantMessage(
                 text="hello",
                 tool_calls=[],
-                raw={"role": "assistant", "content": "hello"},
             ),
         ]
     )
-    session = Session(system="sys", history=[{"role": "user", "content": "hi"}])
+    session = Session(system="sys", history=[UserMessage("hi")])
     out = _chat_with_provider(provider, session)
     assert out == "hello"
     assert session.system == "sys"
-    assert session.history[-1] == {"role": "assistant", "content": "hello"}
+    assert session.history[-1] == AssistantMessage(text="hello")
 
 
 def test_loop_dispatches_tool_call_and_feeds_result_back():
@@ -56,37 +48,34 @@ def test_loop_dispatches_tool_call_and_feeds_result_back():
                 AssistantMessage(
                     text="",
                     tool_calls=[call],
-                    raw={"role": "assistant", "tool_calls": [{"id": "call-1"}]},
                 ),
                 AssistantMessage(
                     text="rolled",
                     tool_calls=[],
-                    raw={"role": "assistant", "content": "rolled"},
                 ),
             ]
         ),
     )
     provider = provider[0]
 
-    session = Session(history=[{"role": "user", "content": "roll a d6"}])
+    session = Session(history=[UserMessage("roll a d6")])
     out = _chat_with_provider(provider, session)
     assert out == "rolled"
-    # FakeProvider format_tool_results emits a role:tool message with the
-    # JSON-serialized tool output. Confirm it appears in history.
-    tool_messages = [m for m in session.history if m.get("role") == "tool"]
+    # The loop records the JSON-serialized tool output as a ToolResultMessage
+    # paired with the call id.
+    tool_messages = [m for m in session.history if isinstance(m, ToolResultMessage)]
     assert len(tool_messages) == 1
-    assert "Rolled a d6" in tool_messages[0]["content"]
+    assert tool_messages[0].call_id == "call-1"
+    assert "Rolled a d6" in tool_messages[0].content
 
 
 def test_loop_excludes_tools_from_schema():
     provider = FakeProvider(
         [
-            AssistantMessage(
-                text="ok", tool_calls=[], raw={"role": "assistant", "content": "ok"}
-            ),
+            AssistantMessage(text="ok", tool_calls=[]),
         ]
     )
-    session = Session(history=[{"role": "user", "content": "hi"}])
+    session = Session(history=[UserMessage("hi")])
     _chat_with_provider(provider, session, exclude_tools={"escalate_to_big_model"})
     schemas_passed = provider.calls[0][1]
     names = {s["function"]["name"] for s in schemas_passed}
@@ -103,20 +92,15 @@ def test_active_session_contextvar_is_set_during_chat():
 
         def chat_once(self, messages, tools_, system):
             captured.append(_active_session.get())
-            return AssistantMessage(
-                text="done", tool_calls=[], raw={"role": "assistant", "content": "done"}
-            )
+            return AssistantMessage(text="done")
 
-        def format_tool_results(self, results):
-            return []
-
-    session = Session(system="S", history=[{"role": "user", "content": "x"}])
+    session = Session(system="S", history=[UserMessage("x")])
     _chat_with_provider(PeekProvider(), session)
     # Point-in-time copy: the user turn, not the post-commit session.
     (snap,) = captured
     assert snap is not None and snap is not session
     assert snap.system == "S"
-    assert snap.history == [{"role": "user", "content": "x"}]
+    assert snap.history == [UserMessage("x")]
     # Resets on exit
     assert _active_session.get() is None
 
@@ -179,16 +163,12 @@ def test_add_user_instruction_tool_routes_to_memory_and_refreshes(
                 AssistantMessage(
                     text="",
                     tool_calls=[call],
-                    raw={"role": "assistant", "tool_calls": [{"id": "c1"}]},
                 ),
-                AssistantMessage(
-                    text="ok", tool_calls=[], raw={"role": "assistant", "content": "ok"}
-                ),
+                AssistantMessage(text="ok", tool_calls=[]),
             ]
         )
         session = Session(
-            system="old-system",
-            history=[{"role": "user", "content": "from now on Finnish"}],
+            system="old-system", history=[UserMessage("from now on Finnish")]
         )
         _chat_with_provider(provider, session)
         import memory as _memory
@@ -200,9 +180,9 @@ def test_add_user_instruction_tool_routes_to_memory_and_refreshes(
         _config.reset_cache()
 
 
-def test_chat_resets_session_when_provider_switches_mid_session(monkeypatch):
-    """If config.provider changes between chat() calls on the same session,
-    tool-call-tainted history must be dropped (system + last user kept)."""
+def test_chat_keeps_history_when_provider_switches_both_ways(monkeypatch):
+    """Canonical history survives ollama -> litellm -> ollama after a tool
+    round: no reset, every provider receives the same typed messages."""
     import chat_loop
 
     class _Cfg:
@@ -211,56 +191,47 @@ def test_chat_resets_session_when_provider_switches_mid_session(monkeypatch):
         max_repeated_tool_calls = 3
 
     fake_cfg = _Cfg()
-
-    def _get_cfg():
-        return fake_cfg
-
     providers_built: list[str] = []
+    seen: dict[str, list] = {}
 
     def _make_provider(name, model_override=None):
         providers_built.append(name)
-        return FakeProvider(
-            [
-                AssistantMessage(
-                    text="hi",
-                    tool_calls=[],
-                    raw={"role": "assistant", "content": "hi"},
-                ),
-            ]
-        )
+        p = FakeProvider([AssistantMessage(text=f"hi from {name}")])
+        seen[name] = p.calls
+        return p
 
-    monkeypatch.setattr(chat_loop, "get_config", _get_cfg)
+    monkeypatch.setattr(chat_loop, "get_config", lambda: fake_cfg)
     monkeypatch.setattr(chat_loop, "get_provider", _make_provider)
 
-    session = Session(
-        system="sys",
-        history=[
-            {"role": "user", "content": "first"},
-            # Simulate prior provider-shaped tool call entries from a previous turn.
-            {"role": "assistant", "tool_calls": [{"id": "a"}]},
-            {"role": "tool", "name": "roll_die", "content": "{}"},
-            {"role": "assistant", "content": "rolled"},
-            {"role": "user", "content": "second"},
-        ],
+    call = ToolCall(id="a", name="roll_die", arguments={"sides": 6})
+    session = Session(system="sys")
+    session.append_user("first")
+    session.append_exchange(
+        AssistantMessage(text="", tool_calls=[call]),
+        [ToolResultMessage(call_id="a", name="roll_die", content="{}")],
     )
-    chat_loop.chat(session)
-    # First call stamps "ollama"; history preserved (no mismatch yet).
-    assert session.provider_name == "ollama"
-    assert any(m.get("role") == "tool" for m in session.history)
+    session.history.append(AssistantMessage(text="rolled"))
+    session.append_user("second")
+    before = list(session.history)
 
-    # Switch provider in config and call again.
+    chat_loop.chat(session)
     fake_cfg.provider = "litellm"
     session.append_user("third")
     chat_loop.chat(session)
+    fake_cfg.provider = "ollama"
+    session.append_user("fourth")
+    chat_loop.chat(session)
 
-    roles = [m.get("role") for m in session.history]
-    # Reset must drop foreign tool-call entries; final user kept, plus the
-    # assistant reply appended by the new provider's turn. System untouched.
-    assert "tool" not in roles
-    assert session.system == "sys"
-    assert session.provider_name == "litellm"
-    assert [m["content"] for m in session.history if m["role"] == "user"] == ["third"]
-    assert providers_built == ["ollama", "litellm"]
+    assert providers_built == ["ollama", "litellm", "ollama"]
+    # Nothing was dropped: the original prefix (tool round included) is intact.
+    assert session.history[: len(before)] == before
+    assert any(isinstance(m, ToolResultMessage) for m in session.history)
+    # litellm received the ollama-era tool round untouched.
+    litellm_history = seen["litellm"][0][0]
+    assert (
+        ToolResultMessage(call_id="a", name="roll_die", content="{}") in litellm_history
+    )
+    assert session.history[-1] == AssistantMessage(text="hi from ollama")
 
 
 def test_chat_does_not_reset_when_provider_unchanged(monkeypatch):
@@ -280,13 +251,12 @@ def test_chat_does_not_reset_when_provider_unchanged(monkeypatch):
                 AssistantMessage(
                     text="ok",
                     tool_calls=[],
-                    raw={"role": "assistant", "content": "ok"},
                 ),
             ]
         ),
     )
 
-    session = Session(system="sys", history=[{"role": "user", "content": "first"}])
+    session = Session(system="sys", history=[UserMessage("first")])
     chat_loop.chat(session)
     before = list(session.history)
     session.append_user("second")
@@ -321,16 +291,12 @@ def test_memory_mutator_refreshes_system_prompt_mid_loop(tmp_path, monkeypatch):
                 AssistantMessage(
                     text="",
                     tool_calls=[call],
-                    raw={"role": "assistant", "tool_calls": [{"id": "c1"}]},
                 ),
-                AssistantMessage(
-                    text="ok", tool_calls=[], raw={"role": "assistant", "content": "ok"}
-                ),
+                AssistantMessage(text="ok", tool_calls=[]),
             ]
         )
         session = Session(
-            system="old-system",
-            history=[{"role": "user", "content": "remember tone=terse"}],
+            system="old-system", history=[UserMessage("remember tone=terse")]
         )
         _chat_with_provider(provider, session)
         first_system = provider.calls[0][2]
@@ -355,12 +321,10 @@ def test_active_session_snapshot_includes_completed_exchanges_mid_turn():
                     AssistantMessage(
                         text="",
                         tool_calls=[call],
-                        raw={"role": "assistant", "content": "", "tool_calls": [1]},
                     ),
                     AssistantMessage(
                         text="done",
                         tool_calls=[],
-                        raw={"role": "assistant", "content": "done"},
                     ),
                 ]
             )
@@ -371,19 +335,20 @@ def test_active_session_snapshot_includes_completed_exchanges_mid_turn():
             captured.append(snap)
             return next(self._replies)
 
-        def format_tool_results(self, results):
-            return [{"role": "tool", "name": c.name, "content": r} for c, r in results]
-
-    session = Session(system="sys", history=[{"role": "user", "content": "roll"}])
+    session = Session(system="sys", history=[UserMessage("roll")])
     _chat_with_provider(PeekProvider(), session)
 
     first, second = captured
     assert first.system == second.system == "sys"
     # Round 1: nothing completed yet beyond the user turn.
-    assert [m["role"] for m in first.history] == ["user"]
+    assert [type(m) for m in first.history] == [UserMessage]
     # Round 2: the assistant tool call + its result are visible to tools.
-    assert [m["role"] for m in second.history] == ["user", "assistant", "tool"]
-    assert second.history[-1]["name"] == "roll_die"
+    assert [type(m) for m in second.history] == [
+        UserMessage,
+        AssistantMessage,
+        ToolResultMessage,
+    ]
+    assert second.history[-1].name == "roll_die"
     assert _active_session.get() is None
 
 
@@ -394,10 +359,7 @@ def test_provider_failure_leaves_session_untouched():
         def chat_once(self, messages, tools_, system):
             raise RuntimeError("provider down")
 
-        def format_tool_results(self, results):
-            return []
-
-    session = Session(system="sys", history=[{"role": "user", "content": "hi"}])
+    session = Session(system="sys", history=[UserMessage("hi")])
     before = (session.system, list(session.history))
     try:
         _chat_with_provider(Boom(), session)
@@ -407,3 +369,26 @@ def test_provider_failure_leaves_session_untouched():
         raise AssertionError("expected provider error")
     assert (session.system, session.history) == before
     assert _active_session.get() is None
+
+
+def test_two_calls_to_same_tool_in_one_round_get_paired_results():
+    c1 = ToolCall(id="r1", name="roll_die", arguments={"sides": 6})
+    c2 = ToolCall(id="r2", name="roll_die", arguments={"sides": 20})
+    provider = FakeProvider(
+        [
+            AssistantMessage(text="", tool_calls=[c1, c2]),
+            AssistantMessage(text="both rolled"),
+        ]
+    )
+    session = Session(history=[UserMessage("roll two")])
+    assert _chat_with_provider(provider, session) == "both rolled"
+    results = [m for m in session.history if isinstance(m, ToolResultMessage)]
+    assert [r.call_id for r in results] == ["r1", "r2"]
+    assert all(r.name == "roll_die" for r in results)
+    # Round two saw the exchange in order: user, assistant, result, result.
+    assert [type(m) for m in provider.calls[1][0]] == [
+        UserMessage,
+        AssistantMessage,
+        ToolResultMessage,
+        ToolResultMessage,
+    ]
