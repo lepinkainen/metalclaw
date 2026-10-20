@@ -81,19 +81,24 @@ asyncio loop in heartbeat.run()
     ▼
 run_tick()
     ├─ active hours? if no → return {}
-    ├─ state = load_state()                              # JSON
-    └─ for scope in discover_scopes():                   # glob heartbeat-*.md
-         ├─ hb = parse_heartbeat_file(file_text)
-         ├─ due = [t for t in hb.tasks if is_due(...)]
-         ├─ if not due and not hb.body: skip
-         ├─ messages = _build_heartbeat_messages(scope, hb, due, now, build_system_prompt)
-         │       ▲ system prompt + HEARTBEAT MODE postscript
-         ├─ reply = await loop.run_in_executor(None, lambda: chat_loop.chat(messages))
-         ├─ state[state_key(scope, t.name)] = now.isoformat()  for each due
-         ├─ if reply.strip() startswith SENTINEL: continue     # silent
-         └─ channels.for_scope(scope)?.notify(scope, clean)
+    ├─ state = load_state()                              # {id: ActionState} from history.db
+    ├─ ledger = load_ledger()                            # heartbeat.yaml under flock
+    └─ for action in ledger.actions:
+         ├─ if not is_action_due(action, state.last_run.get(id), now): skip
+         ├─ if now < state[id].retry_at(): skip           # backoff after failures, no model call
+         ├─ messages = _build_action_messages(action, now, build_system_prompt)
+         │       ▲ system prompt (format_now(now) clock) + HEARTBEAT MODE postscript
+         ├─ reply = await _run_action(...)                # chat_loop.chat in executor
+         │       on exception → mark_failure (row upsert), continue
+         ├─ clean = reply.strip()
+         ├─ if "" and no SENTINEL → mark_failure, continue
+         ├─ if SENTINEL in clean (≤300 leftover chars) → mark_success; at → archive; continue
+         ├─ channel = _resolve_channel(action.channel or cfg.heartbeat_default_channel)
+         │       None → mark_failure, continue
+         ├─ await channel.notify(scope, clean)           # raises on non-delivery → mark_failure
+         └─ mark_success(id, now); kind=at → _archive_with_lock(id, now)
     ▼
-save_state(state)
+prune_state(active ∪ completed ids)                   # drop orphan rows; no bulk save
 ```
 
 ## 4. Memory write + immediate read

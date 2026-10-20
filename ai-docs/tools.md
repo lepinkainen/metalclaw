@@ -4,7 +4,7 @@
 
 `@tool(description=..., args=PydanticModel | None)` decorator (`registry.py:38`):
 1. `args=None` → `_EMPTY_PARAMETERS` (zero-arg).
-2. Else `_schema_from_model(args)` strips `title`, `$defs`; collapses `Optional` `anyOf` to a single non-null type; drops `default: None` keys.
+2. Else `_schema_from_model(args)` inlines every `$ref` into the referencing node (`_inline_refs`, so nested pydantic models become self-contained `object` specs — no `$defs`), then recursively (`_clean_spec`) strips `title`, collapses `Optional` `anyOf` to a single non-null type, and drops `default: None` keys.
 3. Stores `Tool(func, schema={"type":"function","function":{"name","description","parameters"}})` in `TOOLS[func.__name__]`.
 
 The function `__name__` is the registry key — also what providers see as the tool name. Don't shadow.

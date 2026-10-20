@@ -38,6 +38,13 @@ def escalate_to_big_model(query: str, reason: str) -> dict[str, Any]:
     snapshot = chat_loop._active_session_messages.get()
     if snapshot is None:
         sub_messages: list[dict] = [{"role": "user", "content": query}]
+    elif cfg.escalation_provider != cfg.provider:
+        # Session history is in the local provider's wire format; the cloud
+        # provider would choke on it (missing tool_call_id / id). Keep text only.
+        sub_messages = chat_loop.strip_tool_history(snapshot)
+        sub_messages.append(
+            {"role": "user", "content": f"[escalation: {reason}] {query}"}
+        )
     else:
         sub_messages = list(snapshot)
         sub_messages.append(

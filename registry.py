@@ -20,22 +20,55 @@ class Tool:
 TOOLS: dict[str, Tool] = {}
 
 
+def _inline_refs(node: Any, defs: dict[str, Any]) -> Any:
+    """Replace every ``{"$ref": "#/$defs/X"}`` with a deep copy of ``defs[X]``.
+
+    Providers receive a single self-contained JSON schema per tool; pydantic's
+    nested-model output uses ``$defs`` + ``$ref`` which many backends reject
+    and which local models simply never see. Sibling keys on the ``$ref``
+    node (e.g. ``description``) are preserved and override the definition's.
+    """
+    if isinstance(node, dict):
+        ref = node.get("$ref")
+        if isinstance(ref, str) and ref.startswith("#/$defs/"):
+            target = defs.get(ref.removeprefix("#/$defs/"))
+            if target is not None:
+                merged = dict(_inline_refs(target, defs))
+                merged.update({k: v for k, v in node.items() if k != "$ref"})
+                return merged
+        return {k: _inline_refs(v, defs) for k, v in node.items()}
+    if isinstance(node, list):
+        return [_inline_refs(v, defs) for v in node]
+    return node
+
+
+def _clean_spec(spec: dict[str, Any]) -> None:
+    any_of = spec.get("anyOf")
+    if isinstance(any_of, list):
+        non_null = [b for b in any_of if b.get("type") != "null"]
+        if len(non_null) == 1:
+            spec.pop("anyOf")
+            spec.update(non_null[0])
+    spec.pop("title", None)
+    if "default" in spec and spec["default"] is None:
+        spec.pop("default")
+    for sub in spec.get("properties", {}).values():
+        if isinstance(sub, dict):
+            _clean_spec(sub)
+    items = spec.get("items")
+    if isinstance(items, dict):
+        _clean_spec(items)
+
+
 def _schema_from_model(model: type[BaseModel]) -> dict[str, Any]:
     raw = model.model_json_schema()
+    defs = raw.pop("$defs", None) or raw.pop("definitions", None) or {}
+    raw = _inline_refs(raw, defs)
     raw.pop("title", None)
     raw.pop("$defs", None)
     raw.pop("definitions", None)
-    props = raw.get("properties", {})
-    for spec in props.values():
-        spec.pop("title", None)
-        any_of = spec.get("anyOf")
-        if isinstance(any_of, list):
-            non_null = [b for b in any_of if b.get("type") != "null"]
-            if len(non_null) == 1:
-                spec.pop("anyOf")
-                spec.update(non_null[0])
-        if "default" in spec and spec["default"] is None:
-            spec.pop("default")
+    for spec in raw.get("properties", {}).values():
+        _clean_spec(spec)
     raw.setdefault("required", [])
     return raw
 

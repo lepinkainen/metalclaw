@@ -11,7 +11,6 @@ import re
 import time
 from collections.abc import Callable
 from contextvars import ContextVar
-from datetime import datetime
 
 from pydantic import ValidationError
 
@@ -20,6 +19,7 @@ import history as history_db
 import mcp_client
 import memory
 from config import get_config
+from heartbeat import format_now
 from providers import Provider, get_provider
 from registry import TOOLS
 
@@ -38,6 +38,7 @@ __all__ = [
     "chat_via_escalation",
     "current_scope",
     "forget_session_provider",
+    "format_now",
     "run_turn",
     "scoped_chat",
 ]
@@ -65,6 +66,9 @@ def _parse_command(text: str) -> tuple[str, str] | None:
     if not text.startswith("/"):
         return None
     parts = text[1:].split(None, 1)
+    if not parts:
+        # bare "/" (or "/   ") — surface as an unknown command, never IndexError
+        return "", ""
     return parts[0], parts[1] if len(parts) > 1 else ""
 
 
@@ -124,7 +128,7 @@ def build_system_prompt(now: str) -> str:
 
 def _refresh_system_prompt(messages: list[dict]) -> None:
     """Rewrite messages[0] with current memory summary so mid-session writes are visible."""
-    now = datetime.now().strftime("%Y-%m-%d %H:%M")
+    now = format_now()
     prompt = build_system_prompt(now)
     if messages and messages[0].get("role") == "system":
         messages[0] = {"role": "system", "content": prompt}
@@ -327,7 +331,7 @@ def _chat_with_provider(
             history.extend(provider.format_tool_results(results))
 
             if memory_dirty:
-                now = datetime.now().strftime("%Y-%m-%d %H:%M")
+                now = format_now()
                 system = build_system_prompt(now)
                 log.info(
                     "system prompt rebuilt mid-loop after memory/heartbeat mutator (%d chars)",
@@ -399,15 +403,47 @@ def chat(
     return _chat_with_provider(provider, messages, on_tool_call=on_tool_call)
 
 
+def strip_tool_history(messages: list[dict]) -> list[dict]:
+    """Return a copy of `messages` with only wire-format-agnostic turns.
+
+    Tool-call history is provider-specific (Ollama tool messages carry no
+    ``tool_call_id``; litellm assistant tool_calls carry ids and JSON-string
+    arguments). When a session built on one provider is handed to another,
+    drop ``role: tool`` messages entirely and keep assistant turns as plain
+    text only, so the receiving provider never sees a foreign payload.
+    """
+    out: list[dict] = []
+    for m in messages:
+        role = m.get("role")
+        if role == "tool":
+            continue
+        if role == "assistant":
+            text = m.get("content")
+            if not isinstance(text, str) or not text.strip():
+                continue
+            out.append({"role": "assistant", "content": text})
+            continue
+        out.append(m)
+    return out
+
+
 def chat_via_escalation(
     messages: list[dict],
     on_tool_call: Callable[[str, dict, str], None] | None = None,
 ) -> str:
-    """Run a chat turn through the escalation provider, no recursion into itself."""
+    """Run a chat turn through the escalation provider, no recursion into itself.
+
+    When the escalation provider differs from the session's provider the turn
+    runs on a sanitised copy of the history (see `strip_tool_history`) and only
+    the final assistant text is appended back to `messages`, so neither
+    provider's tool-call wire format ever leaks into the other's session.
+    """
     cfg = get_config()
     if not cfg.escalation_enabled:
         raise RuntimeError("escalation is disabled in config")
     big = get_provider(cfg.escalation_provider, model_override=cfg.escalation_model)
+    cross_provider = cfg.escalation_provider != cfg.provider
+    work = strip_tool_history(messages) if cross_provider else messages
     log.info(
         "escalation start provider=%s model=%s messages=%d",
         cfg.escalation_provider,
@@ -418,15 +454,20 @@ def chat_via_escalation(
     try:
         out = _chat_with_provider(
             big,
-            messages,
+            work,
             on_tool_call=on_tool_call,
             exclude_tools={"escalate_to_big_model"},
         )
     except Exception:
         log.exception("escalation failed after %.2fs", time.monotonic() - t0)
         raise
+    if cross_provider:
+        messages.append({"role": "assistant", "content": out})
     log.info(
-        "escalation end duration=%.2fs reply=%d chars", time.monotonic() - t0, len(out)
+        "escalation end duration=%.2fs reply=%d chars cross_provider=%s",
+        time.monotonic() - t0,
+        len(out),
+        cross_provider,
     )
     return out
 

@@ -82,8 +82,9 @@ aws_region: us-east-1
 # --- Escalation: refer hard questions to a Big Boy cloud model ---
 # When enabled and the active provider is local, the model can call the
 # `escalate_to_big_model` tool, and the user can type `/big <query>` to
-# bypass the local model entirely. escalation_model defaults to
-# litellm_model when escalation_provider == litellm and not set.
+# bypass the local model entirely. escalation_model defaults to the
+# escalation provider's own model (litellm_model for litellm) when unset;
+# the Opus id below is an explicit override.
 escalation_enabled: false
 escalation_provider: litellm
 escalation_model: bedrock/anthropic.claude-opus-4-7
@@ -101,6 +102,9 @@ heartbeat_interval_seconds: 1800
 # unset and an action is created without an explicit channel, the action
 # inherits the scope it was created from (CLI/Telegram chat/Discord channel).
 # heartbeat_default_channel: cli
+# After an action's run or delivery fails, retries back off exponentially
+# (interval, 2x, 4x, ...) up to this cap. Clears on the next success.
+# heartbeat_failure_backoff_max_seconds: 3600
 
 # Allow `/add-tool` (live) and `/self-edit` (CLI) to spawn `claude -p` and
 # mutate the bot's own source. Default true. Set to false on deployments

@@ -78,35 +78,40 @@ preserved.
 ## Heartbeat
 
 Heartbeat is a scheduled, proactive check. The bot can ping you on its
-own when something matches a task you've defined.
+own when something you asked for is due.
 
-To set up a heartbeat task, drop a `heartbeat-<scope>.md` file into
-`<vault>/<memory_subdir>/`. Scope is one of:
+You never edit a file for this: ask in chat ("remind me at 16:00 to call
+the dentist", "every weekday at 07:00 summarise overnight email", "check
+for urgent mail every 30 minutes") and the model records an action in a
+bot-owned ledger at `<vault>/<memory_subdir>/heartbeat.yaml` using its
+`create_heartbeat_action` tool. Three kinds exist:
 
-- `cli` — heartbeat fires in the terminal REPL.
-- `telegram-<chat_id>` — fires as a Telegram message.
-- `discord-<channel_id>` — fires in the channel set by
-  `discord_heartbeat_channel` in config.
+- `at` — one-shot at a timestamp. Naive times are your local time.
+- `cron` — selected weekdays at one local time in an IANA timezone.
+- `every` — a fixed interval in seconds.
 
-The file uses YAML frontmatter listing tasks. Each task has a `name`,
-an `interval` (e.g. `1h`, `30m`), and a `prompt`. See
-`heartbeat.example.md` in the repo root for the full shape.
+Each action remembers which chat created it (`cli`, `telegram-<chat_id>`
+or `discord-<channel_id>`) and reports back there; Discord alerts post to
+the channel set by `discord_heartbeat_channel` in config. Ask the model to
+list or cancel actions in plain language (`list_heartbeat_actions`,
+`cancel_heartbeat_action`). Last-run timestamps and failure counters live in the `heartbeat_state`
+table of `$XDG_DATA_HOME/metalclaw/history.db`; its `meta` column keeps a
+JSON note of what each action last did, handy when debugging.
 
-The scheduler discovers scope files via `discover_scopes()`, runs due
-tasks against the configured provider, and routes the result through
-`channels.for_scope(scope)`. State (last-run timestamps) lives in
-`$XDG_DATA_HOME/metalclaw/heartbeat_state.json`.
-
-If a task has nothing to report, the model is taught to emit the literal
-string `HEARTBEAT_OK` — the bot suppresses the message rather than
-spamming you.
+If a check has nothing to report, the model emits the literal string
+`HEARTBEAT_OK` and the bot stays quiet instead of spamming you. One-shot
+actions are archived only after the alert was actually delivered. A
+failed run or delivery keeps the action active and retries with
+exponential backoff (next tick, then 2x, 4x… up to an hour) so a
+misconfigured channel does not burn a model call every tick; `/status`
+shows actions that are backing off.
 
 `heartbeat_active_hours` in config (e.g. `[8, 22]`) limits when ticks
 can fire.
 
 Slash commands:
 
-- `/heartbeat` — show config and the parsed task list for this scope.
+- `/heartbeat` — show config, active actions and recent completed ones.
 - `/heartbeat run` — fire a tick immediately.
 
 ## Escalation
@@ -116,7 +121,8 @@ delegate hard questions to a bigger cloud model — and you can bypass the
 local model entirely with `/big <query>`.
 
 Escalation goes through the provider configured by `escalation_provider`
-(`anthropic` or `openai`) using `escalation_model`. The local model
+(`litellm` for any cloud model, or `ollama`) using `escalation_model`,
+which defaults to that provider's configured model. The local model
 calls the `escalate_to_big_model` tool on its own when a question is
 beyond its capability (deep code analysis, niche knowledge, complex
 reasoning). It does not escalate trivial requests.

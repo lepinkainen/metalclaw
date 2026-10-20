@@ -27,13 +27,12 @@ Each frontend registers a `Channel` with `channels.register(...)` on startup:
 `channels.for_scope(scope)` resolves:
 - `"cli"` → CLI channel.
 - `"telegram-<id>"` → Telegram channel; channel posts to that `chat_id`.
-- `"discord-<id>"` → Discord channel; channel posts to **`cfg.discord_heartbeat_channel`** regardless of the scope id (one shared dest). If unset, drops with warning.
+- `"discord-<id>"` → Discord channel; channel posts to **`cfg.discord_heartbeat_channel`** regardless of the scope id (one shared dest). If unset or unresolvable, `notify` raises so the heartbeat keeps the action active.
 
-## Active scopes (for `discover_scopes` fallback / `all_active_scopes()`)
+## Active scopes (`channels.all_active_scopes()`)
 
 - CLI: always `("cli",)`.
-- Telegram: every `chat_id` in `_known_chats` (persisted to `$XDG_DATA_HOME/metalclaw/telegram_chats.json`).
-- Discord: every `channel.id` in `_known_discord_channels` (in-memory only; populated as messages arrive).
+- Telegram: every `chat_id` in `_known_chats`; Discord: every `channel.id` in `_known_discord_channels`. Both are in-memory mirrors of the `known_chats` table in `history.db` (`frontend`, `chat_id`, `first_seen`, `last_seen`, `meta` JSON), loaded at frontend start and touched per handled message, so fan-out survives restarts on both frontends. Debug: `sqlite3 history.db 'select * from known_chats'`.
 
 ## Slash commands
 

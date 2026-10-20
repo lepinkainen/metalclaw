@@ -18,7 +18,8 @@ Tests import directly from the defining module — `chat_loop._chat_with_provide
 
 ## `messages` mutation contract
 
-- `chat()` and `chat_via_escalation()` mutate the passed list in place via `messages[:] = ...` at end.
+- `chat()` and `chat_via_escalation()` mutate the passed list in place via `messages[:] = ...` at end — except cross-provider escalation, which works on a `strip_tool_history` copy and appends only the final assistant text (foreign tool-call payloads must never enter the session).
+- `_parse_command("/")` returns `("", "")` (unknown command), never raises.
 - Frontends append the user message then call `chat`. On exception they `pop()` to revert.
 - The system message at index 0 is **rebuilt** by `_refresh_system_prompt` before each turn AND mid-loop on memory writes — don't rely on `messages[0]` content to be stable across a turn.
 
@@ -40,11 +41,11 @@ Ollama/OpenAI append one history entry per tool result. **Anthropic appends one 
 
 ## Discord heartbeat scope vs channel
 
-`discord-<channel_id>` scopes all post to **`cfg.discord_heartbeat_channel`**, not back to the `channel_id` in the scope string. By design — heartbeats post to one shared place. If unset → drop with warning.
+`discord-<channel_id>` scopes all post to **`cfg.discord_heartbeat_channel`**, not back to the `channel_id` in the scope string. By design — heartbeats post to one shared place. If unset → `notify` **raises** and `run_tick` keeps the action active (it is never silently archived).
 
 ## Telegram chat-id persistence
 
-`_known_chats` persists to JSON on every new chat. If the file is deleted, only chats that send a message after restart are eligible for heartbeat fan-out via `active_scopes()` — but `discover_scopes()` (file-based) still works.
+`_known_chats` (Telegram) and `_known_discord_channels` (Discord) are in-memory mirrors of the `known_chats` table in `history.db`, loaded at frontend start and touched on every handled message (`last_seen` + merged `meta`). Deleting rows means only chats that message again after restart are eligible for heartbeat fan-out via `active_scopes()`; actions in the ledger still address their `channel` directly, so a known `telegram-<id>` action is unaffected. A DB failure in `_remember_chat` is logged and the in-memory set still updates.
 
 ## Config caching
 
@@ -54,13 +55,13 @@ Ollama/OpenAI append one history entry per tool result. **Anthropic appends one 
 
 Pydantic silently drops unknown yaml fields. Typos in `config.yaml` won't error. Add tests for new fields rather than relying on validation to catch typos.
 
-## Heartbeat YAML parsing alternatives
+## Heartbeat `at` timestamps: naive = local
 
-`_split_yaml` accepts four input shapes (`heartbeat.py:108`). Bare YAML doc requires a top-level `tasks:` key, else falls through to "no frontmatter" and the whole file becomes the body.
+`heartbeat.parse_iso` attaches the process-local zone to a tz-naive value (`datetime.astimezone()` on a naive dt). The prompt clock (`heartbeat.format_now`) carries the UTC offset so the model usually emits aware values anyway. Don't switch naive back to UTC: the model mirrors the prompt's wall clock.
 
 ## Heartbeat sentinel match is permissive
 
-`clean == SENTINEL or clean.startswith(SENTINEL)` — model output `"HEARTBEAT_OK (nothing urgent)"` is silenced. If you want strict equality, change `heartbeat.py:280` — but the permissive match was deliberate.
+`SENTINEL in clean` (`heartbeat.run_tick`) — model output `"HEARTBEAT_OK (nothing urgent)"` is silenced. The permissive match was deliberate. An empty reply with no sentinel is NOT an ack: it is treated as a failed run and the action stays active.
 
 ## httpx Client lifetime
 

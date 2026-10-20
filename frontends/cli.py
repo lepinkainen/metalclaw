@@ -22,6 +22,7 @@ from chat_loop import (
     build_system_prompt,
     chat,
     chat_via_escalation,
+    format_now,
     run_turn,
     scoped_chat,
 )
@@ -298,7 +299,7 @@ async def run_cli_repl() -> None:
     channels.register(_CLIChannel())
     log.info("cli: REPL starting")
 
-    now = datetime.now().strftime("%Y-%m-%d %H:%M")
+    now = format_now()
     session_id = datetime.now().strftime("%Y%m%dT%H%M%S")
     hist = SQLiteHistory(session_id)
     _prompt_session = PromptSession(

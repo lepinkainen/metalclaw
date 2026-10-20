@@ -58,7 +58,7 @@ Tests import directly from the module that defines the symbol — `chat_loop`, `
 - Each user turn runs through `chat_loop.run_turn` (`chat_loop.py:273`), which dispatches the blocking provider call via a single `loop.run_in_executor(None, chat_call)` (`chat_loop.py:296`). All three frontends (CLI `frontends/cli.py:167,318`; Telegram `frontends/telegram.py:239`; Discord `frontends/discord.py:270`) share that path. Heartbeat has its own executor call at `heartbeat.py:303`.
 - Discord runs handlers concurrently per channel; `frontends/discord.py:24-33` keeps a per-channel `asyncio.Lock` to serialize session mutations. Telegram does not need one because PTB serializes updates per-chat by default (see comment near `frontends/telegram.py:256`).
 - Memory mutations: per-process `threading.Lock` + `fcntl.flock` cross-process on sidecar `memory.md.lock` (`memory.py:179`).
-- SQLite `history.db` (`history.py`): one process-wide shared connection (`check_same_thread=False`) guarded by `history._LOCK`; used by the CLI `SQLiteHistory`, Telegram/Discord turn recording, `search_conversation_history`, and `usage` recording from executor threads.
+- SQLite `history.db` (`history.py`): one process-wide shared connection (`check_same_thread=False`) guarded by `history._LOCK`; used by the CLI `SQLiteHistory`, Telegram/Discord turn recording, `search_conversation_history`, `usage` recording from executor threads, and the heartbeat scheduler's per-action state (`heartbeat_state` table).
 
 ## Provider abstraction invariants
 

@@ -173,19 +173,152 @@ def test_cancel_unknown_action(cfg):
     assert heartbeat.cancel("ffffff") is None
 
 
-# --- state file ---
+# --- state (heartbeat_state table in history.db) ---
 
 
-def test_state_round_trip(cfg):
+def _state_rows():
+    import history
+
+    return history.heartbeat_state_all()
+
+
+def test_state_empty_by_default(cfg):
     assert heartbeat.load_state() == {}
-    heartbeat.save_state({"abc123": "2026-05-07T12:00:00+00:00"})
-    assert heartbeat.load_state() == {"abc123": "2026-05-07T12:00:00+00:00"}
+    assert heartbeat.get_state("nope") is None
 
 
-def test_state_legacy_flat_format(cfg):
-    path = heartbeat._state_path()
-    path.write_text(json.dumps({"abc123": "2026-05-07T12:00:00+00:00"}))
-    assert heartbeat.load_state() == {"abc123": "2026-05-07T12:00:00+00:00"}
+def test_mark_failure_and_success_round_trip(cfg):
+    a = _every(action_id="abc123")
+    now = datetime(2026, 5, 7, 12, 0, tzinfo=UTC)
+    assert heartbeat.mark_failure(a, now, "boom") == 1
+    assert heartbeat.mark_failure(a, now + timedelta(minutes=1), "boom again") == 2
+    st = heartbeat.get_state("abc123")
+    assert st is not None
+    assert st.last_run is None
+    assert st.failure_count == 2
+    assert st.last_failed == (now + timedelta(minutes=1)).isoformat()
+    assert st.retry_at() == now + timedelta(minutes=1, seconds=120)
+    assert st.meta["last_outcome"] == "failed"
+    assert st.meta["last_error"] == "boom again"
+    assert st.meta["kind"] == "every" and st.meta["channel"] == "cli"
+    assert st.updated_at
+
+    heartbeat.mark_success(a, now + timedelta(minutes=5), last_outcome="notified")
+    st = heartbeat.get_state("abc123")
+    assert st is not None
+    assert st.last_run == (now + timedelta(minutes=5)).isoformat()
+    assert st.failure_count == 0 and st.last_failed is None
+    assert st.retry_at() is None
+    # meta is merged, not replaced: the old error key survives, outcome updated
+    assert st.meta["last_outcome"] == "notified"
+    assert st.meta["last_error"] == "boom again"
+
+
+def test_state_meta_survives_corrupt_json(cfg):
+    import history
+
+    history.heartbeat_state_import(
+        [("zz", None, 0, None, "2026-01-01T00:00:00+00:00", "{not json")]
+    )
+    st = heartbeat.get_state("zz")
+    assert st is not None and "_corrupt_meta" in st.meta
+    heartbeat.mark_failure(_every(action_id="zz"), datetime.now(UTC), "x")
+    st = heartbeat.get_state("zz")
+    assert st is not None and st.meta["last_error"] == "x"
+
+
+def test_forget_and_prune_state(cfg):
+    now = datetime.now(UTC)
+    for aid in ("a1", "b2", "c3"):
+        heartbeat.mark_success(_every(action_id=aid), now)
+    heartbeat.forget_state("a1")
+    assert set(heartbeat.load_state()) == {"b2", "c3"}
+    assert heartbeat.prune_state({"c3"}) == 1
+    assert set(heartbeat.load_state()) == {"c3"}
+    assert heartbeat.prune_state(set()) == 1
+    assert heartbeat.load_state() == {}
+
+
+def test_backoff_seconds_doubles_and_caps(cfg):
+    base = config.get_config().heartbeat_interval_seconds  # 60 in fixture
+    assert heartbeat.backoff_seconds(1) == base
+    assert heartbeat.backoff_seconds(2) == base * 2
+    assert heartbeat.backoff_seconds(3) == base * 4
+    assert heartbeat.backoff_seconds(100) == 3600
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"abc123": "2026-05-07T12:00:00+00:00"},
+        {"version": 1, "last_run": {"abc123": "2026-05-07T12:00:00+00:00"}},
+        {
+            "version": 2,
+            "last_run": {"abc123": "2026-05-07T12:00:00+00:00"},
+            "failures": {
+                "def456": {"count": 2, "last_failed": "2026-05-07T12:30:00+00:00"},
+                "bad": {"count": "x"},
+                "zero": {"count": 0, "last_failed": "2026-05-07T12:30:00+00:00"},
+            },
+        },
+    ],
+)
+def test_legacy_json_state_is_migrated(cfg, payload):
+    path = heartbeat._legacy_state_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload))
+    heartbeat.reset_state_migration_flag()
+
+    st = heartbeat.load_state()
+    assert st["abc123"].last_run == "2026-05-07T12:00:00+00:00"
+    assert st["abc123"].meta == {"migrated_from": "heartbeat_state.json"}
+    if "failures" in payload:
+        assert st["def456"].failure_count == 2
+        assert st["def456"].last_failed == "2026-05-07T12:30:00+00:00"
+        assert st["def456"].last_run is None
+        assert "bad" not in st and "zero" not in st
+    assert not path.exists()
+    assert path.with_suffix(".json.bak").exists()
+    # second load must not re-import
+    heartbeat.reset_state_migration_flag()
+    assert set(heartbeat.load_state()) == set(st)
+
+
+def test_cancel_forgets_state(cfg):
+    a = heartbeat.create_action(
+        kind=heartbeat.ActionKind.EVERY,
+        prompt="poll",
+        channel="cli",
+        created_from="cli",
+        every=1,
+    )
+    heartbeat.mark_success(a, datetime.now(UTC))
+    assert a.id in heartbeat.load_state()
+    heartbeat.cancel(a.id)
+    assert a.id not in heartbeat.load_state()
+
+
+def test_generate_id_skips_ids_with_state(cfg, monkeypatch):
+    now = datetime.now(UTC)
+    heartbeat.mark_success(_every(action_id="aaaaaa"), now)
+    tokens = iter(["aaaaaa", "bbbbbb"])
+    monkeypatch.setattr(heartbeat.secrets, "token_hex", lambda n: next(tokens))
+    a = heartbeat.create_action(
+        kind=heartbeat.ActionKind.EVERY,
+        prompt="poll",
+        channel="cli",
+        created_from="cli",
+        every=1,
+    )
+    assert a.id == "bbbbbb"
+
+
+def test_run_tick_prunes_orphan_state(cfg):
+    heartbeat.mark_success(_every(action_id="orphan"), datetime.now(UTC))
+    channels.register(_StubChannel())
+    with patch("chat_loop.chat", return_value="HEARTBEAT_OK"):
+        asyncio.run(heartbeat.run_tick())
+    assert "orphan" not in heartbeat.load_state()
 
 
 # --- due logic ---
@@ -422,6 +555,31 @@ def test_run_tick_one_shot_kept_when_notify_fails(cfg):
     assert ledger.completed == []
 
 
+def test_run_tick_empty_reply_keeps_one_shot_active(cfg):
+    now = datetime.now(UTC)
+    fire_at = (now - timedelta(minutes=1)).isoformat()
+    heartbeat.create_action(
+        kind=heartbeat.ActionKind.AT,
+        prompt="remind kettle",
+        channel="cli",
+        created_from="cli",
+        at=fire_at,
+    )
+    ch = _StubChannel()
+    channels.register(ch)
+
+    with patch("chat_loop.chat", return_value=""):
+        replies = asyncio.run(heartbeat.run_tick())
+    assert replies == {}
+    assert ch.calls == []
+    ledger = heartbeat.load_ledger()
+    assert len(ledger.actions) == 1
+    assert ledger.completed == []
+    st = heartbeat.load_state()
+    assert [v.failure_count for v in st.values()] == [1]
+    assert all(v.last_run is None for v in st.values())
+
+
 def test_run_tick_no_channel_resolvable_keeps_action_active(cfg):
     heartbeat.create_action(
         kind=heartbeat.ActionKind.EVERY,
@@ -588,3 +746,150 @@ def test_for_scope_routes_telegram():
     assert channels.for_scope("telegram-123") is not None
     assert channels.for_scope("cli") is None
     channels.CHANNELS.clear()
+
+
+def test_parse_iso_naive_is_local_time():
+    naive = "2026-10-20T16:00:00"
+    dt = heartbeat.parse_iso(naive)
+    assert dt.tzinfo is not None
+    local = datetime(2026, 10, 20, 16, 0).astimezone()
+    assert dt == local
+    assert dt.hour == 16 and dt.utcoffset() == local.utcoffset()
+
+
+def test_parse_iso_aware_preserved():
+    dt = heartbeat.parse_iso("2026-10-20T16:00:00+03:00")
+    assert dt.utcoffset() == timedelta(hours=3)
+    assert dt.hour == 16
+
+
+def test_format_now_includes_offset():
+    s = heartbeat.format_now(datetime(2026, 10, 20, 15, 30).astimezone())
+    assert s.startswith("2026-10-20 15:30 ")
+    assert "(UTC+" in s or "(UTC-" in s
+
+
+def test_system_prompt_clock_has_offset():
+    from chat_loop import build_system_prompt, format_now
+
+    prompt = build_system_prompt(format_now())
+    assert "(UTC+" in prompt or "(UTC-" in prompt
+
+
+def _fail_channel():
+    class _FailChannel:
+        name = "cli"
+        calls = 0
+
+        async def notify(self, scope, text):
+            type(self).calls += 1
+            raise RuntimeError("gateway down")
+
+        def active_scopes(self):
+            return ("cli",)
+
+    return _FailChannel
+
+
+def test_run_tick_failed_delivery_backs_off(cfg):
+    heartbeat.create_action(
+        kind=heartbeat.ActionKind.EVERY,
+        prompt="poll",
+        channel="cli",
+        created_from="cli",
+        every=1,
+    )
+    fc = _fail_channel()
+    channels.register(fc())
+    t0 = datetime(2026, 5, 7, 12, 0, tzinfo=UTC)
+    interval = config.get_config().heartbeat_interval_seconds
+
+    with patch("chat_loop.chat", return_value="ALERT") as chat:
+        asyncio.run(heartbeat.run_tick(now=t0))  # fails: failure #1
+        assert chat.call_count == 1
+        st = heartbeat.load_state()
+        assert [v.failure_count for v in st.values()] == [1]
+
+        # still inside backoff window → no model call
+        asyncio.run(heartbeat.run_tick(now=t0 + timedelta(seconds=interval // 2)))
+        assert chat.call_count == 1
+
+        # after one interval → retried, fails again: failure #2
+        asyncio.run(heartbeat.run_tick(now=t0 + timedelta(seconds=interval)))
+        assert chat.call_count == 2
+        # backoff now 2*interval → skipped at +interval, runs at +2*interval
+        asyncio.run(heartbeat.run_tick(now=t0 + timedelta(seconds=2 * interval)))
+        assert chat.call_count == 2
+        asyncio.run(heartbeat.run_tick(now=t0 + timedelta(seconds=3 * interval)))
+        assert chat.call_count == 3
+    assert fc.calls == 3
+
+
+def test_run_tick_success_clears_backoff(cfg):
+    heartbeat.create_action(
+        kind=heartbeat.ActionKind.EVERY,
+        prompt="poll",
+        channel="cli",
+        created_from="cli",
+        every=1,
+    )
+    fc = _fail_channel()
+    channels.register(fc())
+    t0 = datetime(2026, 5, 7, 12, 0, tzinfo=UTC)
+    interval = config.get_config().heartbeat_interval_seconds
+    with patch("chat_loop.chat", return_value="ALERT"):
+        asyncio.run(heartbeat.run_tick(now=t0))
+    assert [v.failure_count for v in heartbeat.load_state().values()] == [1]
+
+    ok = _StubChannel()
+    channels.register(ok)
+    with patch("chat_loop.chat", return_value="ALERT"):
+        asyncio.run(heartbeat.run_tick(now=t0 + timedelta(seconds=interval)))
+    st = heartbeat.load_state()
+    assert [v.failure_count for v in st.values()] == [0]
+    assert ok.calls == [("cli", "ALERT")]
+    assert [v.last_run for v in st.values()] == [
+        (t0 + timedelta(seconds=interval)).isoformat()
+    ]
+    (row,) = st.values()
+    assert row.meta["last_outcome"] == "notified"
+    assert row.meta["target"] == "cli"
+    assert row.meta["last_error"].startswith("channel notify failed")
+
+
+def test_run_tick_sentinel_clears_backoff(cfg):
+    heartbeat.create_action(
+        kind=heartbeat.ActionKind.EVERY,
+        prompt="poll",
+        channel="cli",
+        created_from="cli",
+        every=1,
+    )
+    channels.register(_StubChannel())
+    t0 = datetime(2026, 5, 7, 12, 0, tzinfo=UTC)
+    interval = config.get_config().heartbeat_interval_seconds
+    with patch("chat_loop.chat", return_value=""):
+        asyncio.run(heartbeat.run_tick(now=t0))
+    assert [v.failure_count for v in heartbeat.load_state().values()] == [1]
+    with patch("chat_loop.chat", return_value="HEARTBEAT_OK"):
+        asyncio.run(heartbeat.run_tick(now=t0 + timedelta(seconds=interval)))
+    st = heartbeat.load_state()
+    assert [v.failure_count for v in st.values()] == [0]
+    assert [v.meta["last_outcome"] for v in st.values()] == ["suppressed"]
+
+
+def test_status_shows_backoff(cfg):
+    from frontends import common
+
+    heartbeat.create_action(
+        kind=heartbeat.ActionKind.EVERY,
+        prompt="poll",
+        channel="cli",
+        created_from="cli",
+        every=1,
+    )
+    channels.register(_fail_channel()())
+    with patch("chat_loop.chat", return_value="ALERT"):
+        asyncio.run(heartbeat.run_tick())
+    text = common.format_status()
+    assert "1 failure, backing off" in text

@@ -5,7 +5,7 @@
 ## Entry points
 
 - `chat(messages, on_tool_call=None) -> str` — uses configured provider.
-- `chat_via_escalation(messages) -> str` — uses `cfg.escalation_provider` + `cfg.escalation_model`. Excludes `escalate_to_big_model` from tool list to prevent recursion.
+- `chat_via_escalation(messages) -> str` — uses `cfg.escalation_provider` + `cfg.escalation_model`. Excludes `escalate_to_big_model` from tool list to prevent recursion. If `escalation_provider != provider` the turn runs on `strip_tool_history(messages)` (a copy with `role: tool` messages dropped and assistant turns reduced to plain text — tool-call wire formats are provider-specific, e.g. Ollama tool results have no `tool_call_id`) and only `{"role": "assistant", "content": out}` is appended back; same-provider escalation mutates `messages` in place as before.
 
 Both mutate `messages` **in place**, appending the provider-native tool-call/result entries plus the final assistant text.
 
@@ -68,7 +68,7 @@ Strips `<think>...</think>` blocks (Gemma/QwQ-style). Returns `(thinking, clean)
 1. `big = get_provider(cfg.escalation_provider, model_override=cfg.escalation_model)`.
 2. `_chat_with_provider(big, messages, exclude_tools={"escalate_to_big_model"})`.
 
-The `escalate_to_big_model` tool itself (in `tools/escalation.py`) does **not** call `chat_via_escalation` — it directly calls `chat_loop._chat_with_provider(big, sub_messages, exclude_tools=...)` with a snapshot of the active session. This avoids appending the escalation result into the active history; the model gets the answer back as a tool result.
+The `escalate_to_big_model` tool itself (in `tools/escalation.py`) does **not** call `chat_via_escalation` — it directly calls `chat_loop._chat_with_provider(big, sub_messages, exclude_tools=...)` with a snapshot of the active session (passed through `strip_tool_history` when the escalation provider differs from `cfg.provider`). This avoids appending the escalation result into the active history; the model gets the answer back as a tool result.
 
 ## Tool-result formatting per provider
 

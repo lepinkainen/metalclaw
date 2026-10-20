@@ -1,5 +1,7 @@
 import asyncio
 
+import pytest
+
 import channels as channels_mod
 from frontends import discord as discord_frontend
 from frontends.discord import (
@@ -115,11 +117,31 @@ class _FakeClient:
         return self._channel
 
 
-def test_discord_channel_drops_when_unconfigured():
+def test_discord_channel_raises_when_unconfigured():
     fake_client = _FakeClient()
     channel = _DiscordChannel(fake_client, heartbeat_channel_id=None)
-    asyncio.run(channel.notify("discord-1", "ping"))
+    with pytest.raises(RuntimeError):
+        asyncio.run(channel.notify("discord-1", "ping"))
     assert fake_client.fetched_id is None
+
+
+def test_discord_channel_raises_when_channel_unresolvable():
+    fake_client = _FakeClient(channel=None)
+    channel = _DiscordChannel(fake_client, heartbeat_channel_id=4242)
+    with pytest.raises(RuntimeError):
+        asyncio.run(channel.notify("discord-1", "ping"))
+    assert fake_client.fetched_id == 4242
+
+
+def test_discord_channel_raises_when_send_fails():
+    class _Broken:
+        async def send(self, text):
+            raise RuntimeError("gateway down")
+
+    fake_client = _FakeClient(channel=_Broken())
+    channel = _DiscordChannel(fake_client, heartbeat_channel_id=4242)
+    with pytest.raises(RuntimeError):
+        asyncio.run(channel.notify("discord-1", "ping"))
 
 
 def test_discord_channel_sends_to_configured_channel():

@@ -170,7 +170,7 @@ def test_telegram_debounces_messages_into_one_turn(cfg_file, write_config, monke
     monkeypatch.setattr(tg, "_tg_reply", fake_reply)
     monkeypatch.setattr(tg, "_typing", fake_typing)
     monkeypatch.setattr(tg, "_tool_status_for", lambda *_: None)
-    monkeypatch.setattr(tg, "_remember_chat", lambda _: None)
+    monkeypatch.setattr(tg, "_remember_chat", lambda *_a, **_k: None)
     monkeypatch.setattr(tg, "build_system_prompt", lambda _: "sys")
 
     def upd(n, text):

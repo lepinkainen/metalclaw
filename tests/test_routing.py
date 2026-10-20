@@ -33,3 +33,12 @@ def test_not_a_command_returns_none():
 
 def test_plain_sentence_not_a_command():
     assert _parse_command("add a tool please") is None
+
+
+def test_parse_command_bare_slash_is_unknown_command():
+    from chat_loop import _parse_command
+
+    assert _parse_command("/") == ("", "")
+    assert _parse_command("/   ") == ("", "")
+    assert _parse_command("/help") == ("help", "")
+    assert _parse_command("/big  hard  q") == ("big", "hard  q")

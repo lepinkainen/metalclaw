@@ -737,9 +737,17 @@ def format_status() -> str:
         )
     now = datetime.now(UTC)
     for a in actions:
-        nxt = heartbeat.next_due(a, state.get(a.id), now)
+        st = state.get(a.id)
+        nxt = heartbeat.next_due(a, st.last_run if st else None, now)
+        retry = st.retry_at() if st else None
+        if nxt is not None and retry is not None and retry > nxt:
+            nxt = retry
         when = "never" if nxt is None else nxt.astimezone().strftime("%Y-%m-%d %H:%M")
-        lines.append(f"  • {a.id} [{a.kind}] next: {when} | {a.prompt[:50]}")
+        suffix = ""
+        if st is not None and st.failure_count > 0:
+            plural = "s" if st.failure_count != 1 else ""
+            suffix = f" ({st.failure_count} failure{plural}, backing off)"
+        lines.append(f"  • {a.id} [{a.kind}] next: {when}{suffix} | {a.prompt[:50]}")
     servers = mcp_client.status()
     if servers:
         lines.append(f"mcp: {len(servers)} configured")

@@ -4,7 +4,6 @@ import asyncio
 import logging
 import re
 from collections.abc import Iterable
-from datetime import datetime
 from typing import cast
 
 import discord
@@ -16,6 +15,7 @@ from chat_loop import (
     build_system_prompt,
     chat,
     forget_session_provider,
+    format_now,
     run_turn,
     scoped_chat,
 )
@@ -27,7 +27,46 @@ log = logging.getLogger(__name__)
 
 _discord_sessions: dict[int, list[dict]] = {}
 _discord_session_locks: dict[int, asyncio.Lock] = {}
+# In-memory mirror of the ``known_chats`` rows for frontend="discord"
+# (history.db). Loaded in ``start_discord``; every handled message touches the row.
 _known_discord_channels: set[int] = set()
+_FRONTEND = "discord"
+
+
+def _load_known_channels() -> set[int]:
+    out: set[int] = set()
+    for cid in history.known_chat_ids(_FRONTEND):
+        try:
+            out.add(int(cid))
+        except ValueError:
+            log.warning("discord: ignoring non-integer known channel id %r", cid)
+    return out
+
+
+def _channel_meta(message: discord.Message) -> dict:
+    ch = message.channel
+    guild = getattr(message, "guild", None)
+    return {
+        "type": type(ch).__name__,
+        "name": getattr(ch, "name", None),
+        "guild": getattr(guild, "name", None),
+        "guild_id": getattr(guild, "id", None),
+        "author": str(message.author) if message.author else None,
+    }
+
+
+def _remember_channel(channel_id: int, meta: dict | None = None) -> None:
+    try:
+        history.known_chat_touch(_FRONTEND, str(channel_id), meta)
+    except Exception:
+        log.exception("discord: could not persist known channel %d", channel_id)
+    if channel_id not in _known_discord_channels:
+        _known_discord_channels.add(channel_id)
+        log.info(
+            "discord: new channel remembered channel_id=%d (known=%d)",
+            channel_id,
+            len(_known_discord_channels),
+        )
 
 
 def _session_lock(channel_id: int) -> asyncio.Lock:
@@ -94,8 +133,15 @@ def _split_for_discord(text: str, limit: int = _DISCORD_MAX_MESSAGE) -> list[str
     return fixed
 
 
-async def _discord_send(channel: discord.abc.Messageable, text: str) -> None:
-    """Send text to a Discord channel, splitting if it exceeds the 2000-char limit."""
+async def _discord_send(
+    channel: discord.abc.Messageable, text: str, *, raise_on_error: bool = False
+) -> None:
+    """Send text to a Discord channel, splitting if it exceeds the 2000-char limit.
+
+    Send errors are logged and swallowed for interactive replies; pass
+    ``raise_on_error=True`` (heartbeat notify) so the caller can keep the
+    action active instead of counting a dropped message as delivered.
+    """
     if not text:
         return
     chunks = _split_for_discord(text)
@@ -104,6 +150,8 @@ async def _discord_send(channel: discord.abc.Messageable, text: str) -> None:
         try:
             await channel.send(chunk)
         except Exception as e:
+            if raise_on_error:
+                raise
             log.warning("discord send failed: %s", e, exc_info=True)
             return
 
@@ -125,23 +173,20 @@ class _DiscordChannel:
         self._heartbeat_channel_id = heartbeat_channel_id
 
     async def notify(self, scope: str, text: str) -> None:
+        """Deliver a heartbeat alert; raises on any failure so `run_tick`
+        keeps the action active (never silently drops a reminder)."""
         if self._heartbeat_channel_id is None:
-            log.warning(
-                "discord heartbeat: discord_heartbeat_channel unset, dropping reply for scope %s",
-                scope,
+            raise RuntimeError(
+                f"discord_heartbeat_channel unset; cannot deliver to scope {scope}"
             )
-            return
         ch = self._client.get_channel(self._heartbeat_channel_id)
         if ch is None:
             try:
                 ch = await self._client.fetch_channel(self._heartbeat_channel_id)
-            except Exception as e:  # noqa: BLE001
-                log.warning(
-                    "discord heartbeat: cannot resolve channel %s: %s",
-                    self._heartbeat_channel_id,
-                    e,
-                )
-                return
+            except Exception as e:
+                raise RuntimeError(
+                    f"cannot resolve discord channel {self._heartbeat_channel_id}: {e}"
+                ) from e
         log.info(
             "discord: notify channel=%s %d chars (scope %s)",
             self._heartbeat_channel_id,
@@ -149,7 +194,9 @@ class _DiscordChannel:
             scope,
         )
         # ids come from the configured heartbeat channel, which is a text channel
-        await _discord_send(cast(discord.abc.Messageable, ch), text)
+        await _discord_send(
+            cast(discord.abc.Messageable, ch), text, raise_on_error=True
+        )
 
     def active_scopes(self) -> Iterable[str]:
         return tuple(common.discord_scope(cid) for cid in _known_discord_channels)
@@ -158,7 +205,7 @@ class _DiscordChannel:
 def _get_discord_session(channel_id: int) -> list[dict]:
     if channel_id not in _discord_sessions:
         log.info("discord: new session channel_id=%d", channel_id)
-        now = datetime.now().strftime("%Y-%m-%d %H:%M")
+        now = format_now()
         _discord_sessions[channel_id] = [
             {"role": "system", "content": build_system_prompt(now)}
         ]
@@ -340,7 +387,7 @@ async def _discord_handle_message(
         return
 
     channel_id = message.channel.id
-    _known_discord_channels.add(channel_id)
+    _remember_channel(channel_id, _channel_meta(message))
 
     if parsed is not None:
         cmd, args = parsed
@@ -400,6 +447,7 @@ async def start_discord(token: str) -> tuple[discord.Client, asyncio.Task]:
     cfg = get_config()
     intents = discord.Intents.default()
     intents.message_content = True
+    _known_discord_channels.update(_load_known_channels())
     client = _MetalclawDiscordClient(intents=intents)
     channels.register(_DiscordChannel(client, cfg.discord_heartbeat_channel))
     task = asyncio.create_task(client.start(token))

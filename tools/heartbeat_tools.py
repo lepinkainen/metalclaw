@@ -44,8 +44,10 @@ class _CreateHeartbeatActionArgs(BaseModel):
     at: str | None = Field(
         default=None,
         description=(
-            "Required when kind='at'. ISO-8601 timestamp (e.g. "
-            "'2026-05-08T15:30:00+03:00'). Tz-naive values are treated as UTC."
+            "Required when kind='at'. ISO-8601 timestamp, preferably with the "
+            "UTC offset shown in the current-time line of your instructions "
+            "(e.g. '2026-05-08T15:30:00+03:00'). Tz-naive values are treated "
+            "as the user's local time."
         ),
     )
     schedule: _CronScheduleArgs | None = Field(

@@ -3,9 +3,9 @@
 import asyncio
 import json
 import logging
+import os
 from collections.abc import Iterable
 from contextlib import asynccontextmanager, nullcontext
-from datetime import datetime
 from pathlib import Path
 
 from telegram import BotCommand, Update
@@ -26,6 +26,7 @@ from chat_loop import (
     build_system_prompt,
     chat,
     forget_session_provider,
+    format_now,
     run_turn,
     scoped_chat,
 )
@@ -37,39 +38,75 @@ log = logging.getLogger(__name__)
 
 _telegram_sessions: dict[int, list[dict]] = {}
 _telegram_chat_locks: dict[int, asyncio.Lock] = {}
+# In-memory mirror of the ``known_chats`` rows for frontend="telegram"
+# (history.db). Loaded in ``start_telegram``; every message touches the row.
 _known_chats: set[int] = set()
+_FRONTEND = "telegram"
+_LEGACY_CHATS_FILENAME = "telegram_chats.json"
 
 
-def _telegram_chats_path() -> Path:
-    return xdg_data_dir() / "telegram_chats.json"
+def _legacy_chats_path() -> Path:
+    return xdg_data_dir() / _LEGACY_CHATS_FILENAME
 
 
-def _load_known_chats() -> set[int]:
-    path = _telegram_chats_path()
+def _migrate_legacy_chats_file() -> None:
+    """One-time import of the pre-SQLite ``telegram_chats.json`` list, then ``.bak``."""
+    path = _legacy_chats_path()
     if not path.exists():
-        return set()
+        return
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
     except OSError, json.JSONDecodeError:
-        log.exception("telegram: could not read known chats from %s", path)
-        return set()
-    return {int(x) for x in data} if isinstance(data, list) else set()
-
-
-def _save_known_chats(chats: set[int]) -> None:
-    _telegram_chats_path().write_text(json.dumps(sorted(chats)), encoding="utf-8")
-
-
-def _remember_chat(chat_id: int) -> None:
-    if chat_id in _known_chats:
+        log.exception("telegram: legacy known-chats file unreadable, leaving %s", path)
         return
-    _known_chats.add(chat_id)
-    log.info(
-        "telegram: new chat remembered chat_id=%d (known=%d)",
-        chat_id,
-        len(_known_chats),
+    ids = [str(int(x)) for x in data] if isinstance(data, list) else []
+    history.known_chats_import(
+        _FRONTEND, ids, {"migrated_from": _LEGACY_CHATS_FILENAME}
     )
-    _save_known_chats(_known_chats)
+    backup = path.with_suffix(path.suffix + ".bak")
+    try:
+        os.replace(path, backup)
+    except OSError as e:
+        log.warning("telegram: could not rename %s -> %s: %s", path, backup, e)
+    log.info("telegram: migrated %d known chat(s) from %s", len(ids), path.name)
+
+
+def _load_known_chats() -> set[int]:
+    _migrate_legacy_chats_file()
+    out: set[int] = set()
+    for cid in history.known_chat_ids(_FRONTEND):
+        try:
+            out.add(int(cid))
+        except ValueError:
+            log.warning("telegram: ignoring non-integer known chat id %r", cid)
+    return out
+
+
+def _chat_meta(update: Update) -> dict:
+    chat = update.effective_chat
+    user = update.effective_user
+    return {
+        "type": getattr(chat, "type", None),
+        "title": getattr(chat, "title", None),
+        "username": getattr(user, "username", None),
+        "user_id": getattr(user, "id", None),
+    }
+
+
+def _remember_chat(chat_id: int, meta: dict | None = None) -> None:
+    try:
+        created = history.known_chat_touch(_FRONTEND, str(chat_id), meta)
+    except Exception:
+        log.exception("telegram: could not persist known chat %d", chat_id)
+        created = chat_id not in _known_chats
+    if chat_id not in _known_chats:
+        _known_chats.add(chat_id)
+        log.info(
+            "telegram: new chat remembered chat_id=%d created=%s (known=%d)",
+            chat_id,
+            created,
+            len(_known_chats),
+        )
 
 
 def _chat_lock(chat_id: int) -> asyncio.Lock:
@@ -143,8 +180,8 @@ class _TelegramChannel:
     async def notify(self, scope: str, text: str) -> None:
         chat_id = common.parse_telegram_scope(scope)
         if chat_id is None:
-            log.warning("telegram: notify with unparseable scope %r", scope)
-            return
+            # raise so heartbeat keeps the action active instead of archiving it
+            raise ValueError(f"telegram: notify with unparseable scope {scope!r}")
         log.info("telegram: notify chat_id=%d %d chars", chat_id, len(text))
         html_text = telegram_format.to_html(text)
         try:
@@ -162,7 +199,7 @@ class _TelegramChannel:
 def _get_telegram_session(chat_id: int) -> list[dict]:
     if chat_id not in _telegram_sessions:
         log.info("telegram: new session chat_id=%d", chat_id)
-        now = datetime.now().strftime("%Y-%m-%d %H:%M")
+        now = format_now()
         _telegram_sessions[chat_id] = [
             {"role": "system", "content": build_system_prompt(now)}
         ]
@@ -320,7 +357,7 @@ async def _telegram_handle_message(
         len(text),
     )
     log.debug("telegram: message text: %.500s", text)
-    _remember_chat(chat_id)
+    _remember_chat(chat_id, _chat_meta(update))
 
     parsed = _parse_command(text)
     if parsed is not None:

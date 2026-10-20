@@ -48,7 +48,7 @@ House rules — observed in code, enforce when editing.
 ## File operations
 
 - Atomic writes: `tempfile.mkstemp(prefix=".x-", dir=path.parent)` → write → `os.replace`. See `memory.py:162`.
-- JSON state at `$XDG_DATA_HOME/metalclaw/<file>.json` (`heartbeat_state.json`, `telegram_chats.json`).
+- No JSON state files. Per-record runtime state goes into `history.db` as a table with row-level upserts and a JSON `meta` column for debugging context (see `heartbeat_state`, `known_chats`). Legacy JSON files (`heartbeat_state.json`, `telegram_chats.json`) are imported once on first use and renamed `.bak`.
 
 ## Frontend ergonomics
 

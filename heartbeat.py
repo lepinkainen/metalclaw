@@ -45,6 +45,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 import yaml
 
 import channels
+import history as history_db
 from config import get_config
 
 log = logging.getLogger("metalclaw.heartbeat")
@@ -53,7 +54,7 @@ SENTINEL = "HEARTBEAT_OK"
 # Models often wrap the sentinel in a "nothing to report" sentence; treat short
 # leftovers as an ack. Longer leftovers are a real alert with a stray sentinel.
 _ACK_MAX_CHARS = 300
-_STATE_VERSION = 1
+_STATE_VERSION = 2
 _LEDGER_VERSION = 1
 _LEDGER_FILENAME = "heartbeat.yaml"
 _LEDGER_LOCK_FILENAME = "heartbeat.yaml.lock"
@@ -176,11 +177,28 @@ def validate_timezone(name: str) -> str:
 
 
 def parse_iso(text: str) -> datetime:
-    """Parse an ISO-8601 timestamp; tz-naive treated as UTC."""
+    """Parse an ISO-8601 timestamp; tz-naive values are treated as *local* time.
+
+    The system prompt hands the model a local wall clock, so a naive
+    timestamp it echoes back ("remind me at 16:00" → ``...T16:00:00``) means
+    local, not UTC. ``datetime.astimezone()`` on a naive value attaches the
+    process-local zone.
+    """
     dt = datetime.fromisoformat(text)
     if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=UTC)
+        dt = dt.astimezone()
     return dt
+
+
+def format_now(dt: datetime | None = None) -> str:
+    """Local wall clock *with* UTC offset, for the system prompt.
+
+    Shared by every frontend's session bootstrap and the heartbeat prompt so
+    the model always sees e.g. ``2026-10-20 15:30 EEST (UTC+0300)`` and has
+    enough context to emit tz-aware ``at`` timestamps.
+    """
+    local = (dt or datetime.now()).astimezone()
+    return local.strftime("%Y-%m-%d %H:%M %Z (UTC%z)")
 
 
 # --- Ledger I/O ---
@@ -347,6 +365,7 @@ def create_action(
         ledger = _read_ledger_locked()
         existing_ids = {a.id for a in ledger.actions}
         existing_ids.update(c.get("id", "") for c in ledger.completed)
+        existing_ids.update(load_state())  # never recycle an id with live state
         action = HeartbeatAction(
             id=_generate_id(existing_ids),
             kind=kind,
@@ -385,6 +404,7 @@ def cancel(action_id: str) -> HeartbeatAction | None:
                 removed = ledger.actions.pop(i)
                 _write_ledger_locked(ledger)
                 log.info("heartbeat action cancelled id=%s", action_id)
+                forget_state(action_id)
                 return removed
         return None
 
@@ -399,33 +419,218 @@ def _archive_completed(
         ledger.completed = ledger.completed[-_COMPLETED_CAP:]
 
 
-# --- State (last-run timestamps, keyed by action id) ---
+# --- State (per-action scheduler state in history.db, keyed by action id) ---
+#
+# Rows live in the ``heartbeat_state`` table of ``$XDG_DATA_HOME/metalclaw/history.db``
+# (see history.py). Per-row upserts mean two processes (``--daemon`` + an
+# interactive ``bot.py``) or a manual ``/heartbeat run`` racing the scheduler
+# can never lose each other's writes — unlike the old whole-file JSON.
 
 
-def _state_path() -> Path:
+@dataclass
+class ActionState:
+    """One ``heartbeat_state`` row.
+
+    ``last_run`` drives the due logic; ``failure_count`` / ``last_failed`` drive
+    exponential backoff so an action whose run or delivery keeps failing
+    (channel unset, gateway down, empty reply) is not re-run with a fresh model
+    call on every tick. ``meta`` is free-form JSON for after-the-fact debugging
+    (merged on every write; see ``_meta_for``). A success clears the failures.
+    """
+
+    action_id: str
+    last_run: str | None = None
+    failure_count: int = 0
+    last_failed: str | None = None
+    updated_at: str = ""
+    meta: dict[str, Any] = field(default_factory=dict)
+
+    @classmethod
+    def from_row(cls, row: history_db.HeartbeatStateRow) -> ActionState:
+        action_id, last_run, failure_count, last_failed, updated_at, meta_json = row
+        try:
+            meta = json.loads(meta_json or "{}")
+        except json.JSONDecodeError:
+            meta = {"_corrupt_meta": meta_json}
+        return cls(
+            action_id=action_id,
+            last_run=last_run,
+            failure_count=int(failure_count or 0),
+            last_failed=last_failed,
+            updated_at=updated_at or "",
+            meta=meta if isinstance(meta, dict) else {"_meta": meta},
+        )
+
+    def retry_at(self) -> datetime | None:
+        """Earliest time the action may run again after failures; None if clear."""
+        if self.failure_count <= 0 or not self.last_failed:
+            return None
+        try:
+            failed = parse_iso(self.last_failed)
+        except ValueError:
+            return None
+        return failed + timedelta(seconds=backoff_seconds(self.failure_count))
+
+
+def backoff_seconds(failure_count: int) -> int:
+    """Delay before retrying after ``failure_count`` consecutive failures.
+
+    ``interval * 2**(count-1)`` capped at ``heartbeat_failure_backoff_max_seconds``:
+    the first failure retries on the next tick, then every 2nd, 4th, … tick,
+    up to the cap (default 1h). Network blips recover fast; a persistent
+    misconfiguration (e.g. ``discord_heartbeat_channel`` unset) stops
+    burning a model call per tick while still surfacing a warning.
+    """
+    cfg = get_config()
+    base = max(cfg.heartbeat_interval_seconds, 1)
+    cap = max(cfg.heartbeat_failure_backoff_max_seconds, base)
+    exp = min(max(failure_count, 1) - 1, 30)  # avoid huge shifts
+    return min(base * (2**exp), cap)
+
+
+def _meta_for(action: HeartbeatAction, **extra: Any) -> dict[str, Any]:
+    """Debug metadata stored alongside the state row (merged on each write)."""
+    meta: dict[str, Any] = {
+        "kind": str(action.kind),
+        "channel": action.channel,
+        "prompt": action.prompt[:120],
+    }
+    if action.kind == ActionKind.AT:
+        meta["at"] = action.at
+    elif action.kind == ActionKind.EVERY:
+        meta["every"] = action.every
+    elif action.schedule is not None:
+        meta["schedule"] = action.schedule.to_dict()
+    meta.update(extra)
+    return meta
+
+
+def load_state() -> dict[str, ActionState]:
+    """All state rows keyed by action id (runs the one-time JSON migration)."""
+    _migrate_legacy_state_file()
+    return {
+        row[0]: ActionState.from_row(row) for row in history_db.heartbeat_state_all()
+    }
+
+
+def get_state(action_id: str) -> ActionState | None:
+    _migrate_legacy_state_file()
+    row = history_db.heartbeat_state_get(action_id)
+    return ActionState.from_row(row) if row is not None else None
+
+
+def mark_success(action: HeartbeatAction, now: datetime, **extra: Any) -> None:
+    """Stamp ``last_run`` and clear the failure record."""
+    history_db.heartbeat_mark_success(
+        action.id, now.isoformat(), _meta_for(action, **extra)
+    )
+
+
+def mark_failure(
+    action: HeartbeatAction, now: datetime, reason: str, **extra: Any
+) -> int:
+    """Increment the failure counter (``last_run`` untouched). Returns the new count."""
+    return history_db.heartbeat_mark_failure(
+        action.id,
+        now.isoformat(),
+        _meta_for(action, last_outcome="failed", last_error=reason[:500], **extra),
+    )
+
+
+def forget_state(action_id: str) -> None:
+    """Drop the state row (cancel / archive-eviction) so a reused id starts clean."""
+    history_db.heartbeat_state_forget(action_id)
+
+
+def prune_state(keep: set[str]) -> int:
+    """Remove rows whose action is neither active nor in ``completed``."""
+    removed = history_db.heartbeat_state_prune(keep)
+    if removed:
+        log.info("heartbeat state pruned %d orphan row(s)", removed)
+    return removed
+
+
+# One-time migration of the pre-SQLite ``heartbeat_state.json``. Accepts the
+# v2 (``last_run`` + ``failures``), v1 (``last_run`` only) and legacy flat
+# ``{"<id>": "<iso>"}`` layouts; the file is renamed to ``.bak`` afterwards.
+_LEGACY_STATE_FILENAME = "heartbeat_state.json"
+_legacy_state_checked = False
+_legacy_state_lock = threading.Lock()
+
+
+def _legacy_state_path() -> Path:
     xdg = os.environ.get("XDG_DATA_HOME") or (Path.home() / ".local" / "share")
-    p = Path(xdg) / "metalclaw" / "heartbeat_state.json"
-    p.parent.mkdir(parents=True, exist_ok=True)
-    return p
+    return Path(xdg) / "metalclaw" / _LEGACY_STATE_FILENAME
 
 
-def load_state() -> dict[str, str]:
-    path = _state_path()
-    if not path.exists():
-        return {}
-    try:
-        raw = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as e:
-        log.warning("heartbeat state unreadable, starting fresh: %s", e)
-        return {}
+def _parse_legacy_state(raw: Any) -> list[history_db.HeartbeatStateRow]:
     if not isinstance(raw, dict):
-        return {}
-    return raw.get("last_run", {}) if "last_run" in raw else raw
+        return []
+    if "last_run" not in raw and "failures" not in raw and "version" not in raw:
+        last_run_raw: Any = raw
+        failures_raw: Any = {}
+    else:
+        last_run_raw = raw.get("last_run") or {}
+        failures_raw = raw.get("failures") or {}
+    rows: dict[str, list[Any]] = {}
+    migrated_at = _now_iso()
+    meta = json.dumps({"migrated_from": _LEGACY_STATE_FILENAME})
+    if isinstance(last_run_raw, dict):
+        for k, v in last_run_raw.items():
+            rows[str(k)] = [str(k), str(v), 0, None, migrated_at, meta]
+    if isinstance(failures_raw, dict):
+        for k, v in failures_raw.items():
+            if not isinstance(v, dict):
+                continue
+            try:
+                count = int(v["count"])
+                last_failed = str(v["last_failed"])
+                parse_iso(last_failed)
+            except KeyError, TypeError, ValueError:
+                continue
+            if count <= 0:
+                continue
+            row = rows.setdefault(str(k), [str(k), None, 0, None, migrated_at, meta])
+            row[2] = count
+            row[3] = last_failed
+    return [tuple(r) for r in rows.values()]  # type: ignore[misc]
 
 
-def save_state(state: dict[str, str]) -> None:
-    payload = {"version": _STATE_VERSION, "last_run": state}
-    _state_path().write_text(json.dumps(payload, indent=2), encoding="utf-8")
+def _migrate_legacy_state_file() -> None:
+    global _legacy_state_checked
+    if _legacy_state_checked:
+        return
+    with _legacy_state_lock:
+        if _legacy_state_checked:
+            return
+        _legacy_state_checked = True
+        path = _legacy_state_path()
+        if not path.exists():
+            return
+        try:
+            raw = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as e:
+            log.warning("legacy heartbeat state unreadable, leaving in place: %s", e)
+            return
+        rows = _parse_legacy_state(raw)
+        n = history_db.heartbeat_state_import(rows) if rows else 0
+        backup = path.with_suffix(path.suffix + ".bak")
+        try:
+            os.replace(path, backup)
+        except OSError as e:
+            log.warning("could not rename %s -> %s: %s", path, backup, e)
+        log.info(
+            "migrated %d heartbeat state row(s) from %s into history.db (%s)",
+            n,
+            path.name,
+            backup.name,
+        )
+
+
+def reset_state_migration_flag() -> None:
+    """Test hook: force the legacy-file check to run again."""
+    global _legacy_state_checked
+    _legacy_state_checked = False
 
 
 # --- Due logic ---
@@ -528,9 +733,7 @@ def next_due(
 def _build_action_messages(
     action: HeartbeatAction, now: datetime, build_system_prompt
 ) -> list[dict]:
-    local = now.astimezone() if now.tzinfo else now
-    now_str = local.strftime("%Y-%m-%d %H:%M")
-    system = build_system_prompt(now_str)
+    system = build_system_prompt(format_now(now))
     system += (
         "\n\nHEARTBEAT MODE: This is a scheduled wake-up, not a user message. "
         "Run only the action below. Use tools as needed. "
@@ -589,16 +792,39 @@ async def run_tick(*, now: datetime | None = None) -> dict[str, str]:
     state = load_state()
     snapshot = load_ledger()
     replies: dict[str, str] = {}
-    n_due = n_ran = n_suppressed = n_notified = n_failed = 0
+    n_due = n_ran = n_suppressed = n_notified = n_failed = n_backoff = 0
     log.info("heartbeat tick start: %d active action(s)", len(snapshot.actions))
 
+    def _fail(action: HeartbeatAction, why: str, **extra: Any) -> None:
+        nonlocal n_failed
+        n_failed += 1
+        count = mark_failure(action, now, why, **extra)
+        log.warning(
+            "heartbeat action %s: %s — keeping active (failure #%d, next retry in %ds)",
+            action.id,
+            why,
+            count,
+            backoff_seconds(count),
+        )
+
     for action in list(snapshot.actions):
-        last_run_iso = state.get(action.id)
+        st = state.get(action.id)
+        last_run_iso = st.last_run if st else None
         try:
             due = is_action_due(action, last_run_iso, now)
         except Exception:
             log.exception("heartbeat action %s: due-check crashed", action.id)
             n_failed += 1
+            continue
+        retry_at = st.retry_at() if st else None
+        if due and st is not None and retry_at is not None and now < retry_at:
+            n_backoff += 1
+            log.info(
+                "heartbeat action %s due but in backoff: %d failure(s), retry at %s",
+                action.id,
+                st.failure_count,
+                retry_at.isoformat(timespec="minutes"),
+            )
             continue
         if not due:
             log.debug(
@@ -626,7 +852,11 @@ async def run_tick(*, now: datetime | None = None) -> dict[str, str]:
             )
         except Exception:
             log.exception("heartbeat action %s: chat turn failed", action.id)
-            n_failed += 1
+            _fail(
+                action,
+                "chat turn failed",
+                run_seconds=round(time.monotonic() - action_t0, 2),
+            )
             continue
         n_ran += 1
         log.info(
@@ -638,7 +868,18 @@ async def run_tick(*, now: datetime | None = None) -> dict[str, str]:
         log.debug("heartbeat action %s reply: %.500s", action.id, reply)
 
         clean = reply.strip()
-        if SENTINEL in clean:
+        acked = SENTINEL in clean
+        if not acked and not clean:
+            # Empty reply with no sentinel: the model produced nothing (common
+            # for small local models after a tool round). Treat as a failed
+            # run so the action stays active and one-shots are not archived.
+            _fail(
+                action,
+                f"empty reply without {SENTINEL}",
+                run_seconds=round(time.monotonic() - action_t0, 2),
+            )
+            continue
+        if acked:
             clean = clean.replace(SENTINEL, "").strip()
             if len(clean) <= _ACK_MAX_CHARS:
                 if clean:
@@ -652,7 +893,13 @@ async def run_tick(*, now: datetime | None = None) -> dict[str, str]:
             n_suppressed += 1
             log.info("heartbeat action %s: HEARTBEAT_OK (nothing to report)", action.id)
             replies[action.id] = ""
-            state[action.id] = now.isoformat()
+            mark_success(
+                action,
+                now,
+                last_outcome="suppressed",
+                reply_chars=len(reply),
+                run_seconds=round(time.monotonic() - action_t0, 2),
+            )
             if action.kind == ActionKind.AT:
                 # one-shots that ack with HEARTBEAT_OK are still "done"
                 _archive_with_lock(action.id, now)
@@ -668,22 +915,14 @@ async def run_tick(*, now: datetime | None = None) -> dict[str, str]:
             channel.name if channel else None,
         )
         if channel is None:
-            n_failed += 1
-            log.warning(
-                "heartbeat action %s: no channel resolves for %r — keeping active",
-                action.id,
-                target_scope,
-            )
+            _fail(action, f"no channel resolves for {target_scope!r}")
             continue
 
         try:
             await channel.notify(target_scope or "", clean)
-        except Exception:
-            log.exception(
-                "heartbeat action %s: channel notify failed — keeping active",
-                action.id,
-            )
-            n_failed += 1
+        except Exception as e:
+            log.exception("heartbeat action %s: channel notify failed", action.id)
+            _fail(action, f"channel notify failed: {e}", target=target_scope)
             continue
 
         n_notified += 1
@@ -694,19 +933,35 @@ async def run_tick(*, now: datetime | None = None) -> dict[str, str]:
             len(clean),
         )
         replies[action.id] = clean
-        state[action.id] = now.isoformat()
+        mark_success(
+            action,
+            now,
+            last_outcome="notified",
+            target=target_scope,
+            reply_chars=len(clean),
+            run_seconds=round(time.monotonic() - action_t0, 2),
+        )
         if action.kind == ActionKind.AT:
             _archive_with_lock(action.id, now)
 
-    save_state(state)
+    # Orphan rows (cancelled, or archived then evicted past _COMPLETED_CAP)
+    # would otherwise make a reused id look "already run" forever.
+    try:
+        ledger_now = load_ledger()
+        keep = {a.id for a in ledger_now.actions}
+        keep.update(str(c.get("id", "")) for c in ledger_now.completed)
+        prune_state(keep)
+    except Exception:
+        log.exception("heartbeat state prune failed")
     log.info(
-        "heartbeat tick end: total=%d due=%d ran=%d suppressed=%d notified=%d failed=%d duration=%.2fs",
+        "heartbeat tick end: total=%d due=%d ran=%d suppressed=%d notified=%d failed=%d backoff=%d duration=%.2fs",
         len(snapshot.actions),
         n_due,
         n_ran,
         n_suppressed,
         n_notified,
         n_failed,
+        n_backoff,
         time.monotonic() - tick_t0,
     )
     return replies

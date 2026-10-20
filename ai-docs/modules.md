@@ -45,16 +45,16 @@ Per-module symbol map. `→` = imports. `←` = imported by.
 
 ## heartbeat.py — scheduler
 
-- Public: `run(stop)`, `run_tick(*, now=None)`, `parse_heartbeat_file(text)`, `parse_interval(text)`, `discover_scopes()`, `heartbeat_path_for(scope)`, `load_state()`, `save_state(state)`, `is_due(state, scope, task, now)`, `state_key(scope, name)`, `SENTINEL = "HEARTBEAT_OK"`.
-- Dataclasses: `HeartbeatTask`, `HeartbeatFile`.
-- → `channels`, `config`, `yaml`, `asyncio`. (lazy) `bot`.
+- Public: `run(stop)`, `run_tick(*, now=None)`, `load_ledger()`, `create_action(...)`, `list_active()`, `list_completed()`, `cancel(action_id)` (also `forget_state`), `load_state() -> dict[id, ActionState]`, `get_state(id)`, `mark_success(action, now, **meta)`, `mark_failure(action, now, reason, **meta)`, `forget_state(id)`, `prune_state(keep)`, `backoff_seconds(count)`, `is_action_due(action, last_run_iso, now)`, `next_due(action, last_run_iso, now)`, `summary(max_chars)`, `parse_interval(text)`, `normalise_weekdays(days)`, `validate_time_string(text)`, `validate_timezone(name)`, `parse_iso(text)` (naive → local), `format_now(dt=None)` (prompt clock with UTC offset), `SENTINEL = "HEARTBEAT_OK"`.
+- Dataclasses: `ActionKind` (StrEnum), `CronSchedule`, `HeartbeatAction`, `HeartbeatLedger`, `ActionState` (one `heartbeat_state` row; `retry_at()`).
+- → `channels`, `config`, `history` (state rows), `yaml`, `asyncio`. (lazy) `chat_loop`.
 
 ## history.py — sqlite prompt history
 
 - `SQLiteHistory(session)` extends `prompt_toolkit.history.History`. Methods: `load_history_strings()`, `store_string(s)`, `save_assistant(s)`.
-- DB: `$XDG_DATA_HOME/metalclaw/history.db`. Tables `messages(id, session, ts, role, content)` and `usage(id, ts, provider, model, prompt_tokens, completion_tokens, cost_usd NULL)`. `ts` is UTC ISO.
+- DB: `$XDG_DATA_HOME/metalclaw/history.db`. Tables `messages(id, session, ts, role, content)`, `usage(id, ts, provider, model, prompt_tokens, completion_tokens, cost_usd NULL)` `heartbeat_state(action_id PK, last_run, failure_count, last_failed, updated_at, meta JSON)` and `known_chats(frontend, chat_id PK, first_seen, last_seen, meta JSON)`. `ts` is UTC ISO.
 - `session`: CLI = bare timestamp id; Telegram/Discord = `telegram-<chat_id>` / `discord-<channel_id>` (same strings as heartbeat scopes). `load_history_strings` excludes any session containing `-` so up-arrow history stays CLI-only.
-- Module fns (shared locked connection): `record_message`, `search_messages(query, limit)` (LIKE, newest first), `record_usage`, `usage_since(iso)` (grouped by provider/model).
+- Module fns (shared locked connection): `record_message`, `search_messages(query, limit)` (LIKE, newest first), `record_usage`, `usage_since(iso)` (grouped by provider/model), and the heartbeat-agnostic row ops `heartbeat_state_all/get`, `heartbeat_mark_success/failure` (upsert; failure uses `RETURNING failure_count`), `heartbeat_state_forget/prune/import`. `_merge_json` dict-updates a JSON `meta` column on every write (None values skipped, unparseable JSON kept under `_corrupt_meta`). `known_chat_touch(frontend, id, meta) -> created`, `known_chat_ids(frontend)`, `known_chats_all(frontend?)`, `known_chat_forget`, `known_chats_import` (INSERT OR IGNORE). No import of `heartbeat` or any frontend (would be circular).
 
 ## self_change.py — `/add-tool` `/self-edit`
 
@@ -113,5 +113,5 @@ Per-module symbol map. `→` = imports. `←` = imported by.
 - `__init__.py` — empty.
 - `common.py` — scope helpers (`telegram_scope`, `discord_scope`, `parse_*_scope`, prefixes), arg parsers/formatters, `TOOL_COMMANDS` registry, `HELP_LINES`, async `run_remember`/`run_forget`/`run_memory`/`run_heartbeat`/`run_big`. Each `run_*` takes a `SendFn = Callable[[str], Awaitable[None]]`.
 - `cli.py` — `run_cli_repl()`, `_CLIChannel`, sync `_COMMAND_HANDLERS`, `_print_bot_markdown`, `_show_thinking` flag, `_cli_messages` global, REPO_ROOT for self_change. Uses `prompt_toolkit.PromptSession` + `rich.Console`.
-- `telegram.py` — `start_telegram(token)`, `stop_telegram(app)`, `_TelegramChannel(app)`, `_get_telegram_session(chat_id)`, `_typing(chat_id, bot)` async ctxmgr (4-second pulse), `_load_known_chats()`/`_save_known_chats()` JSON at `$XDG_DATA_HOME/metalclaw/telegram_chats.json`.
-- `discord.py` — `start_discord(token)`, `stop_discord(client, task)`, `_DiscordChannel(client, heartbeat_channel_id)`, `_split_for_discord(text, limit=2000)` (paragraph→line→word→hard-cut, fence-aware), `_discord_should_respond(message, bot_user)` gating, `_strip_bot_mention(text, bot_user_id)`.
+- `telegram.py` — `start_telegram(token)`, `stop_telegram(app)`, `_TelegramChannel(app)`, `_get_telegram_session(chat_id)`, `_typing(chat_id, bot)` async ctxmgr (4-second pulse), `_load_known_chats()` (reads `known_chats` rows, runs the one-time `telegram_chats.json` migration), `_remember_chat(chat_id, meta)` → `history.known_chat_touch`, `_chat_meta(update)`.
+- `discord.py` — `start_discord(token)`, `stop_discord(client, task)`, `_DiscordChannel(client, heartbeat_channel_id)`, `_split_for_discord(text, limit=2000)` (paragraph→line→word→hard-cut, fence-aware), `_discord_should_respond(message, bot_user)` gating, `_strip_bot_mention(text, bot_user_id)`, `_load_known_channels()` / `_remember_channel(channel_id, meta)` / `_channel_meta(message)` (`known_chats` rows, frontend=`discord`).

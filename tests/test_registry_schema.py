@@ -93,3 +93,33 @@ def test_tool_decorator_with_args_derives_schema():
     assert schema["description"] == "echo"
     assert schema["parameters"]["required"] == ["q"]
     assert schema["parameters"]["properties"]["q"]["type"] == "string"
+
+
+def test_nested_model_ref_is_inlined():
+    class Inner(BaseModel):
+        x: int = Field(description="inner x")
+        tags: list[str] = Field(description="tags")
+
+    class M(BaseModel):
+        inner: Inner | None = Field(default=None, description="nested")
+
+    schema = _schema_from_model(M)
+    spec = schema["properties"]["inner"]
+    assert "$ref" not in spec
+    assert spec["type"] == "object"
+    assert spec["description"] == "nested"
+    assert spec["properties"]["x"] == {"type": "integer", "description": "inner x"}
+    assert "title" not in spec
+    assert "title" not in spec["properties"]["tags"]
+    assert spec["required"] == ["x", "tags"]
+    assert "$ref" not in repr(schema)
+
+
+def test_create_heartbeat_action_schedule_is_self_contained():
+    import tools  # noqa: F401  (registration side-effect)
+    from registry import TOOLS
+
+    params = TOOLS["create_heartbeat_action"].schema["function"]["parameters"]
+    sched = params["properties"]["schedule"]
+    assert "$ref" not in repr(params)
+    assert set(sched["properties"]) == {"days", "time", "timezone"}

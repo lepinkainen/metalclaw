@@ -39,6 +39,7 @@
 | `heartbeat_enabled` | `bool` | `True` | |
 | `heartbeat_interval_seconds` | `int` | `1800` | Clamped to `>=30` in `run()`. |
 | `heartbeat_active_hours` | `tuple[int,int]?` | None | `[start, end]` 24h local; wraparound supported. |
+| `heartbeat_failure_backoff_max_seconds` | `int` | `3600` | Cap for the per-action retry backoff after failed runs/deliveries (`heartbeat.backoff_seconds`). |
 | `vault_search_excludes` | `tuple[str, ...]` | `()` | Glob patterns relative to vault. |
 | `mcp_servers` | `tuple[McpServer, ...]` | `()` | External MCP servers; see below. Names must be unique. |
 
