@@ -61,7 +61,7 @@ class _CreateHeartbeatActionArgs(BaseModel):
     channel: str | None = Field(
         default=None,
         description=(
-            "Optional channel address for notifications, e.g. 'cli', "
+            "Optional channel address for notifications, e.g. "
             "'telegram-123456', 'discord-987654'. Defaults to the active "
             "frontend scope, then config.heartbeat_default_channel."
         ),

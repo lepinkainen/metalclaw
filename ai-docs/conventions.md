@@ -6,7 +6,7 @@ House rules — observed in code, enforce when editing.
 
 - Absolute, **non-relative**. `from chat_loop import chat`, not `from .chat_loop import chat`.
 - Group: stdlib → third-party → first-party. Alphabetize within group (ruff handles).
-- Lazy-import inside fn body when the dep would cause a circular at module load. Examples: `bot` inside `tools.escalate_to_big_model` (`tools.py:784`), `bot` inside `heartbeat.run_tick` (`heartbeat.py:243`).
+- Lazy-import inside fn body when the dep would cause a circular at module load. Examples: `chat_loop` + `providers` inside `tools.escalate_to_big_model` (`tools/escalation.py:35`), `chat_loop` inside `heartbeat.run_tick` (`heartbeat.py:823`) and `_build_action_session` (`heartbeat.py:739`).
 
 ## Pydantic
 

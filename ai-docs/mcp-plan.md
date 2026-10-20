@@ -146,11 +146,11 @@ Also: `config.example.yaml` commented example, `ai-docs/config.md` field rows, `
 Tool execution today is **synchronous, in a worker thread**:
 - `_run_tool` calls `tool_obj.func(**call_args)` synchronously (`chat_loop.py:213`), from the `_chat_with_provider` loop (`chat_loop.py:221`, tool loop ~`:300`).
 - Chat turns get to a thread via `run_turn` → `loop.run_in_executor(None, chat_call)` (`chat_loop.py:457`); `/big` same path (`frontends/common.py:~640`); heartbeat via `_run_action` → `run_in_executor` (`heartbeat.py:~538`); Telegram/Discord tool slash commands via `run_in_executor` (`frontends/telegram.py:~272`, `frontends/discord.py:~268`).
-- Exception: CLI tool slash commands call `tool_obj.func(**params)` **directly on the main event-loop thread** (`frontends/cli.py:152`, `_make_tool_handler`). Only reachable for `TOOL_COMMANDS` entries (native today), but it proves funcs can run on the loop thread.
+- Exception (historical — the CLI frontend has since been removed): CLI tool slash commands called `tool_obj.func(**params)` **directly on the main event-loop thread** (`frontends/cli.py:152`, `_make_tool_handler`). It proved funcs must be safe to run on the loop thread; the design below still honours that.
 - `escalate_to_big_model` nests `_chat_with_provider` inside the same worker thread — still sync.
 
 Options for calling an async MCP session from that sync code:
-1. Schedule on the **main** loop (`run_coroutine_threadsafe(..., main_loop).result()`): deadlocks if ever called on the loop thread (cli.py:152 path, any future direct call), and couples MCP latency to the frontends' loop.
+1. Schedule on the **main** loop (`run_coroutine_threadsafe(..., main_loop).result()`): deadlocks if ever called on the loop thread (the old cli.py:152 path, any future direct call), and couples MCP latency to the frontends' loop.
 2. **Dedicated MCP loop thread** (chosen): `threading.Thread(target=_LOOP.run_forever, daemon=True, name="mcp")`. `run_coroutine_threadsafe(coro, _LOOP).result(timeout)` is safe from any thread, including the main loop thread (it blocks that thread, but cannot deadlock since MCP I/O runs elsewhere). Bonus: `start()`/`stop()` are plain sync functions → tests need no async harness.
 3. `asyncio.run()` per call with a fresh connection: kills stdio servers' process reuse and costs a handshake per call. Rejected.
 
@@ -298,7 +298,7 @@ Truncation: `_RESULT_CHAR_LIMIT = 20_000` module constant (matches `read_email`'
 | Per-turn schema rebuild (`chat_loop.py:229`) | Schemas read from `TOOLS` every `_chat_with_provider` entry → MCP tools appear with no chat_loop change; phase-2 re-registration shows up next turn. | None. |
 | Removed tool mid-session | Old history may reference a vanished name → `_run_tool` returns `Error: unknown tool` (`chat_loop.py:~190`). | None. |
 | Tool status (`frontends/common.py:718` `format_tool_status`, `ToolStatusReporter` `:737`) | Works on name+args; `_tool_emoji` (`:696`) falls back to 🔧. | Optional: add `("<prefix>", emoji)` to `_TOOL_EMOJI_PREFIX`. Not needed. |
-| CLI `/tools` listing (`frontends/cli.py:343`) and `read_manual` tools appendix (`tools/manual.py:79` `_render_tools_appendix`) | Iterate `TOOLS` → MCP tools listed automatically with `[server]` description. | None. |
+| `read_manual` tools appendix (`tools/manual.py` `_render_tools_appendix`; the CLI `/tools` listing is gone with the CLI) | Iterate `TOOLS` → MCP tools listed automatically with `[server]` description. | None. |
 | Heartbeat (`heartbeat.py` `_run_action`) | Runs `chat()` in executor; MCP tools available, no `on_tool_call`. A down server makes that action's run see error strings, not crash. | None. |
 | Escalation (`chat_via_escalation` `chat_loop.py:398`, `tools/escalation.py`) | Big model sees MCP tools too (only `escalate_to_big_model` excluded, `chat_loop.py:419`). | None in phase 1. See tool-count section for `escalation_only`. |
 | `_MEMORY_MUTATORS` (`chat_loop.py:134`) | MCP tools never mutate memory/heartbeat. | None. |
@@ -330,7 +330,7 @@ Untrusted output = prompt injection. A tool result can contain "ignore previous 
 - Allowlist mutating MCP tools out (`exclude: [add_guidance]`); only read-only tools in phase 1 examples.
 - Logs: DEBUG logs result previews (existing `tool %s result: %.500s`, `chat_loop.py:~317`) — fine; never log headers/env.
 
-Reachability: MCP tools are model tools, so they are triggerable from every frontend that can start a turn — CLI, Telegram (any chat that messages the bot), Discord (DMs, `discord_chat_channels`, mentions), and heartbeat. Same exposure as native tools. Per-frontend/per-scope gating deferred (no native tool has it either); revisit if a server with side effects is added. `allow_self_modification` is unrelated and unchanged.
+Reachability: MCP tools are model tools, so they are triggerable from every frontend that can start a turn — Telegram (any chat that messages the bot), Discord (DMs, `discord_chat_channels`, mentions), and heartbeat. Same exposure as native tools. Per-frontend/per-scope gating deferred (no native tool has it either); revisit if a server with side effects is added. `allow_self_modification` is unrelated and unchanged.
 
 Annotations (`readOnlyHint`, `destructiveHint`) are server-asserted hints — do not use them as a security boundary. Possible later: `read_only: true` server flag that registers only `readOnlyHint` tools, as a convenience, not a guarantee. Deferred.
 
@@ -366,7 +366,7 @@ Cases:
 5. Conversion: image placeholder, truncation marker, `{"result": str}` unwrap — as pure-function tests on hand-built `CallToolResult`.
 6. Failure isolation: `_transport` raising / never-ready (startup timeout) → `start()` returns, status `down`, no keys registered, other servers still up.
 7. End-to-end: `StubProvider` (`ai-docs/testing.md#common-stubs`) emitting a `ToolCall(name="t_add", ...)` then final text, driven through `_chat_with_provider` — asserts the tool-result message content.
-8. Called from inside a running event loop (simulates `frontends/cli.py:152`): `asyncio.run(async_wrapper_calling_func_synchronously())` doesn't deadlock.
+8. Called from inside a running event loop (simulated the since-removed `frontends/cli.py:152` path): `asyncio.run(async_wrapper_calling_func_synchronously())` doesn't deadlock.
 9. Phase 2: `live_tool` `new_keys` module filter (`tests/test_live_tool.py`).
 
 No real network/subprocess in CI. A manual smoke against playbook-mcp is the integration test.
@@ -395,6 +395,6 @@ No real network/subprocess in CI. A manual smoke against playbook-mcp is the int
 ## Open questions
 
 1. playbook-mcp endpoint path — `/mcp` (mcp-go / go-sdk default) or root? Does it require auth, or is Tailscale ACL the only gate?
-2. Does the Docker container (`compose.yaml`) reach tailnet hosts? (Docker Desktop on macOS usually routes via the host's Tailscale; Linux host needs `network_mode: host` or a tailscale sidecar.) Affects whether `--daemon` in Docker can use playbook-mcp.
+2. Does the Docker container (`compose.yaml`) reach tailnet hosts? (Docker Desktop on macOS usually routes via the host's Tailscale; Linux host needs `network_mode: host` or a tailscale sidecar.) Affects whether the Docker-run bot can use playbook-mcp.
 3. Is playbook-mcp useful to the chatbot at all beyond being a test target (dev-convention lookups from Telegram)? If not, pick the first "real" server to size the allowlist/tool-budget defaults.
 4. Should MCP tools be visible to the local gemma4 by default, or default to escalation-only? (Plan defaults to visible + allowlist; phase 3 flag if wrong.)

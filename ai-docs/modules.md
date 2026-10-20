@@ -30,7 +30,7 @@ Per-module symbol map. `→` = imports. `←` = imported by.
 
 - `Channel` Protocol: `name: str`, `async notify(scope, text)`, `active_scopes() -> Iterable[str]`.
 - Globals: `CHANNELS: dict[str, Channel]`. Funcs: `register`, `unregister`, `for_scope(scope)`, `all_active_scopes()`.
-- Routing: `cli` → `CHANNELS["cli"]`; `telegram-*` → `CHANNELS["telegram"]`; otherwise prefix-before-`-`.
+- Routing (`channels.py:44 for_scope`): `CHANNELS.get(scope.split("-", 1)[0])` — prefix-before-`-`, no special cases (`telegram-<id>` → `"telegram"`, `discord-<id>` → `"discord"`).
 
 ## config.py — config loader
 

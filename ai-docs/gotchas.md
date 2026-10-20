@@ -30,7 +30,7 @@ Set by `_chat_with_provider` and republished before each provider call (a point-
 
 ## Memory mutator detection is name-based
 
-`_MEMORY_MUTATORS` (`chat_loop.py:96`) is a hard-coded frozenset of tool **names**. If you add a memory-mutating tool, add its name here, else mid-loop system rebuild won't fire.
+`_MEMORY_MUTATORS` (`chat_loop.py:227`) is a hard-coded frozenset of tool **names** (memory tools + `create_/cancel_heartbeat_action`). If you add a memory-mutating tool, add its name here, else mid-loop system rebuild won't fire.
 
 ## Tool-result shapes live in the providers
 

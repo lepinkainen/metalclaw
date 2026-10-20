@@ -1,6 +1,6 @@
 """Provider-agnostic chat loop, system-prompt builder, and slash-command parser.
 
-No frontend dependencies. Imported by every frontend (CLI, Telegram, Discord)
+No frontend dependencies. Imported by every frontend (Telegram, Discord)
 and by tests directly.
 """
 
@@ -150,7 +150,7 @@ class Session:
     provider's wire dicts, so the active provider may change between turns
     without any reset. The system prompt is kept apart so it can be rebuilt
     without touching history. Single owner per chat; frontends hold one per
-    CLI / Telegram chat / Discord channel, heartbeat builds one per action run.
+    Telegram chat / Discord channel, heartbeat builds one per action run.
     """
 
     system: str = ""
@@ -212,7 +212,7 @@ _active_session: ContextVar[Session | None] = ContextVar("active_session", defau
 
 
 # Channel scope of the current chat turn — set by each frontend before chat()
-# runs (CLI: "cli"; Telegram: "telegram-<chat_id>"; Discord: "discord-<id>").
+# runs (Telegram: "telegram-<chat_id>"; Discord: "discord-<channel_id>").
 # Tools that need to know which user-facing surface produced the call
 # (notably create_heartbeat_action) read it. None during heartbeat ticks and
 # in tests.

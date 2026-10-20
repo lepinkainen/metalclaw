@@ -22,7 +22,7 @@ class _SearchConversationHistoryArgs(BaseModel):
 
 @tool(
     description=(
-        "Search past conversations (CLI, Telegram, Discord; user messages and "
+        "Search past conversations (Telegram, Discord; user messages and "
         "assistant replies) for a substring. Returns matches newest first with "
         "local timestamp, surface, role and trimmed content. Use when the user asks "
         "what they or you said earlier, or refers to a past conversation."
@@ -40,7 +40,7 @@ def search_conversation_history(query: str, limit: int = 10) -> dict[str, Any]:
                 "ts": datetime.fromisoformat(ts)
                 .astimezone()
                 .strftime("%Y-%m-%d %H:%M"),
-                # CLI sessions are bare timestamps; others are "<surface>-<id>".
+                # Legacy CLI rows are bare timestamps; others are "<surface>-<id>".
                 "surface": session if "-" in session else "cli",
                 "role": role,
                 "content": content[:_CONTENT_LIMIT]

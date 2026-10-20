@@ -13,9 +13,9 @@ actions:
     kind: at                          # at | cron | every
     prompt: |
       Remind me to check the kettle.
-    channel: cli                      # cli | telegram-<id> | discord-<id>
+    channel: telegram-12345           # telegram-<id> | discord-<id> (legacy ledgers may still say cli → unroutable)
     created_at: 2026-05-08T10:00:00+00:00
-    created_from: cli                 # active scope at creation, or null
+    created_from: telegram-12345      # active scope at creation, or null
     at: 2026-05-08T10:30:00+00:00     # kind=at only
   - id: ef34gh
     kind: cron
@@ -30,9 +30,9 @@ actions:
   - id: ij56kl
     kind: every
     prompt: Watch high-priority email
-    channel: cli
+    channel: discord-987654
     created_at: ...
-    created_from: cli
+    created_from: discord-987654
     every: 1800                       # seconds (>0)
 completed:
   - id: ...                           # snapshot of original action plus
@@ -57,7 +57,7 @@ CREATE TABLE heartbeat_state (
 
 Row-level SQL lives in `history.py` (`heartbeat_state_all/get`, `heartbeat_mark_success/failure`, `heartbeat_state_forget/prune/import`) — heartbeat-agnostic, shared locked connection. `heartbeat.py` wraps it: `ActionState` (dataclass view of one row, `retry_at()`), `load_state() -> dict[id, ActionState]`, `get_state(id)`, `mark_success(action, now, **meta)`, `mark_failure(action, now, reason, **meta) -> count`, `forget_state(id)`, `prune_state(keep)`.
 
-Per-row upserts: no whole-file read-modify-write, so `--daemon` + interactive `bot.py`, or `/heartbeat run` racing the scheduler tick, cannot lose each other's writes. SQLite `RETURNING` (≥3.35) is used by `heartbeat_mark_failure`.
+Per-row upserts: no whole-file read-modify-write, so two processes on one `history.db`, or `/heartbeat run` racing the scheduler tick, cannot lose each other's writes. SQLite `RETURNING` (≥3.35) is used by `heartbeat_mark_failure`.
 
 **`meta` column.** Free-form JSON merged (dict-update, not replaced) on every write via `_meta_for(action, **extra)`: always `kind`, `channel`, `prompt` (≤120 chars), plus `at` / `every` / `schedule`; successes add `last_outcome` (`notified` | `suppressed`), `target`, `reply_chars`, `run_seconds`; failures add `last_outcome: failed`, `last_error` (≤500 chars), `run_seconds` / `target` where known. Nothing reads `meta` at runtime — it exists so `sqlite3 history.db 'select * from heartbeat_state'` explains what the scheduler did after the fact. Add keys freely; never make the due logic depend on them. Unparseable `meta` is kept under `_corrupt_meta` rather than dropped.
 
@@ -125,15 +125,12 @@ Heartbeat ticks themselves run with `current_scope` set to `None` — actions ca
 
 `SENTINEL = "HEARTBEAT_OK"` (`heartbeat.py`). Detection: sentinel anywhere in the reply (leading, trailing, wrapped in `**…**`). After removing it, ≤300 leftover chars = ack chatter → suppressed; longer = real alert, delivered with the sentinel stripped.
 
-## Routing (`channels.for_scope`)
+## Routing (`channels.for_scope`, `channels.py:44`)
 
-- `cli` → `CHANNELS["cli"]`
+`CHANNELS.get(scope.split("-", 1)[0])` — the prefix before the first `-` is the channel name. No special cases.
 - `telegram-<id>` → `CHANNELS["telegram"]`; channel parses `chat_id` from scope to send.
 - `discord-<id>` → `CHANNELS["discord"]`; channel currently **ignores** the id and posts to `cfg.discord_heartbeat_channel`. (Greenfield deployment — Discord per-channel routing TBD.)
-
-## CLI heartbeat printing
-
-`_CLIChannel.notify` uses `prompt_toolkit.application.run_in_terminal` to print without disrupting the active prompt.
+- `cli` (left over from the removed CLI frontend in an old ledger or `heartbeat_default_channel`) → no channel registered → `_resolve_channel` returns None → `mark_failure` + backoff every tick. Re-point such actions with `cancel_heartbeat_action` + `create_heartbeat_action`, or edit `heartbeat_default_channel`.
 
 ## `/heartbeat` slash
 

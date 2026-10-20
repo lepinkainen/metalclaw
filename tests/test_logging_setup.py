@@ -1,4 +1,3 @@
-import argparse
 import logging
 
 import bot
@@ -9,7 +8,7 @@ def test_setup_logging_writes_to_xdg_state(tmp_path, monkeypatch):
     root = logging.getLogger()
     saved, level = list(root.handlers), root.level
     try:
-        path = bot._setup_logging(argparse.Namespace(daemon=False))
+        path = bot._setup_logging()
         logging.getLogger("metalclaw.test").debug("hello-debug")
         for h in root.handlers:
             h.flush()

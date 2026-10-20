@@ -1,4 +1,4 @@
-# Self-modification (/add-tool, /self-edit) is unsupported in the container:
+# Self-modification (/add-tool) is unsupported in the container:
 # the image ships no `claude` CLI. Set `allow_self_modification: false` in
 # config.yaml. config.yaml itself must set `vault_path: /vault`.
 services:

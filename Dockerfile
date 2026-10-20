@@ -1,6 +1,6 @@
 FROM python:3.14-slim
 # ripgrep backs search_vault / /search (vault_search.py shells out to `rg`).
-# The `claude` CLI is deliberately NOT installed: /add-tool and /self-edit are
+# The `claude` CLI is deliberately NOT installed: /add-tool is
 # unsupported in the container — set `allow_self_modification: false` in config.yaml.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ripgrep \
@@ -14,4 +14,4 @@ WORKDIR /app
 COPY . .
 RUN uv sync --no-dev --frozen
 USER app
-CMD [".venv/bin/python", "bot.py", "--daemon"]
+CMD [".venv/bin/python", "bot.py"]

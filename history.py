@@ -4,8 +4,6 @@ import threading
 from datetime import UTC, datetime
 from pathlib import Path
 
-from prompt_toolkit.history import History
-
 from config import xdg_data_dir
 
 
@@ -136,39 +134,6 @@ def usage_since(
             )
             .fetchall()
         )
-
-
-class SQLiteHistory(History):
-    """prompt_toolkit History backed by SQLite.
-
-    User inputs are saved via store_string() (called automatically by
-    prompt_toolkit on submit), giving cross-session up-arrow history.
-    Assistant replies must be saved explicitly via save_assistant().
-    """
-
-    def __init__(self, session: str) -> None:
-        self._session = session
-        super().__init__()
-
-    def load_history_strings(self):
-        # CLI session ids are bare timestamps; Telegram/Discord rows are
-        # "<surface>-<id>" and must not leak into up-arrow history.
-        with _LOCK:
-            rows = (
-                _conn()
-                .execute(
-                    "SELECT content FROM messages WHERE role = 'user' "
-                    "AND session NOT LIKE '%-%' ORDER BY id DESC"
-                )
-                .fetchall()
-            )
-        return [row[0] for row in rows]
-
-    def store_string(self, string: str) -> None:
-        record_message(self._session, "user", string)
-
-    def save_assistant(self, content: str) -> None:
-        record_message(self._session, "assistant", content)
 
 
 # --- heartbeat_state: per-action scheduler state (owned by heartbeat.py) ---

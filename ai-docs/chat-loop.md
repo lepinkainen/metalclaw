@@ -59,7 +59,7 @@ Loop body:
          work.system = build_system_prompt(now)   # rebuild so model sees its own writes
 ```
 
-Final `messages[:]` reassignment puts the (possibly rebuilt) system message back at index 0.
+`commit` adopts `work.system` too, so a mid-loop rebuilt system prompt is what the next turn starts from (until `_refresh_system_prompt` replaces it).
 
 ### Runaway-loop guards (issue #30)
 

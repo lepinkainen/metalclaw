@@ -54,14 +54,6 @@ def test_history_search_newest_first_across_surfaces():
     assert len(search_conversation_history("hello", limit=1)["matches"]) == 1
 
 
-def test_up_arrow_history_ignores_other_surfaces():
-    history.record_message("telegram-5", "user", "from telegram")
-    h = history.SQLiteHistory("20260101T000000")
-    h.store_string("from cli")
-    h.save_assistant("reply")
-    assert h.load_history_strings() == ["from cli"]
-
-
 # --- usage ---
 
 

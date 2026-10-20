@@ -324,10 +324,6 @@ def test_append_to_init_idempotent(fake_repo):
     assert first == second
 
 
-def test_self_change_module_still_intact():
-    assert hasattr(self_change, "run_self_change")
-
-
 def test_append_to_init_after_parenthesised_import(tmp_path):
     """Regression for #32: a ruff-wrapped multi-line import must not swallow
     the new line inside its parentheses."""
@@ -367,7 +363,6 @@ def test_append_to_init_no_existing_relative_imports(tmp_path):
 
 def test_add_tool_aborts_without_spawning_when_self_change_busy(fake_repo):
     """Regression for #35: two concurrent runs must not race on the git delta."""
-    import self_change
 
     with self_change.busy_slot(), patch("subprocess.run") as run:
         state = live_tool.run_add_tool_live("make a tool", fake_repo)

@@ -88,7 +88,7 @@ CLI does **not** delegate `/remember /forget /memory /heartbeat /big` to `common
   1. Cut at last `\n\n` before `limit - _FENCE_HEADROOM(32)`; else `\n`; else space; else hard cut. Headroom guarantees the fence fix-up below never has to truncate.
   2. Reopen fenced code blocks across cuts: if a chunk has odd-count fences, append `` ``` `` and prepend `` ```{lang} `` to the next.
 
-## `_discord_should_respond` gating (`discord.py:194`)
+## `_discord_should_respond` gating (`discord.py:282`)
 
 Non-command messages — bot replies if **any**:
 1. `isinstance(channel, DMChannel)` → always.

@@ -43,6 +43,6 @@ tasks:
           rm -f "$out"
           exit 1
         fi
-  daemon:
-    desc: Run headless (Telegram + heartbeat only, no CLI REPL)
-    cmd: uv run python bot.py --daemon
+  run:
+    desc: Run the bot (Telegram + Discord + heartbeat)
+    cmd: uv run python bot.py

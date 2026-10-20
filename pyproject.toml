@@ -1,7 +1,7 @@
 [project]
 name = "metalclaw"
 version = "0.1.0"
-description = "Single-user LLM chatbot with tool calling, exposed via CLI, Telegram and Discord frontends"
+description = "Single-user LLM chatbot with tool calling, exposed via Telegram and Discord frontends"
 requires-python = ">=3.14"
 dependencies = [
     "beautifulsoup4>=4.12",
@@ -11,12 +11,10 @@ dependencies = [
     "markdown-it-py>=3.0",
     "markdownify>=0.13",
     "mcp>=2.3,<3",
-    "prompt_toolkit>=3.0",
     "pydantic>=2.6",
     "pydantic-settings>=2.14.2",
     "python-telegram-bot>=21.0",
     "pyyaml>=6.0",
-    "rich>=13.0",
     "tenacity>=9.2.1",  # litellm imports it for num_retries but no longer declares it
 ]
 

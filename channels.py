@@ -1,13 +1,13 @@
 """Frontend-agnostic notification channels.
 
-Each frontend (CLI, Telegram, future) registers a `Channel` at startup. The
+Each frontend (Telegram, Discord, future) registers a `Channel` at startup. The
 heartbeat (and any other proactive surface) calls `for_scope(scope).notify(...)`
 to deliver a message without knowing the transport.
 
 Scope convention:
-  - "cli"                 → CLI channel
-  - "telegram-<chat_id>"  → Telegram channel
-  - "<frontend>-<id>"     → that frontend's channel
+  - "telegram-<chat_id>"    → Telegram channel
+  - "discord-<channel_id>"  → Discord channel
+  - "<frontend>-<id>"       → that frontend's channel
 """
 
 from __future__ import annotations
@@ -42,12 +42,7 @@ def unregister(name: str) -> None:
 
 
 def for_scope(scope: str) -> Channel | None:
-    if scope == "cli":
-        ch = CHANNELS.get("cli")
-    elif scope.startswith("telegram-"):
-        ch = CHANNELS.get("telegram")
-    else:
-        ch = CHANNELS.get(scope.split("-", 1)[0])
+    ch = CHANNELS.get(scope.split("-", 1)[0])
     log.debug("channel for_scope scope=%s -> %s", scope, ch.name if ch else None)
     return ch
 

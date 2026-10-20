@@ -90,7 +90,7 @@ Empty memory → empty string → no injection.
 
 ## Migration
 
-`migrate_legacy_scopes() -> list[str]` runs once at startup (`bot.py:67`). Looks for siblings `cli.md`, `telegram-*.md`, `discord-*.md`. Merges:
+`migrate_legacy_scopes() -> list[str]` runs once at startup (`bot.py:130`). Looks for legacy per-scope siblings `cli.md` (the removed CLI frontend's), `telegram-*.md`, `discord-*.md` (`memory.py:348-350`). Merges:
 - Preferences: last-writer-wins on key collision.
 - Facts/Instructions: union, dedup by exact string.
 

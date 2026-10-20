@@ -8,9 +8,9 @@ def test_add_tool_with_args():
     )
 
 
-def test_self_edit_with_args():
-    assert _parse_command("/self-edit fix the weather tool timeout") == (
-        "self-edit",
+def test_hyphenated_command_with_args():
+    assert _parse_command("/add-tool fix the weather tool timeout") == (
+        "add-tool",
         "fix the weather tool timeout",
     )
 

@@ -42,6 +42,8 @@
 | `heartbeat_interval_seconds` | `int` | `1800` | Clamped to `>=30` in `run()`. |
 | `heartbeat_active_hours` | `tuple[int,int]?` | None | `[start, end]` 24h local; wraparound supported. |
 | `heartbeat_failure_backoff_max_seconds` | `int` | `3600` | Cap for the per-action retry backoff after failed runs/deliveries (`heartbeat.backoff_seconds`). |
+| `heartbeat_default_channel` | `str?` | None | Fallback scope (`telegram-<id>` / `discord-<id>`) when an action has no `channel`. `cli` is no longer routable. |
+| `allow_self_modification` | `bool` | `True` | Gates `/add-tool` (the only self-modification path). Set `false` where Telegram/Discord are reachable by non-operators and in the Docker image (no `claude` CLI). |
 | `vault_search_excludes` | `tuple[str, ...]` | `()` | Glob patterns relative to vault. |
 | `mcp_servers` | `tuple[McpServer, ...]` | `()` | External MCP servers; see below. Names must be unique. |
 
@@ -77,6 +79,8 @@ _ENV_OVERRIDES = {
 ```
 
 Env wins over yaml when set + non-empty. Cloud LLM credentials (`AWS_*`, `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GEMINI_API_KEY`, …) are **not** in this map — litellm/boto3 read them directly.
+
+Process-level env read outside `Config`: `METALCLAW_CONFIG` (config path), `METALCLAW_LOG_LEVEL` (console log level; default `INFO` — there is no REPL/`--daemon` distinction any more, `bot._setup_logging`), `XDG_DATA_HOME` (`history.db`), `XDG_STATE_HOME` (log file), `XDG_CONFIG_HOME` (config search), `${VAR}` references inside `mcp_servers` headers/env.
 
 ## Validators
 

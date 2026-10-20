@@ -104,19 +104,18 @@ heartbeat_interval_seconds: 1800
 # Optional [start_hour, end_hour] (24h local time). Outside this window, ticks are skipped.
 # heartbeat_active_hours: [8, 22]
 # Channel that receives heartbeat notifications when an action does not pin
-# its own. Format: "cli", "telegram-<chat_id>", "discord-<channel_id>". When
+# its own. Format: "telegram-<chat_id>", "discord-<channel_id>". When
 # unset and an action is created without an explicit channel, the action
-# inherits the scope it was created from (CLI/Telegram chat/Discord channel).
-# heartbeat_default_channel: cli
+# inherits the scope it was created from (Telegram chat / Discord channel).
+# heartbeat_default_channel: telegram-123456789
 # After an action's run or delivery fails, retries back off exponentially
 # (interval, 2x, 4x, ...) up to this cap. Clears on the next success.
 # heartbeat_failure_backoff_max_seconds: 3600
 
-# Allow `/add-tool` (live) and `/self-edit` (CLI) to spawn `claude -p` and
-# mutate the bot's own source. Default true. Set to false on deployments
-# where Telegram or Discord might be reachable by anyone other than you —
-# `/add-tool` is reachable from those frontends and registers arbitrary new
-# Python in `tools/<slug>.py`. CLI `/self-edit` is gated by the same flag.
+# Allow `/add-tool` to spawn `claude -p` and mutate the bot's own source.
+# Default true. Set to false on deployments where Telegram or Discord might
+# be reachable by anyone other than you — `/add-tool` registers arbitrary new
+# Python in `tools/<slug>.py`.
 allow_self_modification: true
 
 # Show live tool-call status (emoji + tool name) in chat while the bot works.

@@ -1,4 +1,4 @@
-"""Frontend-agnostic helpers shared by CLI, Telegram, and Discord.
+"""Frontend-agnostic helpers shared by Telegram and Discord.
 
 Currently exposes:
 - heartbeat-scope-string helpers (used by ``heartbeat.py`` to route alerts back
@@ -52,16 +52,14 @@ _pending_self_change: dict[str, live_tool.LiveAddState] = {}
 # Single source of truth for command name + descriptions. Drives:
 #   - HELP_LINES (the /help output, identical across frontends)
 #   - Telegram BotCommand registration (telegram_bot_commands())
-#   - CLI completer + handler map (cli_command_table() + canonicalize())
 #   - Discord dispatch (canonicalize())
 #
 # Adding a command here, plus a dispatch branch in the relevant frontend(s),
 # is the only place new command metadata needs to land.
 
-CLI = "cli"
 TELEGRAM = "telegram"
 DISCORD = "discord"
-ALL_FRONTENDS = frozenset({CLI, TELEGRAM, DISCORD})
+ALL_FRONTENDS = frozenset({TELEGRAM, DISCORD})
 
 
 @dataclass(frozen=True)
@@ -139,7 +137,7 @@ COMMANDS: tuple[CommandSpec, ...] = (
     ),
     CommandSpec(
         "add-tool",
-        "/add-tool <description> — write a new tool live (CLI/Telegram/Discord)",
+        "/add-tool <description> — write a new tool live",
         "add a new tool live: <description>",
         ALL_FRONTENDS,
         aliases=("add_tool", "addtool"),
@@ -168,18 +166,6 @@ COMMANDS: tuple[CommandSpec, ...] = (
         "/diff — show diff of a pending self-change",
         "show diff of a pending self-change",
         ALL_FRONTENDS,
-    ),
-    CommandSpec(
-        "self-edit",
-        "/self-edit <description> — make a general code change (CLI only)",
-        "make a general code change (full lint/build/test)",
-        frozenset({CLI}),
-    ),
-    CommandSpec(
-        "think",
-        "/think — toggle display of model thinking (off by default)",
-        "toggle display of model thinking (off by default)",
-        frozenset({CLI}),
     ),
     CommandSpec(
         "status",
@@ -244,11 +230,6 @@ def telegram_bot_commands() -> list[tuple[str, str]]:
     return [
         (s.name.replace("-", "_"), s.short) for s in COMMANDS if TELEGRAM in s.frontends
     ]
-
-
-def cli_command_table() -> dict[str, str]:
-    """Mapping ``name → short`` for the CLI completer."""
-    return {s.name: s.short for s in COMMANDS if CLI in s.frontends}
 
 
 HELP_LINES: list[str] = help_lines()
