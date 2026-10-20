@@ -21,7 +21,14 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import registry
-from self_change import _dirty_tracked, _read_file, _run, _untracked
+from self_change import (
+    SelfModificationBusy,
+    _dirty_tracked,
+    _read_file,
+    _run,
+    _untracked,
+    busy_slot,
+)
 
 log = logging.getLogger(__name__)
 
@@ -52,6 +59,28 @@ class ApprovalResult:
 
 
 def run_add_tool_live(request: str, repo_root: Path) -> LiveAddState:
+    """Run one ``/add-tool``. Returns an aborted state (nothing spawned) when
+    another self-modification holds the process-wide slot."""
+    try:
+        with busy_slot():
+            return _run_add_tool_live_locked(request, repo_root)
+    except SelfModificationBusy as e:
+        log.warning("add-tool refused: %s", e)
+        return LiveAddState(
+            request=request,
+            repo_root=repo_root,
+            new_file=None,
+            slug=None,
+            registered_names=[],
+            gate_results={},
+            gate_messages={},
+            plan_output="",
+            diff="",
+            aborted=str(e),
+        )
+
+
+def _run_add_tool_live_locked(request: str, repo_root: Path) -> LiveAddState:
     pre_tracked = _dirty_tracked(repo_root)
     pre_untracked = _untracked(repo_root)
     pre_keys = set(registry.TOOLS)

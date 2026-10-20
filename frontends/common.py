@@ -31,6 +31,7 @@ import history
 import live_tool
 import mcp_client
 import memory
+import self_change
 from chat_loop import Session, chat_via_escalation, run_turn, scoped_chat
 from config import get_config
 
@@ -1101,6 +1102,11 @@ async def run_add_tool(send: SendFn, request: str, scope: str) -> None:
         await send(
             "a self-change is already pending — /approve, /approve_force, /reject, or /diff first"
         )
+        return
+    if self_change.is_busy():
+        # Early, friendly refusal; run_add_tool_live re-checks under the lock.
+        log.info("/add-tool refused: another self-modification is running")
+        await send("another self-modification is in progress — try again later")
         return
     await send("running self-change… this can take a few minutes.")
     state = await asyncio.to_thread(live_tool.run_add_tool_live, request, REPO_ROOT)

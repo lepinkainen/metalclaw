@@ -363,3 +363,14 @@ def test_append_to_init_no_existing_relative_imports(tmp_path):
     ast.parse(text)
     assert "from .newmod import f" in text
     assert text.index("import os") < text.index("from .newmod")
+
+
+def test_add_tool_aborts_without_spawning_when_self_change_busy(fake_repo):
+    """Regression for #35: two concurrent runs must not race on the git delta."""
+    import self_change
+
+    with self_change.busy_slot(), patch("subprocess.run") as run:
+        state = live_tool.run_add_tool_live("make a tool", fake_repo)
+    run.assert_not_called()
+    assert state.aborted and "in progress" in state.aborted
+    assert state.new_file is None

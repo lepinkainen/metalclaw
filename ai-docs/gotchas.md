@@ -72,6 +72,10 @@ Never call `asyncio.create_task(heartbeat.run_tick())` directly — use `heartbe
 
 `tools._HTTP` is module-level — created at import, never closed. Same for `providers/ollama._CLIENT`. Acceptable for daemon process; don't add `_HTTP.close()` cleanup unless you also rebuild on next call.
 
+## Self-modification is single-flight
+
+`self_change._BUSY` (a `threading.Lock`, acquired non-blocking via `busy_slot()`) guards both `run_self_change` and `live_tool.run_add_tool_live`. Both diff the working tree before/after `claude -p`; overlapping runs would see each other's new file and revert each other. `run_self_change` raises `SelfModificationBusy`; `run_add_tool_live` returns an aborted state. `common.run_add_tool` also checks `self_change.is_busy()` before the "running…" message. The per-scope `_pending_self_change` map is separate: it tracks awaiting-approval state, not running state.
+
 ## Self-change snapshot semantics
 
 `run_self_change` snapshots dirty/untracked files **before** spawning Claude. Reject reverts only the **delta** — pre-existing dirty files are untouched. If you abort mid-run, you must clean up Claude's edits manually because the snapshot is discarded.

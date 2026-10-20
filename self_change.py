@@ -1,12 +1,44 @@
+import contextlib
 import json
 import logging
 import subprocess
+import threading
 import time
+from collections.abc import Iterator
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
 log = logging.getLogger(__name__)
+
+
+class SelfModificationBusy(RuntimeError):
+    """Another ``/add-tool`` or ``/self-edit`` run is in progress in this process."""
+
+
+# One slot for every self-modification path (``/self-edit`` here and
+# ``/add-tool`` in live_tool). Both diff the working tree before and after
+# spawning ``claude -p``; two overlapping runs would each see the other's new
+# file, abort with "expected 1 new file, got 2", and revert each other (#35).
+_BUSY = threading.Lock()
+
+
+@contextlib.contextmanager
+def busy_slot() -> Iterator[None]:
+    """Hold the process-wide self-modification slot; non-blocking.
+
+    Raises ``SelfModificationBusy`` immediately when another run holds it.
+    """
+    if not _BUSY.acquire(blocking=False):
+        raise SelfModificationBusy("another self-modification is in progress")
+    try:
+        yield
+    finally:
+        _BUSY.release()
+
+
+def is_busy() -> bool:
+    return _BUSY.locked()
 
 
 @dataclass
@@ -73,6 +105,12 @@ def _untracked(repo_root: Path) -> set[str]:
 
 
 def run_self_change(request: str, repo_root: Path) -> SelfChangeResult:
+    """Run one ``/self-edit``; raises ``SelfModificationBusy`` if a run is active."""
+    with busy_slot():
+        return _run_self_change_locked(request, repo_root)
+
+
+def _run_self_change_locked(request: str, repo_root: Path) -> SelfChangeResult:
     bot_src = _read_file(repo_root / "bot.py")
     tools_src = _read_tools_package(repo_root)
     registry_src = _read_file(repo_root / "registry.py")

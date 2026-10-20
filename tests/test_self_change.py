@@ -2,6 +2,8 @@ import json
 import subprocess
 from unittest.mock import MagicMock, call, patch
 
+import pytest
+
 from self_change import run_self_change
 
 
@@ -259,3 +261,27 @@ def test_claude_timeout_surfaces_as_failure(tmp_path):
         result = run_self_change("add a tool", tmp_path)
 
     assert "timed out" in result.plan_output
+
+
+# --- #35: process-wide busy guard ---
+
+
+def test_run_self_change_refuses_while_another_run_holds_the_slot(tmp_path):
+    import self_change
+
+    with (
+        self_change.busy_slot(),
+        patch("subprocess.run") as run,
+        pytest.raises(self_change.SelfModificationBusy),
+    ):
+        run_self_change("anything", tmp_path)
+    run.assert_not_called()
+    assert not self_change.is_busy()
+
+
+def test_busy_slot_is_released_after_exception():
+    import self_change
+
+    with pytest.raises(ValueError), self_change.busy_slot():
+        raise ValueError("boom")
+    assert not self_change.is_busy()
