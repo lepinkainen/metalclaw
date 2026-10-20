@@ -769,7 +769,7 @@ def test_format_now_includes_offset():
     assert "(UTC+" in s or "(UTC-" in s
 
 
-def test_system_prompt_clock_has_offset():
+def test_system_prompt_clock_has_offset(cfg):
     from chat_loop import build_system_prompt, format_now
 
     prompt = build_system_prompt(format_now())
