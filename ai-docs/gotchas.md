@@ -77,3 +77,7 @@ Set by `run_cli_repl` (`cli.py:213`). `/big` reads it via `_cli_messages_ref()`.
 ## Provider history is opaque
 
 The chat loop appends `am.raw` and `provider.format_tool_results(...)` outputs to history without inspecting them. **Sessions don't survive a provider switch** — `messages` accumulated under Ollama can't be replayed under Anthropic. If config-flips a provider mid-session, expect breakage.
+
+## MCP tools are dynamic
+
+`mcp_client` registers into `registry.TOOLS` at startup (after `import tools`) and pops its keys on `stop()`. Tests using it must `mcp_client.stop()` in teardown. A native tool with the same `<server>_<tool>` name wins (MCP entry skipped). MCP tool funcs block their calling thread up to `call_timeout_seconds`; never call `client.call_tool` directly — the SDK `Client` lives on the `mcp` thread's loop. `mcp.Client` must be entered/exited in one task (anyio cancel scopes) → one owner task per server, stopped via its `stop` Event.

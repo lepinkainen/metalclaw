@@ -88,6 +88,14 @@ Per-module symbol map. `→` = imports. `←` = imported by.
 - `match_messages(msgs, subject, sent_at)`: strips `Viesti Wilmasta:` prefix, prefix-matches (notification subjects are truncated), ±15 min window when `sent_at` given.
 - `reset_client()` for tests; tests use `httpx.MockTransport(FakeWilma())` (`tests/test_wilma.py`).
 
+## mcp_client.py — MCP client (phase 1)
+
+- Public: `start(servers)`, `stop(timeout=5)`, `status() -> list[dict(name,status,transport,tools,error)]`, `system_prompt_note() -> str`.
+- State: `_LOOP`/`_THREAD` (dedicated loop thread), `_STATE: dict[name, _Server]` (`cfg`, `status` starting/up/down/disabled, `tools` local names, `error`, `client`, `stop` Event, `task` concurrent future of `_serve`).
+- `_transport(s, stack)` → `StdioServerParameters` or `streamable_http_client(url, http_client=httpx2.AsyncClient(headers, timeout))`; monkeypatched in tests to return an in-process `MCPServer`.
+- `_serve` owner task: `Client` → paginated `list_tools` → `ready.set_result` → wait `stop`. `_register`, `_to_schema`, `_make_func`, `_content_text`, `_clip`, `_convert_result` — see `tools.md` "MCP tools".
+- Deps in: `bot`, `chat_loop`, `frontends.common`. Tests: `tests/test_mcp_client.py`.
+
 ## telegram_format.py — CommonMark → Telegram HTML
 
 - Public: `to_html(text) -> str`. Used only by `frontends/telegram.py`.

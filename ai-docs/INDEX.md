@@ -19,7 +19,7 @@ AI-only architecture docs. Dense, indexed, cross-referenced. No human-friendly p
 | `conventions.md` | House rules: imports, locking, async, errors, tests. |
 | `gotchas.md` | Subtle traps: circular imports, mutated history, tool registration order, file-watching. |
 | `testing.md` | pytest fixtures, conftest, common stubs. |
-| `mcp-plan.md` | Plan (not implemented): MCP client — external MCP server tools bridged into `registry.TOOLS`, config, lifecycle, sync→async dispatch, security. |
+| `mcp-plan.md` | Plan (phase 1 implemented — see Status): MCP client — external MCP server tools bridged into `registry.TOOLS`, config, lifecycle, sync→async dispatch, security. |
 
 ## Source map (line counts)
 
@@ -36,6 +36,7 @@ self_change.py    183   spawn `claude -p`, gate via task lint/build/test, approv
 live_tool.py      290   /add-tool: spawn `claude -p`, focused gates, async approval
 telegram_format.py 146  CommonMark→Telegram HTML
 vault_search.py   205   ripgrep wrapper + read_note
+mcp_client.py     ~300  MCP client: loop thread, server owner tasks, TOOLS bridge, result wrap
 wilma.py          477   unofficial Wilma client: login/TOTP, students, messages, subject matching
 providers/base.py  40   Protocol, AssistantMessage, ToolCall
 providers/__init__ 32   get_provider() factory

@@ -13,6 +13,7 @@ tests/
   test_frontends_common.py    parsers, formatters, run_remember/forget/memory
   test_inbox_history_usage.py inbox tool, history search/up-arrow isolation, usage, /status, Debouncer, Telegram debounce
   test_heartbeat.py           parse_heartbeat_file, is_due, run_tick, sentinel handling
+  test_mcp_client.py          in-process MCPServer via monkeypatched _transport: register/call/timeout/truncation/isolation, config validators
   test_memory.py              parse/render, mutators, forget statuses, migration
   test_providers.py           chat-loop tool dispatch + session-provider stamping
   test_litellm_provider.py    LiteLLMProvider request/response shape, tool-call extraction

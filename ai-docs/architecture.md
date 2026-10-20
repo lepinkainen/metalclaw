@@ -25,7 +25,8 @@
 ```
 
 Rules:
-- `chat_loop.py` has **no frontend deps** — only providers, registry, memory, config.
+- `chat_loop.py` has **no frontend deps** — only providers, registry, memory, config, mcp_client (`system_prompt_note`).
+- `mcp_client.py` imports only `registry` + `config` at module level; `mcp`/`httpx2` are imported lazily (~0.4 s import).
 - `tools/escalation.py` lazy-imports `chat_loop` + `providers` inside `escalate_to_big_model` (`tools/escalation.py:30`) to avoid the `chat_loop → registry → tools` cycle at module load.
 - `heartbeat.py` lazy-imports `chat_loop` inside `run_tick` (`heartbeat.py:241`) for the same reason.
 - Frontends know nothing of each other — they coordinate via `channels.py` registry.
@@ -41,10 +42,11 @@ Rules:
 1. **`import tools`** (`bot.py:33`) — triggers `@tool` decorators registering into `registry.TOOLS`. Must precede any `chat()` call.
 2. `get_config()` (caches via `lru_cache`).
 3. `memory.migrate_legacy_scopes()` — one-shot collapse of `cli.md`/`telegram-*.md`/`discord-*.md` → `memory.md`.
-4. Conditionally start Telegram (`_start_telegram`) and Discord (`_start_discord`); each only if its token exists. Daemon mode requires ≥1 frontend token.
-5. `heartbeat.run(stop_event)` as background task.
-6. If not daemon → `run_cli_repl()`. Else `await asyncio.Event().wait()` until SIGINT.
-7. Finally: signal `stop`, await heartbeat shutdown, stop telegram, stop discord.
+4. `await asyncio.to_thread(mcp_client.start, cfg.mcp_servers)` — bounded by max `startup_timeout_seconds`, never raises; registers MCP tools before any frontend turn.
+5. Conditionally start Telegram (`_start_telegram`) and Discord (`_start_discord`); each only if its token exists. Daemon mode requires ≥1 frontend token.
+6. `heartbeat.run(stop_event)` as background task.
+7. If not daemon → `run_cli_repl()`. Else `await asyncio.Event().wait()` until SIGINT.
+8. Finally: signal `stop`, await heartbeat shutdown, `mcp_client.stop()` (closes sessions, pops MCP tools, joins thread), stop telegram, stop discord.
 
 ## Test imports
 
@@ -52,7 +54,7 @@ Tests import directly from the module that defines the symbol — `chat_loop`, `
 
 ## Concurrency model
 
-- One asyncio event loop drives everything.
+- One asyncio event loop drives everything — except MCP: `mcp_client` owns a second loop on daemon thread `mcp` (only spawned when a server is enabled). Sync tool closures `run_coroutine_threadsafe(..., _LOOP).result(timeout)` onto it from executor threads (or the main loop thread — can't deadlock since MCP I/O runs elsewhere). One owner task per server holds the `Client` context (anyio: enter/exit in the same task).
 - Each user turn runs through `chat_loop.run_turn` (`chat_loop.py:273`), which dispatches the blocking provider call via a single `loop.run_in_executor(None, chat_call)` (`chat_loop.py:296`). All three frontends (CLI `frontends/cli.py:167,318`; Telegram `frontends/telegram.py:239`; Discord `frontends/discord.py:270`) share that path. Heartbeat has its own executor call at `heartbeat.py:303`.
 - Discord runs handlers concurrently per channel; `frontends/discord.py:24-33` keeps a per-channel `asyncio.Lock` to serialize session mutations. Telegram does not need one because PTB serializes updates per-chat by default (see comment near `frontends/telegram.py:256`).
 - Memory mutations: per-process `threading.Lock` + `fcntl.flock` cross-process on sidecar `memory.md.lock` (`memory.py:179`).

@@ -58,6 +58,16 @@ Ollama and litellm consume this directly (litellm normalises to per-backend form
 | `read_note` | `tools.py:748` | `path` | `dict` | Vault note read via `vault_search.read`. |
 | `escalate_to_big_model` | `tools.py:768` | `query, reason` | `dict` | Calls big model with current session snapshot. Returns `{status, model, reason, reply}`. Disabled if `cfg.escalation_enabled=False`. |
 
+## MCP tools (`mcp_client.py`)
+
+Not `@tool`-decorated: `mcp_client._register` writes `registry.Tool(func=<closure>, schema=<mapped>, args_model=None)` directly into `TOOLS` at startup (after `import tools`, so native names win on collision — skipped with a warning).
+- Name `<server>_<remote>` sanitised to `[A-Za-z0-9_-]`, clipped to 64. Description `[<server>] <desc>` (≤1024). `input_schema` passed through minus `$schema`/`title`; `$ref`/`x-mcp-header` etc. untouched.
+- `args_model=None` → no local validation; the server's `is_error` text comes back as `Error: ...`.
+- Result: `{"source": "mcp:<server>", "untrusted": true, "result": structured_content (unwrapped if just {"result": x}) or joined text}`; image/audio/blob → `[... N bytes omitted]` placeholders. Over 20000 chars (`_RESULT_CHAR_LIMIT`) → clipped JSON/text string ending `…[truncated N chars]`.
+- Timeout (`call_timeout_seconds`) / transport failure → `Error: mcp <server>.<tool> ...` string; failure stored in `status()` `error`.
+- Listed automatically by CLI `/tools` and `read_manual` (they iterate `TOOLS`). `/status` shows per-server up/down + tool names.
+- Current real server: GitHub remote (read-only), `include: [get_me, search_repositories, list_issues, issue_read, actions_list]` → `github_get_me` etc. Remote tool names are consolidated with a `method` arg (`issue_read` method `get`/`get_comments`; `actions_list` method `list_workflow_runs`).
+
 ## `_MEMORY_MUTATORS` set
 
 `chat_loop.py:96` — must include any tool that mutates `memory.md`:

@@ -40,6 +40,23 @@
 | `heartbeat_interval_seconds` | `int` | `1800` | Clamped to `>=30` in `run()`. |
 | `heartbeat_active_hours` | `tuple[int,int]?` | None | `[start, end]` 24h local; wraparound supported. |
 | `vault_search_excludes` | `tuple[str, ...]` | `()` | Glob patterns relative to vault. |
+| `mcp_servers` | `tuple[McpServer, ...]` | `()` | External MCP servers; see below. Names must be unique. |
+
+### `McpServer` (`extra="forbid"` — typo keys fail, unlike `Config`)
+
+| Field | Type | Default | Notes |
+|---|---|---|---|
+| `name` | `str` | **required** | `^[a-z][a-z0-9_]{0,15}$`; tool prefix is `<name>_`. |
+| `transport` | `"http"\|"stdio"` | **required** | http = streamable HTTP. |
+| `url` | `str?` | None | Required for http, forbidden for stdio. |
+| `headers` | `dict[str,str]` | `{}` | http only. `${VAR}` expanded from env at connect time in `mcp_client._transport` (`string.Template`; `$$` escapes); missing var → that server marked down with an error naming the var (never the value); bot carries on. Never logged; not stored in Config. |
+| `command` / `args` / `env` | | | stdio only (`command` required). `env` substituted like headers; child gets the SDK's allow-listed env plus these. |
+| `include` | `tuple[str,...]?` | None | Allowlist of remote tool names (recommended). Unknown names → warning. |
+| `exclude` | `tuple[str,...]` | `()` | Denylist; mutually exclusive with `include`. |
+| `hint` | `str?` | None | Appended to the system prompt while the server has tools registered. |
+| `enabled` | `bool` | `True` | |
+| `startup_timeout_seconds` | `float` | `10` | Handshake + list_tools; waits overlap across servers. |
+| `call_timeout_seconds` | `float` | `60` | Per tool call; httpx2 read timeout is set to this + 5. |
 
 ## Env override map (`config.py:30`)
 
@@ -68,6 +85,8 @@ Env wins over yaml when set + non-empty. Cloud LLM credentials (`AWS_*`, `OPENAI
 - `_resolve_and_check` (model-level):
   - `escalation_model = None` → fill with the per-provider default (`model` for ollama, `litellm_model` for litellm).
   - No api-key checks: cloud credentials live outside metalclaw's config.
+  - `mcp_servers` names unique.
+- `McpServer._check_transport` (url/command per transport; include xor exclude).
 
 ## Path helpers
 

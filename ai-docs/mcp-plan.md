@@ -2,7 +2,29 @@
 
 Goal: tools exposed by external MCP servers become entries in `registry.TOOLS`, callable by the model exactly like native `@tool` tools. Client only — metalclaw does not serve MCP.
 
-Line refs are against the working tree on 2026-10-20 (includes uncommitted usage-recording / inbox / conversation-history / `/status` work; numbers will drift — symbol names are authoritative).
+## Status (2026-10-20): phase 1 implemented
+
+Code: `mcp_client.py`, `config.McpServer`, `bot._async_main` start/stop, `chat_loop.build_system_prompt`, `frontends/common.format_status`, `tests/test_mcp_client.py`. First real server is **GitHub's hosted remote** (not playbook-mcp), read-only.
+
+SDK reality check (`mcp==2.3.0`, installed + verified from source): API matches the plan — `Client(target)`, `streamable_http_client(url, http_client=httpx2.AsyncClient)`, `list_tools(cursor=)` → `.tools/.next_cursor`, `call_tool(name, args)` → `CallToolResult(content, structured_content, is_error)`, in-process test server class is `mcp.server.MCPServer`. Python 3.14 wheels fine; mypy clean with no overrides. Footprint: pulls `httpx2`, `starlette`, `uvicorn`, `sse-starlette`, `pyjwt`, `cryptography` (server-side deps; unused). Import cost ~0.4 s → `mcp`/`httpx2` imported lazily inside `mcp_client`.
+
+Deviations from the plan below:
+- **`prefix` config field cut** — prefix is always `<name>_`; the name regex already keeps it short. Add back if two servers ever need non-name prefixes.
+- **`hint` config field added** (not in plan) — optional per-server sentence appended to the system prompt while that server has tools (e.g. "use github_* for the user's own projects; call github_get_me first"). Keeps server-specific prompt text in config, out of code.
+- **Env substitution at connect time** in `mcp_client._transport`, not at config load: a missing `${VAR}` marks only that server down (error names the var) instead of stopping the bot, and secrets never live in the frozen Config.
+- **No tool-count warning** — it fired on every startup with the standard GitHub config and sat permanently in `/status`; the `include` list is the control.
+- **`stop()` pops the server's keys from `registry.TOOLS`** and clears `_STATE` — symmetric with `start()`, and test teardown needs nothing else.
+- **No "status flips to down" on a failed call** — the call path records `error` only; the owner task flips `down` if the connection itself dies. A single bad call (e.g. 5xx) shouldn't make `/status` lie about a live session.
+- **Plain-`http://` warning cut** — no reliable way to tell a tailnet host apart; noise for the main use case.
+- `startup_timeout` per server measured from a shared t0 (waits overlap, total ≤ max) — as planned.
+
+GitHub remote facts (verified live 2026-10-20, docs/remote-server.md in github/github-mcp-server):
+- URL `https://api.githubcopilot.com/mcp/`; path variants `/readonly`, `/x/<toolset>[/readonly]`; headers `X-MCP-Readonly`, `X-MCP-Toolsets`, `X-MCP-Tools` (invalid name = server error), `X-MCP-Lockdown`, `X-MCP-Insiders`. Bearer PAT auth.
+- With `X-MCP-Readonly: true` no write tools are listed; with `X-MCP-Tools` the server lists exactly those tools. We set both, plus the `/readonly` path, plus our `include` — defence in depth.
+- Tool names are consolidated: `issue_read(method=get|get_comments|get_sub_issues|get_parent|get_labels)`, `actions_list(method=list_workflows|list_workflow_runs|list_workflow_jobs|list_workflow_run_artifacts)`. Schemas carry a non-standard `x-mcp-header` key on owner/repo; passed through, harmless so far.
+- Results arrive as `structured_content` dicts. Sizes seen: get_me ~0.5k, search_repositories (5, minimal) ~2k, list_issues (fields subset) ~0.4k, issue_read get ~2k / get_comments ~0.5k, actions_list runs perPage=3 ~4k, perPage=30 ~45k → clipped to 20k string.
+
+Line refs below are against the working tree on 2026-10-20 (includes uncommitted usage-recording / inbox / conversation-history / `/status` work; numbers will drift — symbol names are authoritative).
 
 ## TL;DR design
 
@@ -111,7 +133,7 @@ class Config:
     # model_validator: names unique, resolved prefixes unique.
 ```
 
-Secrets: `${VAR}` substitution via `string.Template(v).substitute(os.environ)` inside the validator — missing var → `KeyError` → `ValueError("mcp_servers[playbook].headers.Authorization: env var PLAYBOOK_MCP_TOKEN not set")`, surfacing as a config error like any other (`get_config`, `config.py:~190`). Not added to `_ENV_OVERRIDES` (`config.py:39`) — that table is for flat top-level fields. Never log header/env values (log keys only); `Config.__repr__` will contain them, so don't log the config object.
+Secrets: `${VAR}` substitution via `string.Template(v).substitute(os.environ)` at connect time in `mcp_client._transport` — missing var → `RuntimeError("env var PLAYBOOK_MCP_TOKEN not set")` inside `_serve`, so that server is marked down and the bot carries on. Not added to `_ENV_OVERRIDES` (`config.py:39`) — that table is for flat top-level fields. Never log header/env values (log keys only); Config holds only the unexpanded `${VAR}` templates.
 
 Note `frozen=True` + `dict` fields: pydantic freezes attribute assignment, not dict contents — fine, nobody mutates them.
 
@@ -290,7 +312,7 @@ Truncation: `_RESULT_CHAR_LIMIT = 20_000` module constant (matches `read_email`'
 Native tools are already ~28 (`tools/__init__.py` `__all__`). Every schema costs prompt tokens on each `chat_once` and small models degrade at picking among many similar tools. Keep it bounded:
 
 1. **`include` allowlist per server** — the primary control. Documented as recommended; config.example uses it.
-2. Startup `log.warning` when `len(TOOLS) > 32` (`_TOOL_COUNT_WARN` constant) naming the per-server counts. Cheap signal, no behaviour change.
+2. (Startup warning at >32 tools was tried and dropped: constant noise with the standard GitHub config.)
 3. Phase 3, only if needed: per-server `escalation_only: true` → its tools excluded from the local model and visible only to the big model. Implementation: `chat()` (`chat_loop.py:380`) passes `exclude_tools=mcp_client.escalation_only_names()` to `_chat_with_provider`; `chat_via_escalation` doesn't. Pairs naturally with the existing escalation path.
 
 Deferred: lazy discovery meta-tool (`mcp_search_tools` + `mcp_call`), relevance-based schema pruning. Both are real complexity; revisit only if allowlists prove insufficient.
@@ -337,7 +359,7 @@ Fake server: v2 in-process server object (`MCPServer`/FastMCP-equivalent — con
 Fixture: build `McpServer(...)` directly (or via `cfg_file`/`write_config` from `tests/conftest.py`); `yield`; then `mcp_client.stop()` and pop every key the test registered from `registry.TOOLS` (global state — see `ai-docs/gotchas.md#tool-registration`).
 
 Cases:
-1. Config: http requires url; stdio requires command; include+exclude rejected; duplicate names rejected; `${VAR}` substituted; missing var → `ValueError` naming the var; `extra="forbid"` catches typo keys. (`tests/test_config.py`, uses `cfg_file`/`write_config`/`clear_env`.)
+1. Config: http requires url; stdio requires command; include+exclude rejected; duplicate names rejected; `extra="forbid"` catches typo keys. (`tests/test_config.py`, uses `cfg_file`/`write_config`/`clear_env`.)
 2. `_to_schema`: prefix, sanitisation, 64-char clip, `$schema`/`title` stripped, missing `properties` defaulted, description `[server]` prefix.
 3. Registration: include/exclude filtering; collision with a native name skipped and native func untouched (`TOOLS["weather"].func is tools.weather`).
 4. Call path: `TOOLS["t_add"].func(a=1, b=2)` → `result == 3` in wrapper; `boom` → string starting `Error:`; `slow` with `call_timeout_seconds=0.2` → timeout error string, returns within ~0.5 s; two concurrent calls from a `ThreadPoolExecutor` both succeed.
@@ -351,7 +373,7 @@ No real network/subprocess in CI. A manual smoke against playbook-mcp is the int
 
 ## Phased implementation
 
-**Phase 1 — smallest useful slice (playbook-mcp over HTTP, read-only tools)**
+**Phase 1 — smallest useful slice (DONE; shipped against GitHub remote instead of playbook-mcp)**
 1. `pyproject.toml`: `mcp>=2.3,<3`; `uv lock`; confirm 3.14 install + mypy clean (may need `ignore_missing_imports` override if stubs lacking — check first).
 2. `config.py`: `McpServer` + `Config.mcp_servers` + validators; `config.example.yaml` commented block.
 3. `mcp_client.py`: loop thread, `start`/`stop`/`status`, owner task, registration, schema map, dispatch, conversion, truncation. Both `stdio` and `http` transports (stdio is ~3 lines given `StdioServerParameters`).
