@@ -17,6 +17,7 @@ def test_loads_vault_path_and_defaults(tmp_path, cfg_file, write_config):
     assert cfg.litellm_model == "bedrock/anthropic.claude-haiku-4-5"
     assert cfg.aws_region is None
     assert cfg.aws_profile is None
+    assert cfg.litellm_prompt_caching is True
     assert cfg.escalation_enabled is False
     assert cfg.escalation_provider == "litellm"
 
@@ -251,3 +252,10 @@ def test_env_override_beats_cwd_config(tmp_path, monkeypatch, clear_env):
         assert config.get_config().model == "from-env"
     finally:
         config.reset_cache()
+
+
+def test_litellm_prompt_caching_yaml_round_trip(tmp_path, cfg_file, write_config):
+    write_config(
+        cfg_file, vault_path=str(tmp_path / "vault"), litellm_prompt_caching=False
+    )
+    assert config.get_config().litellm_prompt_caching is False

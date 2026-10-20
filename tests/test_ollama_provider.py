@@ -108,6 +108,17 @@ def test_to_wire_emits_ollama_shapes():
     ]
 
 
+def test_chat_once_flattens_system_cache_boundary(patched_post):
+    from messages import SYSTEM_CACHE_BOUNDARY
+
+    p = OllamaProvider(url="http://x/api/chat", model="gemma4:e4b")
+    p.chat_once(history=[], tools=[], system="a" + SYSTEM_CACHE_BOUNDARY + "b")
+    assert patched_post["json"]["messages"][0] == {
+        "role": "system",
+        "content": "a\n\nb",
+    }
+
+
 def test_chat_once_sends_wire_history_after_system(patched_post):
     p = OllamaProvider(url="http://x/api/chat", model="gemma4:e4b")
     p.chat_once(history=[UserMessage("hi")], tools=[], system="be terse")

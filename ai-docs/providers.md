@@ -15,6 +15,8 @@ class Usage:
     prompt_tokens: int
     completion_tokens: int
     cost_usd: float | None = None
+    cache_read_tokens: int | None = None  # prompt-cache hits (subset of prompt_tokens)
+    cache_write_tokens: int | None = None  # prompt-cache writes
 
 
 @dataclass(frozen=True)
@@ -68,7 +70,7 @@ get_provider(name, *, model_override=None) -> Provider
 Two branches:
 
 - `"ollama"` → `OllamaProvider(url=cfg.ollama_url, model=model_override or cfg.model)`.
-- `"litellm"` → `LiteLLMProvider(model=model_override or cfg.litellm_model, aws_region=cfg.aws_region, aws_profile=cfg.aws_profile)`.
+- `"litellm"` → `LiteLLMProvider(model=model_override or cfg.litellm_model, aws_region=cfg.aws_region, aws_profile=cfg.aws_profile, prompt_caching=cfg.litellm_prompt_caching)`.
 
 Raises `ValueError` on unknown name.
 
@@ -89,8 +91,13 @@ Raises `ValueError` on unknown name.
 - Cloud LLM API keys (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GEMINI_API_KEY`, …) read directly by litellm — not declared in `config.py`.
 - `num_retries=2` covers transient `ThrottlingException` on Bedrock.
 - `chat_once`:
-  - System prompt placed as the first message in the list (litellm normalises Anthropic's separate-kwarg shape internally).
-  - Tools passed through as-is (registry already in OpenAI tool-schema shape).
+  - System prompt placed as the first message in the list (litellm normalises Anthropic's separate-kwarg shape internally). Without caching it is `flatten_system_prompt(system)` (the `SYSTEM_CACHE_BOUNDARY` becomes `"\n\n"`).
+  - Tools passed through as-is (registry already in OpenAI tool-schema shape) — except for the caching breakpoint below.
+- **Prompt caching** (`prompt_caching` ctor kwarg ← `cfg.litellm_prompt_caching`, default on). Effective only when `_is_anthropic_model(model)`: `anthropic/…`, or `bedrock/…` whose id contains `anthropic.` or `claude`; `self.prompt_caching` is already `False` for everything else, so non-Claude requests keep the plain wire shape (independent of `drop_params`). When on:
+  - `_system_message` splits `system` at `messages.SYSTEM_CACHE_BOUNDARY` and emits `{"role":"system","content":[{"type":"text","text":stable,"cache_control":{"type":"ephemeral"}}, {"type":"text","text":volatile}]}` — the breakpoint sits on the stable instructions only; the volatile tail (clock, memory summary, heartbeat summary, built by `chat_loop.build_system_prompt`) is a plain second block so a changed minute or memory write never invalidates the cached tools + instructions prefix. No boundary → one cached block.
+  - `_tools` copies the last tool dict and adds top-level `"cache_control": {"type":"ephemeral"}`; one breakpoint on the last tool caches the whole tool block (Anthropic cache order: tools → system → messages, so the system breakpoint also covers the tools).
+  - litellm maps both to Anthropic `cache_control` (`llms/anthropic/chat/transformation.py` system blocks + `_map_tool_helper`) and to Bedrock Converse `cachePoint` blocks (`llms/bedrock/chat/converse_transformation.py::_transform_system_message`, `prompt_templates/factory.py::add_cache_point_tool_block`). Bedrock additionally gates on `bedrock_model_accepts_cache_points` (litellm's cost map says the model supports caching, or it is unmapped), so a Bedrock Claude id without caching support is still safe. Verified against litellm 1.105.0.
+  - Conversation history gets no breakpoint: it changes every turn and Anthropic allows only four breakpoints per request.
   - Tool-call `arguments` come back as JSON strings → parsed defensively (`json.loads`, falls back to `{}` on JSONDecodeError).
   - Content-block responses: `text` blocks are joined, any other block type raises `ValueError`.
 - `_to_wire` (OpenAI envelope): `AssistantMessage` → `{"role":"assistant","content": text, "tool_calls": [{"id", "type":"function", "function": {"name", "arguments": json.dumps(args)}}]?}`; `ToolResultMessage` → `{"role":"tool", "tool_call_id", "content"}`.

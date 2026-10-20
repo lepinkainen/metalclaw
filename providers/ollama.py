@@ -14,6 +14,7 @@ from messages import (
     ToolResultMessage,
     Usage,
     UserMessage,
+    flatten_system_prompt,
 )
 
 log = logging.getLogger(__name__)
@@ -67,7 +68,9 @@ class OllamaProvider:
     ) -> AssistantMessage:
         payload_messages: list[dict[str, Any]] = []
         if system:
-            payload_messages.append({"role": "system", "content": system})
+            payload_messages.append(
+                {"role": "system", "content": flatten_system_prompt(system)}
+            )
         payload_messages.extend(self._to_wire(history))
 
         payload: dict[str, Any] = {

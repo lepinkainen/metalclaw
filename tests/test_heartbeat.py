@@ -776,6 +776,16 @@ def test_system_prompt_clock_has_offset(cfg):
     assert "(UTC+" in prompt or "(UTC-" in prompt
 
 
+def test_system_prompt_clock_sits_after_cache_boundary(cfg):
+    from chat_loop import build_system_prompt, format_now
+    from messages import split_system_prompt
+
+    stable, volatile = split_system_prompt(build_system_prompt(format_now()))
+    assert "current date and time" not in stable
+    assert "current date and time" in volatile
+    assert stable.startswith("You are Metalclaw")
+
+
 def _fail_channel():
     class _FailChannel:
         name = "cli"

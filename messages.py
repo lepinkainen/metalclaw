@@ -13,14 +13,34 @@ from collections.abc import Sequence
 from dataclasses import dataclass, field
 
 __all__ = [
+    "SYSTEM_CACHE_BOUNDARY",
     "AssistantMessage",
     "Message",
     "ToolCall",
     "ToolResultMessage",
     "Usage",
     "UserMessage",
+    "flatten_system_prompt",
+    "split_system_prompt",
     "validate_exchange",
 ]
+
+# Separates the stable part of a system prompt (instructions, tool notes)
+# from the volatile tail (clock, memory and heartbeat summaries). Providers
+# that support prompt caching put the cache breakpoint on the stable part
+# only; everyone else flattens the two back into one string.
+SYSTEM_CACHE_BOUNDARY = "\n\x1e\n"
+
+
+def split_system_prompt(system: str) -> tuple[str, str]:
+    """``(stable, volatile)``; ``volatile`` is ``""`` when there is no boundary."""
+    stable, sep, volatile = system.partition(SYSTEM_CACHE_BOUNDARY)
+    return (stable, volatile) if sep else (system, "")
+
+
+def flatten_system_prompt(system: str) -> str:
+    """One plain string for providers without a cache breakpoint."""
+    return system.replace(SYSTEM_CACHE_BOUNDARY, "\n\n")
 
 
 @dataclass(frozen=True)
@@ -35,6 +55,9 @@ class Usage:
     prompt_tokens: int
     completion_tokens: int
     cost_usd: float | None = None  # None = unknown (local model / unpriced)
+    # Prompt-cache breakdown of prompt_tokens; None = provider reports none.
+    cache_read_tokens: int | None = None
+    cache_write_tokens: int | None = None
 
 
 @dataclass(frozen=True)

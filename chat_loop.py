@@ -23,6 +23,7 @@ import memory
 from config import get_config
 from heartbeat import format_now
 from messages import (
+    SYSTEM_CACHE_BOUNDARY,
     AssistantMessage,
     Message,
     ToolResultMessage,
@@ -83,7 +84,6 @@ def _parse_command(text: str) -> tuple[str, str] | None:
 
 _SYSTEM_PROMPT_BASE = (
     "You are Metalclaw, a helpful assistant. "
-    "The current date and time is {now}. "
     "When a user request can be fulfilled by calling a tool, you MUST use the tool "
     "rather than simulating or writing code. Never generate fake results. "
     "Never claim you scheduled, set, remembered, cancelled, or performed an action "
@@ -119,20 +119,27 @@ _ESCALATION_HINT = (
 
 
 def build_system_prompt(now: str) -> str:
-    base = _SYSTEM_PROMPT_BASE.format(now=now)
+    """Stable instructions, then ``SYSTEM_CACHE_BOUNDARY``, then the volatile tail.
+
+    The clock, memory summary and heartbeat summary change between calls, so
+    they live after the boundary where a caching provider leaves them out of
+    the cached prefix (see ``providers.litellm_provider._system_message``).
+    """
     cfg = get_config()
+    base = _SYSTEM_PROMPT_BASE
     if cfg.escalation_enabled and cfg.provider == "ollama":
         base += "\n\n" + _ESCALATION_HINT
     mcp_note = mcp_client.system_prompt_note()
     if mcp_note:
         base += "\n\n" + mcp_note
+    tail = f"The current date and time is {now}."
     mem_summary = memory.summary()
     if mem_summary:
-        base += f"\n\nKnown about user:\n{mem_summary}"
+        tail += f"\n\nKnown about user:\n{mem_summary}"
     hb_summary = heartbeat.summary()
     if hb_summary:
-        base += f"\n\nActive heartbeat actions:\n{hb_summary}"
-    return base
+        tail += f"\n\nActive heartbeat actions:\n{hb_summary}"
+    return base + SYSTEM_CACHE_BOUNDARY + tail
 
 
 @dataclass

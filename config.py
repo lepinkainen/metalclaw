@@ -117,6 +117,7 @@ class Config(BaseModel):
     litellm_model: str = "bedrock/anthropic.claude-haiku-4-5"
     aws_region: str | None = None
     aws_profile: str | None = None
+    litellm_prompt_caching: bool = True
     escalation_enabled: bool = False
     escalation_provider: Provider = "litellm"
     escalation_model: str | None = None

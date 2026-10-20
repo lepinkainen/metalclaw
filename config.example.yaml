@@ -78,6 +78,12 @@ ollama_top_k: 40
 litellm_model: bedrock/anthropic.claude-haiku-4-5
 aws_region: us-east-1
 # aws_profile: my-profile  # optional, otherwise default credential chain
+# Anthropic prompt caching: mark the system prompt and the tool definitions
+# as cacheable (cache_control: ephemeral) so Claude reuses them across calls
+# instead of re-billing them as fresh input. Applied only when litellm_model /
+# escalation_model targets a Claude model (anthropic/... or bedrock/...
+# anthropic.* / *claude*); other providers get the plain request regardless.
+litellm_prompt_caching: true
 
 # --- Escalation: refer hard questions to a Big Boy cloud model ---
 # When enabled and the active provider is local, the model can call the

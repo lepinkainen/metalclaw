@@ -35,6 +35,7 @@ def get_provider(name: str, *, model_override: str | None = None) -> Provider:
             model=model_override or cfg.litellm_model,
             aws_region=cfg.aws_region,
             aws_profile=cfg.aws_profile,
+            prompt_caching=cfg.litellm_prompt_caching,
         )
     log.error("provider: unknown provider %r", name)
     raise ValueError(f"unknown provider: {name!r}")

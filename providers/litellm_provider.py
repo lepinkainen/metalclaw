@@ -12,6 +12,8 @@ from messages import (
     ToolResultMessage,
     Usage,
     UserMessage,
+    flatten_system_prompt,
+    split_system_prompt,
 )
 
 # Silently strip kwargs the underlying model does not understand. Lets one
@@ -20,6 +22,18 @@ from messages import (
 log = logging.getLogger(__name__)
 
 litellm.drop_params = True
+
+_CACHE_CONTROL = {"type": "ephemeral"}
+
+
+def _is_anthropic_model(model: str) -> bool:
+    """True for model strings litellm routes to a Claude model."""
+    if model.startswith("anthropic/"):
+        return True
+    if model.startswith("bedrock/"):
+        model_id = model.removeprefix("bedrock/").lower()
+        return "anthropic." in model_id or "claude" in model_id
+    return False
 
 
 class LiteLLMProvider:
@@ -32,9 +46,14 @@ class LiteLLMProvider:
         aws_region: str | None = None,
         aws_profile: str | None = None,
         num_retries: int = 2,
+        prompt_caching: bool = True,
     ) -> None:
         self.model = model
         self.num_retries = num_retries
+        # Cache breakpoints are an Anthropic (and Bedrock Claude) feature; other
+        # backends get the plain OpenAI-shaped request even though drop_params
+        # would strip the unknown keys anyway.
+        self.prompt_caching = prompt_caching and _is_anthropic_model(model)
         self._extra: dict = {}
         if aws_region:
             self._extra["aws_region_name"] = aws_region
@@ -71,6 +90,33 @@ class LiteLLMProvider:
                 raise TypeError(f"unsupported message type: {type(m).__name__}")
         return out
 
+    def _system_message(self, system: str) -> dict:
+        if not self.prompt_caching:
+            return {"role": "system", "content": flatten_system_prompt(system)}
+        # List-of-blocks content so the breakpoint sits on a block itself;
+        # litellm maps it to Anthropic `system[].cache_control` and to a
+        # Bedrock Converse `cachePoint` after that block. Only the stable
+        # part is marked: the volatile tail (clock, memory, heartbeat
+        # summaries) follows as a plain block so it never invalidates the
+        # cached tools + instructions prefix.
+        stable, volatile = split_system_prompt(system)
+        blocks: list[dict] = [
+            {"type": "text", "text": stable, "cache_control": dict(_CACHE_CONTROL)}
+        ]
+        if volatile:
+            blocks.append({"type": "text", "text": volatile})
+        return {"role": "system", "content": blocks}
+
+    def _tools(self, tools: list[dict]) -> list[dict]:
+        if not self.prompt_caching:
+            return tools
+        # One breakpoint on the last tool caches the whole tool block (tools
+        # precede system in Anthropic's cache order). Copy; the registry's
+        # schema dicts are shared with other providers.
+        out = list(tools)
+        out[-1] = {**out[-1], "cache_control": dict(_CACHE_CONTROL)}
+        return out
+
     def chat_once(
         self,
         history: Sequence[Message],
@@ -79,7 +125,7 @@ class LiteLLMProvider:
     ) -> AssistantMessage:
         payload: list[dict] = []
         if system:
-            payload.append({"role": "system", "content": system})
+            payload.append(self._system_message(system))
         payload.extend(self._to_wire(history))
 
         kwargs: dict = {
@@ -89,14 +135,15 @@ class LiteLLMProvider:
             **self._extra,
         }
         if tools:
-            kwargs["tools"] = tools
+            kwargs["tools"] = self._tools(tools)
 
         log.info(
-            "litellm request model=%s messages=%d tools=%d retries=%d",
+            "litellm request model=%s messages=%d tools=%d retries=%d prompt_caching=%s",
             self.model,
             len(payload),
             len(tools),
             self.num_retries,
+            self.prompt_caching,
         )
         t0 = time.monotonic()
         try:
@@ -121,6 +168,18 @@ class LiteLLMProvider:
             getattr(usage, "completion_tokens", None),
             f"{cost:.6f}" if cost is not None else None,
         )
+        # litellm folds Anthropic's cache_read_input_tokens /
+        # cache_creation_input_tokens into prompt_tokens_details.
+        details = getattr(usage, "prompt_tokens_details", None)
+        cache_read = getattr(details, "cached_tokens", None)
+        cache_write = getattr(details, "cache_write_tokens", None)
+        if cache_read is not None or cache_write is not None:
+            log.debug(
+                "litellm prompt cache: read=%s write=%s of prompt_tokens=%s",
+                cache_read,
+                cache_write,
+                getattr(usage, "prompt_tokens", None),
+            )
         log.debug("litellm raw response: %.500s", resp)
         msg = resp.choices[0].message
 
@@ -161,5 +220,9 @@ class LiteLLMProvider:
                 getattr(usage, "prompt_tokens", None) or 0,
                 getattr(usage, "completion_tokens", None) or 0,
                 cost,
+                cache_read_tokens=cache_read if isinstance(cache_read, int) else None,
+                cache_write_tokens=cache_write
+                if isinstance(cache_write, int)
+                else None,
             ),
         )
