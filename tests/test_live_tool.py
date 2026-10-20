@@ -326,3 +326,40 @@ def test_append_to_init_idempotent(fake_repo):
 
 def test_self_change_module_still_intact():
     assert hasattr(self_change, "run_self_change")
+
+
+def test_append_to_init_after_parenthesised_import(tmp_path):
+    """Regression for #32: a ruff-wrapped multi-line import must not swallow
+    the new line inside its parentheses."""
+    import ast
+
+    init = tmp_path / "tools" / "__init__.py"
+    init.parent.mkdir()
+    init.write_text(
+        '"""doc."""\n\n'
+        "from .alpha import a\n"
+        "from .beta import (\n"
+        "    b1,\n"
+        "    b2,\n"
+        ")\n\n"
+        '__all__ = [\n    "a",\n    "b1",\n    "b2",\n]\n'
+    )
+    live_tool._append_to_init(tmp_path, "newmod", ["f"])
+    text = init.read_text()
+    ast.parse(text)  # SyntaxError before the fix
+    lines = text.splitlines()
+    assert lines[lines.index(")") + 1] == "from .newmod import f"
+    assert '"f"' in text
+
+
+def test_append_to_init_no_existing_relative_imports(tmp_path):
+    init = tmp_path / "tools" / "__init__.py"
+    init.parent.mkdir()
+    init.write_text('"""doc."""\n\nimport os\n\n__all__ = []\n')
+    live_tool._append_to_init(tmp_path, "newmod", ["f"])
+    text = init.read_text()
+    import ast
+
+    ast.parse(text)
+    assert "from .newmod import f" in text
+    assert text.index("import os") < text.index("from .newmod")

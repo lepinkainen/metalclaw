@@ -279,15 +279,40 @@ def _append_to_init(repo_root: Path, slug: str, names: list[str]) -> None:
 
     import_line = f"from .{slug} import " + ", ".join(sorted(names))
     lines = text.splitlines()
-    insert_at = 0
-    for i, ln in enumerate(lines):
-        if ln.startswith(("from .", "from tools.")):
-            insert_at = i + 1
-    lines.insert(insert_at, import_line)
+    lines.insert(_import_insert_line(text), import_line)
     text = "\n".join(lines) + ("\n" if text.endswith("\n") else "")
 
     text = _merge_into_all(text, names)
     init_path.write_text(text)
+
+
+def _import_insert_line(text: str) -> int:
+    """0-based line index at which a new `from .<slug> import ...` goes.
+
+    After the last sibling import (`from .x` / `from tools.x`), else after the
+    last import of any kind, else after the module docstring, else the top.
+    Uses `end_lineno` so a ruff-wrapped parenthesised import block is skipped
+    whole instead of being split open (#32).
+    """
+    tree = ast.parse(text)
+    sibling_end = any_import_end = docstring_end = None
+    for i, node in enumerate(tree.body):
+        if (
+            i == 0
+            and isinstance(node, ast.Expr)
+            and isinstance(node.value, ast.Constant)
+        ):
+            docstring_end = node.end_lineno
+        if isinstance(node, (ast.Import, ast.ImportFrom)):
+            any_import_end = node.end_lineno
+        if isinstance(node, ast.ImportFrom) and (
+            node.level >= 1 or (node.module or "").startswith("tools")
+        ):
+            sibling_end = node.end_lineno
+    for end in (sibling_end, any_import_end, docstring_end):
+        if end is not None:
+            return end
+    return 0
 
 
 def _merge_into_all(text: str, new_names: list[str]) -> str:
