@@ -55,6 +55,10 @@ Ollama/OpenAI append one history entry per tool result. **Anthropic appends one 
 
 Pydantic silently drops unknown yaml fields. Typos in `config.yaml` won't error. Add tests for new fields rather than relying on validation to catch typos.
 
+## Heartbeat ticks are single-flight
+
+Never call `asyncio.create_task(heartbeat.run_tick())` directly — use `heartbeat.spawn_tick()` (keeps a strong ref, refuses while a tick runs). A second `run_tick()` while one is in flight returns `{}` immediately; the scheduler loop and `/heartbeat run` therefore never double-run or double-alert an action.
+
 ## Heartbeat `at` timestamps: naive = local
 
 `heartbeat.parse_iso` attaches the process-local zone to a tz-naive value (`datetime.astimezone()` on a naive dt). The prompt clock (`heartbeat.format_now`) carries the UTC offset so the model usually emits aware values anyway. Don't switch naive back to UTC: the model mirrors the prompt's wall clock.

@@ -769,13 +769,53 @@ async def _run_action(
     return await loop.run_in_executor(None, lambda: chat_fn(messages))
 
 
+# Single-flight guard: the scheduler loop and ``/heartbeat run`` both call
+# ``run_tick``; overlapping ticks would see the same actions as due and run the
+# model (and alert) twice. A plain flag rather than ``asyncio.Lock`` so it is
+# loop-agnostic (tests spin up many loops) — asyncio is single-threaded, so
+# check-and-set between awaits is race-free.
+_tick_running = False
+# Strong refs to fire-and-forget tick tasks: the event loop only holds weak
+# refs, so an unreferenced ``create_task`` can be garbage-collected mid-run.
+_background_ticks: set[asyncio.Task[dict[str, str]]] = set()
+
+
+def is_tick_running() -> bool:
+    return _tick_running
+
+
+def spawn_tick() -> asyncio.Task[dict[str, str]] | None:
+    """Start a tick in the background (``/heartbeat run``). Returns None if one
+    is already running. The task is kept referenced until it finishes."""
+    if _tick_running:
+        log.info("heartbeat: manual tick requested but one is already running")
+        return None
+    task = asyncio.create_task(run_tick(), name="heartbeat-manual-tick")
+    _background_ticks.add(task)
+    task.add_done_callback(_background_ticks.discard)
+    return task
+
+
 async def run_tick(*, now: datetime | None = None) -> dict[str, str]:
     """Single heartbeat tick across all due actions. Returns ``{action_id: reply}``.
 
     A reply of ``""`` indicates ``HEARTBEAT_OK``-suppression. A successful
     one-shot (``kind=at``) action is moved to ``completed`` only after the
-    notify call succeeds — failures keep the action active.
+    notify call succeeds — failures keep the action active. If another tick
+    is already in flight the call is skipped and returns ``{}``.
     """
+    global _tick_running
+    if _tick_running:
+        log.info("heartbeat tick skipped: another tick is still running")
+        return {}
+    _tick_running = True
+    try:
+        return await _run_tick_locked(now=now)
+    finally:
+        _tick_running = False
+
+
+async def _run_tick_locked(*, now: datetime | None = None) -> dict[str, str]:
     import chat_loop  # local to avoid circular import at module load
 
     now = now or datetime.now(UTC)

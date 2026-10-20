@@ -893,3 +893,76 @@ def test_status_shows_backoff(cfg):
         asyncio.run(heartbeat.run_tick())
     text = common.format_status()
     assert "1 failure, backing off" in text
+
+
+# --- single-flight ticks (/heartbeat run vs scheduler) ---
+
+
+def test_run_tick_skips_while_another_tick_runs(cfg):
+    heartbeat.create_action(
+        kind=heartbeat.ActionKind.EVERY,
+        prompt="poll",
+        channel="cli",
+        created_from="cli",
+        every=1,
+    )
+    ch = _StubChannel()
+    channels.register(ch)
+    started = asyncio.Event()
+    release = asyncio.Event()
+    calls = 0
+
+    async def slow_chat(messages, **_):
+        nonlocal calls
+        calls += 1
+        started.set()
+        await release.wait()
+        return "ALERT"
+
+    async def fake_run_action(action, now, chat, build_system_prompt):
+        return await slow_chat(None)
+
+    async def scenario():
+        with patch("heartbeat._run_action", fake_run_action):
+            first = asyncio.create_task(heartbeat.run_tick())
+            await started.wait()
+            assert heartbeat.is_tick_running()
+            second = await heartbeat.run_tick()  # overlapping → skipped
+            assert second == {}
+            assert heartbeat.spawn_tick() is None
+            release.set()
+            result = await first
+        assert not heartbeat.is_tick_running()
+        return result
+
+    result = asyncio.run(scenario())
+    assert calls == 1
+    assert list(result.values()) == ["ALERT"]
+    assert ch.calls == [("cli", "ALERT")]
+
+
+def test_tick_flag_cleared_after_crash(cfg):
+    async def boom(**_):
+        raise RuntimeError("tick blew up")
+
+    with (
+        patch("heartbeat._run_tick_locked", boom),
+        pytest.raises(RuntimeError),
+    ):
+        asyncio.run(heartbeat.run_tick())
+    assert not heartbeat.is_tick_running()
+
+
+def test_spawn_tick_keeps_reference_until_done(cfg):
+    channels.register(_StubChannel())
+
+    async def scenario():
+        with patch("chat_loop.chat", return_value="HEARTBEAT_OK"):
+            task = heartbeat.spawn_tick()
+            assert task is not None
+            assert task in heartbeat._background_ticks
+            await task
+        assert task not in heartbeat._background_ticks
+        assert not heartbeat.is_tick_running()
+
+    asyncio.run(scenario())

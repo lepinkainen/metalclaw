@@ -244,3 +244,44 @@ def test_run_big_rolls_back_on_exception(vault_with_escalation, monkeypatch):
 
     assert all(m.get("role") != "user" for m in messages)
     assert any("Error: boom" in c for c in captured)
+
+
+def test_run_heartbeat_run_reports_already_running(vault, monkeypatch):
+    import heartbeat
+
+    sent: list[str] = []
+
+    async def send(text):
+        sent.append(text)
+
+    monkeypatch.setattr(heartbeat, "spawn_tick", lambda: None)
+    asyncio.run(common.run_heartbeat(send, "cli", "run"))
+    assert sent == ["heartbeat tick already running"]
+
+
+def test_run_heartbeat_run_fires_via_spawn_tick(vault, monkeypatch):
+    import heartbeat
+
+    sent: list[str] = []
+    spawned = []
+
+    async def send(text):
+        sent.append(text)
+
+    async def noop():
+        return {}
+
+    def fake_spawn():
+        t = asyncio.ensure_future(noop())
+        spawned.append(t)
+        return t
+
+    monkeypatch.setattr(heartbeat, "spawn_tick", fake_spawn)
+
+    async def scenario():
+        await common.run_heartbeat(send, "cli", "run")
+        await asyncio.gather(*spawned)
+
+    asyncio.run(scenario())
+    assert sent == ["heartbeat tick fired"]
+    assert len(spawned) == 1

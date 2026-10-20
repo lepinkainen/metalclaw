@@ -587,8 +587,10 @@ async def run_heartbeat(
 ) -> None:
     log.info("/heartbeat sub=%r scope=%s", sub, scope)
     if sub == "run":
-        asyncio.create_task(heartbeat.run_tick())
-        await send("heartbeat tick fired")
+        if heartbeat.spawn_tick() is None:
+            await send("heartbeat tick already running")
+        else:
+            await send("heartbeat tick fired")
         return
 
     cfg = get_config()

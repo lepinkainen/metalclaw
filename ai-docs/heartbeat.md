@@ -81,6 +81,8 @@ Per-row upserts: no whole-file read-modify-write, so `--daemon` + interactive `b
 
 ## `run_tick` (`heartbeat.py:run_tick`)
 
+Single-flight: a module-level `_tick_running` flag (not an `asyncio.Lock`, so it works across the many event loops tests create) makes an overlapping call log + return `{}` instead of running the same due actions twice. `spawn_tick()` is the only sanctioned way to fire-and-forget a tick: it refuses while one runs and keeps the task in `_background_ticks` until done (the loop holds only weak refs; an unreferenced `create_task` can be GC'd mid-run). The body lives in `_run_tick_locked`.
+
 1. Active-hours gate (`_within_active_hours(now.astimezone(), cfg.heartbeat_active_hours)`). Wraparound `[22, 6]` supported.
 2. `state = load_state()` (dict of `ActionState`); `snapshot = load_ledger()`.
 3. For each `action` in snapshot:
@@ -136,7 +138,7 @@ Heartbeat ticks themselves run with `current_scope` set to `None` — actions ca
 ## `/heartbeat` slash
 
 `common.run_heartbeat(send, scope, sub)`:
-- `sub == "run"` → `asyncio.create_task(heartbeat.run_tick())`, reply `"heartbeat tick fired"`.
+- `sub == "run"` → `heartbeat.spawn_tick()` (strong-ref'd background task; returns None while a tick is in flight → reply `"heartbeat tick already running"`), else reply `"heartbeat tick fired"`.
 - Else → prints `enabled / interval / default_channel`, then active actions (one per line) and the last 5 completed.
 - `warn_no_discord_channel=True` (Discord only) adds a notice if `cfg.discord_heartbeat_channel is None`.
 
