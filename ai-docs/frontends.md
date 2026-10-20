@@ -72,6 +72,7 @@ CLI does **not** delegate `/remember /forget /memory /heartbeat /big` to `common
 
 - Library: `python-telegram-bot >= 21`.
 - HTML rendering: `telegram_format.to_html(text)` (`telegram_format.py`). Falls back to plain text on Telegram API rejection (`telegram.py:73`).
+- 4096-char limit (issue #29): `_tg_reply` and `_TelegramChannel.notify` both go through `_tg_send_chunks(send, text, what=)` → `_split_for_telegram(text)` → list of `(markdown, html)` pairs. Markdown is cut with `common.split_message`, each chunk rendered to HTML; because rendering can *grow* text (tags, `&lt;` escapes) a chunk whose HTML exceeds 4096 is re-split with a 20% smaller plain budget (floor 64) until both forms fit. Each pair is sent HTML-first with per-chunk plain-text fallback. Tests: `tests/test_telegram_split.py`.
 - Typing pulse: `_typing(chat_id, bot)` async ctxmgr sends `ChatAction.TYPING` every 4s (Telegram expires after ~5s).
 - BotFather menu populated via `app.bot.set_my_commands(...)` from `_TELEGRAM_BOT_COMMANDS` (`telegram.py:137`).
 - Known chats persisted on first message — `_remember_chat(chat_id)` writes JSON.
@@ -81,8 +82,8 @@ CLI does **not** delegate `/remember /forget /memory /heartbeat /big` to `common
 - Library: `discord.py >= 2.3, < 3.0`.
 - Intents: `default + message_content` (privileged — must be enabled in dev portal).
 - Replies sent as raw CommonMark (Discord renders natively). No HTML conversion.
-- 2000-char limit handled by `_split_for_discord` (`discord.py:41`):
-  1. Cut at last `\n\n` before limit; else `\n`; else space; else hard cut.
+- 2000-char limit handled by `_split_for_discord` → `common.split_message(text, limit)` (shared with Telegram):
+  1. Cut at last `\n\n` before `limit - _FENCE_HEADROOM(32)`; else `\n`; else space; else hard cut. Headroom guarantees the fence fix-up below never has to truncate.
   2. Reopen fenced code blocks across cuts: if a chunk has odd-count fences, append `` ``` `` and prepend `` ```{lang} `` to the next.
 
 ## `_discord_should_respond` gating (`discord.py:194`)

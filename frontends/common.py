@@ -16,6 +16,7 @@ import argparse
 import asyncio
 import collections
 import logging
+import re
 import shlex
 import time
 from collections.abc import Awaitable, Callable, Hashable
@@ -880,6 +881,54 @@ _ARG_CHARS = 40
 _LINE_CHARS = 100
 TELEGRAM_STATUS_LIMIT = 4096
 DISCORD_STATUS_LIMIT = 2000
+_FENCE_HEADROOM = (
+    32  # worst-case reopen prefix + close suffix added by the fence fix-up
+)
+
+
+def split_message(text: str, limit: int) -> list[str]:
+    """Split text into ≤limit-char chunks on paragraph/line/word boundaries.
+
+    If a fenced code block is split across chunks, close it with ``` at the end
+    of one chunk and reopen with the same language fence at the start of the next.
+    Shared by the Discord (2000) and Telegram (4096) frontends.
+    """
+    if len(text) <= limit:
+        return [text]
+
+    # Leave room for the "```lang\n" prefix / "\n```" suffix added below when
+    # a fenced block spans a cut, so the fix-up never has to truncate.
+    budget = max(1, limit - _FENCE_HEADROOM)
+    raw_chunks: list[str] = []
+    remaining = text
+    while len(remaining) > budget:
+        cut = remaining.rfind("\n\n", 0, budget)
+        if cut <= 0:
+            cut = remaining.rfind("\n", 0, budget)
+        if cut <= 0:
+            cut = remaining.rfind(" ", 0, budget)
+        if cut <= 0:
+            cut = budget
+        raw_chunks.append(remaining[:cut].rstrip())
+        remaining = remaining[cut:].lstrip()
+    if remaining:
+        raw_chunks.append(remaining)
+
+    fixed: list[str] = []
+    open_fence: str | None = None
+    for chunk in raw_chunks:
+        body = (f"```{open_fence}\n" if open_fence is not None else "") + chunk
+        fences = re.findall(r"^```(\w*)\s*$", body, flags=re.MULTILINE)
+        if len(fences) % 2 == 1:
+            new_fence = fences[-1]
+            body = body + "\n```"
+            open_fence = new_fence
+        else:
+            open_fence = None
+        if len(body) > limit:
+            body = body[:limit]
+        fixed.append(body)
+    return fixed
 
 
 def _tool_emoji(name: str) -> str:

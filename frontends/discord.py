@@ -93,44 +93,8 @@ def _strip_bot_mention(text: str, bot_user_id: int) -> str:
 
 
 def _split_for_discord(text: str, limit: int = _DISCORD_MAX_MESSAGE) -> list[str]:
-    """Split text into ≤limit-char chunks on paragraph/line/word boundaries.
-
-    If a fenced code block is split across chunks, close it with ``` at the end
-    of one chunk and reopen with the same language fence at the start of the next.
-    """
-    if len(text) <= limit:
-        return [text]
-
-    raw_chunks: list[str] = []
-    remaining = text
-    while len(remaining) > limit:
-        cut = remaining.rfind("\n\n", 0, limit)
-        if cut <= 0:
-            cut = remaining.rfind("\n", 0, limit)
-        if cut <= 0:
-            cut = remaining.rfind(" ", 0, limit)
-        if cut <= 0:
-            cut = limit
-        raw_chunks.append(remaining[:cut].rstrip())
-        remaining = remaining[cut:].lstrip()
-    if remaining:
-        raw_chunks.append(remaining)
-
-    fixed: list[str] = []
-    open_fence: str | None = None
-    for chunk in raw_chunks:
-        body = (f"```{open_fence}\n" if open_fence is not None else "") + chunk
-        fences = re.findall(r"^```(\w*)\s*$", body, flags=re.MULTILINE)
-        if len(fences) % 2 == 1:
-            new_fence = fences[-1]
-            body = body + "\n```"
-            open_fence = new_fence
-        else:
-            open_fence = None
-        if len(body) > limit:
-            body = body[:limit]
-        fixed.append(body)
-    return fixed
+    """Split text to fit Discord's message limit (see `common.split_message`)."""
+    return common.split_message(text, limit)
 
 
 async def _discord_send(

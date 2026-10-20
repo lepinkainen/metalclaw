@@ -4,9 +4,10 @@ import asyncio
 import json
 import logging
 import os
-from collections.abc import Iterable
+from collections.abc import Awaitable, Callable, Iterable
 from contextlib import asynccontextmanager, nullcontext
 from pathlib import Path
+from typing import Any
 
 from telegram import BotCommand, Update
 from telegram.constants import ChatAction
@@ -122,19 +123,60 @@ def known_chat_count() -> int:
     return len(_known_chats)
 
 
+_TELEGRAM_MAX_MESSAGE = 4096
+
+
+def _split_for_telegram(
+    text: str, limit: int = _TELEGRAM_MAX_MESSAGE, *, plain_limit: int | None = None
+) -> list[tuple[str, str]]:
+    """Split Markdown into Telegram-sized ``(markdown, html)`` pairs.
+
+    Telegram caps a message at 4096 chars *after* HTML rendering, and
+    rendering can grow the text (tags, entity escapes). Each Markdown chunk
+    is cut to `plain_limit` then rendered; if the HTML overflows `limit` the
+    chunk is re-split with a 20% smaller plain budget until both forms fit —
+    so the plain-text fallback is always sendable too.
+    """
+    budget = limit if plain_limit is None else plain_limit
+    pairs: list[tuple[str, str]] = []
+    for chunk in common.split_message(text, budget):
+        html_text = telegram_format.to_html(chunk)
+        if len(html_text) > limit and budget > 64:
+            pairs.extend(
+                _split_for_telegram(chunk, limit, plain_limit=int(budget * 0.8))
+            )
+        else:
+            pairs.append((chunk, html_text))
+    return pairs
+
+
+async def _tg_send_chunks(
+    send: Callable[..., Awaitable[Any]], text: str, *, what: str
+) -> None:
+    """Send `text` as one or more Telegram messages via `send(text, **kw)`.
+
+    Tries HTML first per chunk and falls back to plain text when Telegram
+    rejects the markup. Any other failure propagates so callers (heartbeat
+    notify, command dispatch) see it.
+    """
+    pairs = _split_for_telegram(text)
+    log.info("telegram: %s %d chars in %d message(s)", what, len(text), len(pairs))
+    for plain, html_text in pairs:
+        try:
+            await send(html_text, parse_mode="HTML")
+        except Exception:
+            log.warning(
+                "telegram: HTML %s failed, falling back to plain text",
+                what,
+                exc_info=True,
+            )
+            await send(plain)
+
+
 async def _tg_reply(update: Update, text: str) -> None:
     """Send a Telegram reply, rendering CommonMark as Telegram HTML."""
-    html_text = telegram_format.to_html(text)
     assert update.message is not None
-    reply = update.message.reply_text
-    try:
-        await reply(html_text, parse_mode="HTML")
-    except Exception:
-        log.warning(
-            "telegram: HTML reply failed, falling back to plain text", exc_info=True
-        )
-        await reply(text)
-    log.debug("telegram: replied %d chars", len(text))
+    await _tg_send_chunks(update.message.reply_text, text, what="reply")
 
 
 def _send_for(update: Update) -> common.SendFn:
@@ -182,15 +224,12 @@ class _TelegramChannel:
         if chat_id is None:
             # raise so heartbeat keeps the action active instead of archiving it
             raise ValueError(f"telegram: notify with unparseable scope {scope!r}")
-        log.info("telegram: notify chat_id=%d %d chars", chat_id, len(text))
-        html_text = telegram_format.to_html(text)
-        try:
-            await self._app.bot.send_message(
-                chat_id=chat_id, text=html_text, parse_mode="HTML"
-            )
-        except Exception:
-            log.warning("telegram: HTML notify failed, retrying plain", exc_info=True)
-            await self._app.bot.send_message(chat_id=chat_id, text=text)
+        bot = self._app.bot
+
+        async def _send(body: str, **kw: Any) -> Any:
+            return await bot.send_message(chat_id=chat_id, text=body, **kw)
+
+        await _tg_send_chunks(_send, text, what=f"notify chat_id={chat_id}")
 
     def active_scopes(self) -> Iterable[str]:
         return tuple(common.telegram_scope(cid) for cid in _known_chats)
