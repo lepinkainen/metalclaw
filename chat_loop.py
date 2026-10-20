@@ -156,8 +156,11 @@ def _tool_result_json(result: object) -> str:
     return json.dumps(result, ensure_ascii=False)
 
 
-# Snapshot of the current session's messages list, set on each chat() entry so
-# tools (notably escalate_to_big_model) can read full conversation context.
+# Snapshot of the running turn's conversation (system + completed exchanges),
+# republished by `_chat_with_provider` before every provider call so tools
+# (notably escalate_to_big_model) see this turn's earlier tool results. The
+# assistant message currently being resolved is never included: its tool
+# calls have no results yet and would leave a dangling call in the snapshot.
 _active_session_messages: ContextVar[list[dict] | None] = ContextVar(
     "active_session_messages", default=None
 )
@@ -190,6 +193,11 @@ def _split_system(messages: list[dict]) -> tuple[str, list[dict]]:
     if messages and messages[0].get("role") == "system":
         return messages[0].get("content", "") or "", list(messages[1:])
     return "", list(messages)
+
+
+def _join_system(system: str, history: list[dict]) -> list[dict]:
+    """Inverse of `_split_system`: fresh list, system message first when set."""
+    return ([{"role": "system", "content": system}] if system else []) + history
 
 
 def _run_tool(name: str, args: dict) -> object:
@@ -237,7 +245,7 @@ def _chat_with_provider(
     """Run the tool-call loop against `provider`, mutating `messages` in place."""
     tool_schemas = [t.schema for name, t in TOOLS.items() if name not in exclude_tools]
     system, history = _split_system(messages)
-    token = _active_session_messages.set(messages)
+    token = _active_session_messages.set(_join_system(system, history))
     pname = getattr(provider, "name", type(provider).__name__)
     pmodel = getattr(provider, "model", None)
     turn_t0 = time.monotonic()
@@ -270,6 +278,8 @@ def _chat_with_provider(
                     max_iterations,
                     pname,
                 )
+            # Republish so tools run in this round see completed exchanges.
+            _active_session_messages.set(_join_system(system, history))
             call_t0 = time.monotonic()
             try:
                 am = provider.chat_once(history, schemas, system)
@@ -308,9 +318,7 @@ def _chat_with_provider(
                     "tool loop: model still emitted %d tool call(s) after cap; giving up",
                     len(am.tool_calls),
                 )
-                messages[:] = (
-                    [{"role": "system", "content": system}] if system else []
-                ) + history
+                messages[:] = _join_system(system, history)
                 return am.text or (
                     f"Error: stopped after {max_iterations} tool-call rounds "
                     "without a final answer."
@@ -331,9 +339,7 @@ def _chat_with_provider(
                     len(am.text),
                 )
                 log.debug("turn reply: %.500s", am.text)
-                messages[:] = (
-                    [{"role": "system", "content": system}] if system else []
-                ) + history
+                messages[:] = _join_system(system, history)
                 return am.text
 
             signature = tuple(

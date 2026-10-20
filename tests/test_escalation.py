@@ -182,3 +182,88 @@ def test_chat_via_escalation_cross_provider_appends_text_only(
     assert out == "big answer"
     assert messages[-1] == {"role": "assistant", "content": "big answer"}
     assert len(messages) == 5  # original history intact, only text appended
+
+
+def test_escalation_after_tool_round_sees_tool_result(
+    cfg_file, write_config, monkeypatch
+):
+    """Regression for #36: the big model gets this turn's earlier tool results,
+    but not the in-flight assistant message that issued the escalation call."""
+    from chat_loop import _chat_with_provider
+    from providers.base import ToolCall
+
+    write_config(
+        cfg_file,
+        provider="ollama",
+        escalation_enabled=True,
+        escalation_provider="ollama",
+        escalation_model="big-local",
+    )
+    big_seen: dict = {}
+
+    class BigStub:
+        name = "big"
+
+        def chat_once(self, messages, tools_, system):
+            big_seen["messages"] = list(messages)
+            return AssistantMessage(
+                text="big answer",
+                tool_calls=[],
+                raw={"role": "assistant", "content": "big answer"},
+            )
+
+        def format_tool_results(self, results):
+            return []
+
+    monkeypatch.setattr("providers.get_provider", lambda *a, **k: BigStub())
+
+    die = ToolCall(id="c1", name="roll_die", arguments={"sides": 6})
+    esc = ToolCall(
+        id="c2",
+        name="escalate_to_big_model",
+        arguments={"query": "interpret the roll", "reason": "hard"},
+    )
+
+    class LocalStub:
+        name = "local"
+
+        def __init__(self):
+            self._replies = iter(
+                [
+                    AssistantMessage(
+                        text="",
+                        tool_calls=[die],
+                        raw={"role": "assistant", "content": "", "tool_calls": ["die"]},
+                    ),
+                    AssistantMessage(
+                        text="",
+                        tool_calls=[esc],
+                        raw={"role": "assistant", "content": "", "tool_calls": ["esc"]},
+                    ),
+                    AssistantMessage(
+                        text="final",
+                        tool_calls=[],
+                        raw={"role": "assistant", "content": "final"},
+                    ),
+                ]
+            )
+
+        def chat_once(self, messages, tools_, system):
+            return next(self._replies)
+
+        def format_tool_results(self, results):
+            return [{"role": "tool", "name": c.name, "content": r} for c, r in results]
+
+    messages = [
+        {"role": "system", "content": "sys"},
+        {"role": "user", "content": "roll and interpret"},
+    ]
+    out = _chat_with_provider(LocalStub(), messages)
+    assert out == "final"
+
+    seen = big_seen["messages"]
+    tool_msgs = [m for m in seen if m.get("role") == "tool"]
+    assert [m["name"] for m in tool_msgs] == ["roll_die"], "tool result missing"
+    # The assistant message carrying the unresolved escalate call is excluded.
+    assert not any(m.get("tool_calls") == ["esc"] for m in seen)
+    assert seen[-1]["role"] == "user" and "interpret the roll" in seen[-1]["content"]

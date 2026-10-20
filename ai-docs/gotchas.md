@@ -25,7 +25,7 @@ Tests import directly from the defining module — `chat_loop._chat_with_provide
 
 ## ContextVar `_active_session_messages`
 
-Set by `_chat_with_provider`, read by `escalate_to_big_model` to splice full conversation context into the escalation. **Reset on exit via `try/finally`.** If you call `_chat_with_provider` recursively (e.g. escalation), the inner call sets and resets — outer's snapshot is preserved by `ContextVar.set`/`reset` token semantics. Don't replace with a global mutable.
+Set by `_chat_with_provider` and republished before each provider call (a point-in-time copy of system + completed exchanges, never the in-flight assistant tool call), read by `escalate_to_big_model` to splice conversation context into the escalation. **Reset on exit via `try/finally`.** If you call `_chat_with_provider` recursively (e.g. escalation), the inner call sets and resets — outer's snapshot is preserved by `ContextVar.set`/`reset` token semantics. Don't replace with a global mutable.
 
 ## Memory mutator detection is name-based
 

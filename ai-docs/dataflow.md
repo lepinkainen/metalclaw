@@ -21,9 +21,10 @@ chat() → _chat_with_provider(provider, messages)
         │
         ├─ tool_schemas = TOOLS values
         ├─ system, history = _split_system(messages)
-        ├─ _active_session_messages.set(messages)
+        ├─ _active_session_messages.set(_join_system(system, history))
         ▼
 loop:
+    _active_session_messages.set(_join_system(system, history))   # republish each round
     am = provider.chat_once(history, tool_schemas, system)
     history += am.raw
     if not am.tool_calls:

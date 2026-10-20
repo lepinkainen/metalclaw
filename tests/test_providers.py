@@ -115,7 +115,8 @@ def test_active_session_messages_contextvar_is_set_during_chat():
 
     messages = [{"role": "user", "content": "x"}]
     _chat_with_provider(PeekProvider(), messages)
-    assert captured == [messages]
+    # Point-in-time view: the user turn, not the post-writeback session.
+    assert captured == [[{"role": "user", "content": "x"}]]
     # Resets on exit
     assert _active_session_messages.get() is None
 
@@ -357,3 +358,51 @@ def test_memory_mutator_refreshes_system_prompt_mid_loop(tmp_path, monkeypatch):
         assert "tone=terse" in second_system
     finally:
         _config.reset_cache()
+
+
+def test_active_session_snapshot_includes_completed_exchanges_mid_turn():
+    """Regression for #36: tools run after a tool round must see that round."""
+    call = ToolCall(id="call-1", name="roll_die", arguments={"sides": 6})
+    captured: list[list[dict]] = []
+
+    class PeekProvider:
+        name = "peek"
+
+        def __init__(self):
+            self._replies = iter(
+                [
+                    AssistantMessage(
+                        text="",
+                        tool_calls=[call],
+                        raw={"role": "assistant", "content": "", "tool_calls": [1]},
+                    ),
+                    AssistantMessage(
+                        text="done",
+                        tool_calls=[],
+                        raw={"role": "assistant", "content": "done"},
+                    ),
+                ]
+            )
+
+        def chat_once(self, messages, tools_, system):
+            snap = _active_session_messages.get()
+            assert snap is not None
+            captured.append(list(snap))
+            return next(self._replies)
+
+        def format_tool_results(self, results):
+            return [{"role": "tool", "name": c.name, "content": r} for c, r in results]
+
+    messages = [
+        {"role": "system", "content": "sys"},
+        {"role": "user", "content": "roll"},
+    ]
+    _chat_with_provider(PeekProvider(), messages)
+
+    first, second = captured
+    # Round 1: nothing completed yet beyond the user turn.
+    assert [m["role"] for m in first] == ["system", "user"]
+    # Round 2: the assistant tool call + its result are visible to tools.
+    assert [m["role"] for m in second] == ["system", "user", "assistant", "tool"]
+    assert second[-1]["name"] == "roll_die"
+    assert _active_session_messages.get() is None

@@ -16,10 +16,11 @@ Loop body (`chat_loop.py:147`):
 ```
 1. tool_schemas = [t.schema for name, t in TOOLS.items() if name not in exclude_tools]
 2. system, history = _split_system(messages)
-3. _active_session_messages.set(messages)  # ContextVar for tools
+3. _active_session_messages.set(_join_system(system, history))  # ContextVar for tools
 4. while True:
      iteration += 1
      capped = iteration > cfg.max_tool_iterations          # default 25
+     _active_session_messages.set(_join_system(system, history))  # republish: completed exchanges only
      am = provider.chat_once(history, [] if capped else tool_schemas, system)
      if capped and am.tool_calls:                           # model ignored empty tool list
          messages[:] = ...; return am.text or "Error: stopped after N tool-call rounds ..."
@@ -66,7 +67,7 @@ When a tool call mutates memory (`_MEMORY_MUTATORS`), the loop rebuilds `system`
 
 ## `_active_session_messages` ContextVar
 
-Set on every `_chat_with_provider` entry; reset on exit. Read by `tools.escalate_to_big_model` (`tools.py:787`) to splice the user's full conversation into the escalation sub-call. Returns `None` outside a chat session — escalation falls back to a single-message context.
+Set on `_chat_with_provider` entry and **republished before every `provider.chat_once` call** as `_join_system(system, history)` — a fresh list of the system message plus all completed exchanges of the running turn (#36). Tools that run in round N therefore see rounds 1..N-1's assistant tool calls and results, but never the assistant message whose tool calls are still being resolved (its results don't exist yet; including it would leave a dangling call). Reset on exit. Read by `tools.escalate_to_big_model` to splice conversation context into the escalation sub-call. Returns `None` outside a chat session — escalation falls back to a single-message context.
 
 ## `_parse_command(text)`
 

@@ -114,7 +114,7 @@ Currently: `train`, `weather`, `mail`, `search`, `wilma`. CLI wires via `_make_t
 
 `escalate_to_big_model(query, reason)`:
 1. Disabled if `cfg.escalation_enabled=False` → returns `{status: disabled}`.
-2. Reads `chat_loop._active_session_messages.get()` (ContextVar) for full conversation snapshot.
+2. Reads `chat_loop._active_session_messages.get()` (ContextVar): system + completed exchanges of the current turn, including earlier tool results from this turn, excluding the in-flight escalate call.
 3. Builds `sub_messages = list(snapshot) + [{"role":"user","content": f"[escalation: {reason}] {query}"}]`.
 4. Calls `chat_loop._chat_with_provider(big, sub_messages, exclude_tools={"escalate_to_big_model"})` — recursion-prevented.
 5. Returns `{"status":"ok","model":"<provider>:<model>","reason","reply"}`.
