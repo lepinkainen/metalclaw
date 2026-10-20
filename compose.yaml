@@ -1,3 +1,6 @@
+# Self-modification (/add-tool, /self-edit) is unsupported in the container:
+# the image ships no `claude` CLI. Set `allow_self_modification: false` in
+# config.yaml. config.yaml itself must set `vault_path: /vault`.
 services:
   metalclaw:
     build: .
@@ -7,5 +10,19 @@ services:
       DISCORD_BOT_TOKEN: ${DISCORD_BOT_TOKEN}
       GITHUB_MCP_TOKEN: ${GITHUB_MCP_TOKEN:-}
       OLLAMA_URL: ${OLLAMA_URL:-http://host.docker.internal:11434/api/chat}
+      METALCLAW_CONFIG: /config/config.yaml
+      XDG_CONFIG_HOME: /config
+      XDG_DATA_HOME: /data    # history.db (chat history, usage, heartbeat state, known chats)
+      XDG_STATE_HOME: /state  # metalclaw.log
+    volumes:
+      # Obsidian vault (memory.md + heartbeat.yaml live under <vault>/<memory_subdir>/).
+      - ${METALCLAW_VAULT:-./vault}:/vault
+      - ${METALCLAW_CONFIG_FILE:-./config.yaml}:/config/config.yaml:ro
+      - metalclaw-data:/data
+      - metalclaw-state:/state
     extra_hosts:
       - "host.docker.internal:host-gateway"
+
+volumes:
+  metalclaw-data:
+  metalclaw-state:
