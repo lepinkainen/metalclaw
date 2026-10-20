@@ -11,6 +11,7 @@ import re
 import time
 from collections.abc import Callable
 from contextvars import ContextVar
+from typing import Any
 
 from pydantic import ValidationError
 
@@ -249,13 +250,29 @@ def _chat_with_provider(
         len(tool_schemas),
         len(system),
     )
+    cfg = get_config()
+    max_iterations = cfg.max_tool_iterations
+    max_repeats = cfg.max_repeated_tool_calls
     iteration = 0
+    last_signature: tuple[tuple[str, str], ...] | None = None
+    repeat_count = 0
     try:
         while True:
             iteration += 1
+            # Past the cap: one last call with no tools so the model must
+            # answer in text instead of issuing yet another tool call.
+            capped = iteration > max_iterations
+            schemas = [] if capped else tool_schemas
+            if capped:
+                log.warning(
+                    "tool loop hit max_tool_iterations=%d provider=%s; "
+                    "forcing a tool-less final call",
+                    max_iterations,
+                    pname,
+                )
             call_t0 = time.monotonic()
             try:
-                am = provider.chat_once(history, tool_schemas, system)
+                am = provider.chat_once(history, schemas, system)
             except Exception:
                 log.exception(
                     "provider call failed provider=%s model=%s iteration=%d",
@@ -283,6 +300,22 @@ def _chat_with_provider(
                     )
                 except Exception:
                     log.exception("usage: could not record")
+            if capped and am.tool_calls:
+                # Model ignored the empty tool list. Do not record its
+                # tool_calls (no results would follow -> broken history);
+                # surface what we have.
+                log.error(
+                    "tool loop: model still emitted %d tool call(s) after cap; giving up",
+                    len(am.tool_calls),
+                )
+                messages[:] = (
+                    [{"role": "system", "content": system}] if system else []
+                ) + history
+                return am.text or (
+                    f"Error: stopped after {max_iterations} tool-call rounds "
+                    "without a final answer."
+                )
+
             raw = am.raw
             if isinstance(raw, list):
                 history.extend(raw)
@@ -303,12 +336,35 @@ def _chat_with_provider(
                 ) + history
                 return am.text
 
+            signature = tuple(
+                (tc.name, json.dumps(tc.arguments, sort_keys=True, default=str))
+                for tc in am.tool_calls
+            )
+            repeat_count = repeat_count + 1 if signature == last_signature else 1
+            last_signature = signature
+            stuck = repeat_count >= max_repeats
+            if stuck:
+                log.warning(
+                    "tool loop: identical tool call(s) %s repeated %d times; "
+                    "refusing to re-run",
+                    [tc.name for tc in am.tool_calls],
+                    repeat_count,
+                )
+
             results: list[tuple] = []
             memory_dirty = False
             for tc in am.tool_calls:
                 log.debug("tool call: %s args=%.500s", tc.name, tc.arguments)
                 tool_t0 = time.monotonic()
-                result = _run_tool(tc.name, tc.arguments)
+                if stuck:
+                    result: Any = (
+                        f"Error: you have already called {tc.name} with these exact "
+                        f"arguments {repeat_count} times in a row and have its result "
+                        "above. Do not call it again; answer the user now with the "
+                        "information you have."
+                    )
+                else:
+                    result = _run_tool(tc.name, tc.arguments)
                 result_json = _tool_result_json(result)
                 failed = (
                     isinstance(result, str)

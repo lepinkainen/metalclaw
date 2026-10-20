@@ -18,13 +18,22 @@ Loop body (`chat_loop.py:147`):
 2. system, history = _split_system(messages)
 3. _active_session_messages.set(messages)  # ContextVar for tools
 4. while True:
-     am = provider.chat_once(history, tool_schemas, system)
+     iteration += 1
+     capped = iteration > cfg.max_tool_iterations          # default 25
+     am = provider.chat_once(history, [] if capped else tool_schemas, system)
+     if capped and am.tool_calls:                           # model ignored empty tool list
+         messages[:] = ...; return am.text or "Error: stopped after N tool-call rounds ..."
+         # am.raw NOT appended → no dangling tool_calls without results
      append am.raw to history (list-or-dict shape)
      if not am.tool_calls:
          messages[:] = ([{"role":"system","content":system}] if system else []) + history
          return am.text
+     signature = tuple((tc.name, json.dumps(tc.arguments, sort_keys=True)) for tc in am.tool_calls)
+     repeat_count = repeat_count+1 if signature == last_signature else 1
+     stuck = repeat_count >= cfg.max_repeated_tool_calls   # default 3
      for each tc in am.tool_calls:
-         result = _run_tool(tc.name, tc.arguments)   # catches Exception → "Error: ..."
+         if stuck: result = "Error: you have already called X with these exact arguments N times ... answer the user now"
+         else:     result = _run_tool(tc.name, tc.arguments)   # catches Exception → "Error: ..."
          result_json = json.dumps(result, ensure_ascii=False)
          on_tool_call?(tc.name, tc.arguments, result_json[:120])
          if tc.name in _MEMORY_MUTATORS: memory_dirty = True
@@ -34,6 +43,11 @@ Loop body (`chat_loop.py:147`):
 ```
 
 Final `messages[:]` reassignment puts the (possibly rebuilt) system message back at index 0.
+
+### Runaway-loop guards (issue #30)
+
+- **Iteration cap** — `cfg.max_tool_iterations` (default 25). Past it, one more `chat_once` is made with an *empty* tool list so the model is forced to answer in text. If it still emits tool calls, the loop returns `am.text` or an `Error: stopped after N tool-call rounds …` string without recording the assistant message (recording it would leave tool_calls with no results and break the next turn).
+- **Repeat detection** — `cfg.max_repeated_tool_calls` (default 3). Consecutive iterations whose full `(name, sorted-json args)` tuple matches are counted; at the threshold the tools are *not* run and each gets an `Error: you have already called … answer the user now` result instead. Counter resets when the signature changes. Tests: `tests/test_tool_loop_limits.py`.
 
 ## System prompt
 

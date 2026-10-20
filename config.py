@@ -129,6 +129,8 @@ class Config(BaseModel):
     allow_self_modification: bool = True
     show_tool_calls: bool = True
     message_debounce_seconds: float = 1.0
+    max_tool_iterations: int = 25
+    max_repeated_tool_calls: int = 3
     mcp_servers: tuple[McpServer, ...] = ()
 
     @property

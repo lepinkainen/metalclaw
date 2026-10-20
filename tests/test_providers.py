@@ -223,6 +223,8 @@ def test_chat_resets_session_when_provider_switches_mid_session(monkeypatch):
 
     class _Cfg:
         provider = "ollama"
+        max_tool_iterations = 25
+        max_repeated_tool_calls = 3
 
     fake_cfg = _Cfg()
 
@@ -281,6 +283,8 @@ def test_chat_does_not_reset_when_provider_unchanged(monkeypatch):
 
     class _Cfg:
         provider = "ollama"
+        max_tool_iterations = 25
+        max_repeated_tool_calls = 3
 
     monkeypatch.setattr(chat_loop, "get_config", lambda: _Cfg())
     monkeypatch.setattr(

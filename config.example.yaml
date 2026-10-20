@@ -122,6 +122,13 @@ show_tool_calls: true
 # commands are never delayed. 0 disables.
 message_debounce_seconds: 1.0
 
+# Runaway tool-loop guards. After max_tool_iterations tool-call rounds in one
+# turn the model gets one final call with no tools so it must answer in text.
+# If it issues the exact same tool call(s) max_repeated_tool_calls times in a
+# row, the call is refused with an error result telling it to answer.
+max_tool_iterations: 25
+max_repeated_tool_calls: 3
+
 # Glob patterns (relative to vault_path) excluded from /search and the
 # search_vault tool. Defaults to empty — full vault is searched. ripgrep
 # already skips hidden dirs (.obsidian, .trash) and respects .gitignore, so

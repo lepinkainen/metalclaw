@@ -33,6 +33,8 @@
 | `aws_profile` | `str?` | None | Threaded to litellm as `aws_profile_name`. |
 | `show_tool_calls` | `bool` | `True` | Live tool-call status messages (Telegram/Discord) and CLI `/tools` initial state. Per-chat `/tools on\|off` overrides in memory. |
 | `message_debounce_seconds` | `float` | `1.0` | Telegram/Discord: quiet period before buffered non-command messages become ONE turn. `0` disables. Slash commands never debounced. |
+| `max_tool_iterations` | `int` | `25` | Chat loop: max tool-call rounds per turn; then one tool-less call forces a text answer. See `chat-loop.md`. |
+| `max_repeated_tool_calls` | `int` | `3` | Chat loop: identical consecutive tool-call sets at this count are refused with an `Error:` result instead of re-run. |
 | `escalation_enabled` | `bool` | `False` | Gates `escalate_to_big_model` + `/big`. |
 | `escalation_provider` | provider literal | `"litellm"` | |
 | `escalation_model` | `str?` | None | Defaults to per-provider model in `_resolve_and_check`. |
