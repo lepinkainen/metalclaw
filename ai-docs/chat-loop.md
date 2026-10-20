@@ -75,7 +75,7 @@ Final `messages[:]` reassignment puts the (possibly rebuilt) system message back
 4. `memory.summary()` if non-empty → append as `"Known about user:\n{summary}"`.
 
 `_refresh_system_prompt(session)`:
-- Regenerates with current time + memory into `session.system`. Called by `run_turn` before each user turn.
+- Regenerates with current time + memory into `session.system`. Called by `run_turn` before each user turn, **inside the executor thread** together with the chat call: it reads `memory.md` and the heartbeat ledger under `flock`, which must never block the event loop (#33).
 
 ## Mid-loop refresh
 

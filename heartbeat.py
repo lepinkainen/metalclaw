@@ -833,16 +833,18 @@ async def _run_tick_locked(*, now: datetime | None = None) -> dict[str, str]:
         )
         return {}
 
-    state = load_state()
-    snapshot = load_ledger()
+    # Ledger/state calls take flock and hit SQLite: run them off the loop
+    # thread so a lock held by another process cannot stall the frontends.
+    state = await asyncio.to_thread(load_state)
+    snapshot = await asyncio.to_thread(load_ledger)
     replies: dict[str, str] = {}
     n_due = n_ran = n_suppressed = n_notified = n_failed = n_backoff = 0
     log.info("heartbeat tick start: %d active action(s)", len(snapshot.actions))
 
-    def _fail(action: HeartbeatAction, why: str, **extra: Any) -> None:
+    async def _fail(action: HeartbeatAction, why: str, **extra: Any) -> None:
         nonlocal n_failed
         n_failed += 1
-        count = mark_failure(action, now, why, **extra)
+        count = await asyncio.to_thread(mark_failure, action, now, why, **extra)
         log.warning(
             "heartbeat action %s: %s — keeping active (failure #%d, next retry in %ds)",
             action.id,
@@ -896,7 +898,7 @@ async def _run_tick_locked(*, now: datetime | None = None) -> dict[str, str]:
             )
         except Exception:
             log.exception("heartbeat action %s: chat turn failed", action.id)
-            _fail(
+            await _fail(
                 action,
                 "chat turn failed",
                 run_seconds=round(time.monotonic() - action_t0, 2),
@@ -917,7 +919,7 @@ async def _run_tick_locked(*, now: datetime | None = None) -> dict[str, str]:
             # Empty reply with no sentinel: the model produced nothing (common
             # for small local models after a tool round). Treat as a failed
             # run so the action stays active and one-shots are not archived.
-            _fail(
+            await _fail(
                 action,
                 f"empty reply without {SENTINEL}",
                 run_seconds=round(time.monotonic() - action_t0, 2),
@@ -937,7 +939,8 @@ async def _run_tick_locked(*, now: datetime | None = None) -> dict[str, str]:
             n_suppressed += 1
             log.info("heartbeat action %s: HEARTBEAT_OK (nothing to report)", action.id)
             replies[action.id] = ""
-            mark_success(
+            await asyncio.to_thread(
+                mark_success,
                 action,
                 now,
                 last_outcome="suppressed",
@@ -946,7 +949,7 @@ async def _run_tick_locked(*, now: datetime | None = None) -> dict[str, str]:
             )
             if action.kind == ActionKind.AT:
                 # one-shots that ack with HEARTBEAT_OK are still "done"
-                _archive_with_lock(action.id, now)
+                await asyncio.to_thread(_archive_with_lock, action.id, now)
             continue
 
         target_scope, channel = _resolve_channel(action.channel)
@@ -959,14 +962,14 @@ async def _run_tick_locked(*, now: datetime | None = None) -> dict[str, str]:
             channel.name if channel else None,
         )
         if channel is None:
-            _fail(action, f"no channel resolves for {target_scope!r}")
+            await _fail(action, f"no channel resolves for {target_scope!r}")
             continue
 
         try:
             await channel.notify(target_scope or "", clean)
         except Exception as e:
             log.exception("heartbeat action %s: channel notify failed", action.id)
-            _fail(action, f"channel notify failed: {e}", target=target_scope)
+            await _fail(action, f"channel notify failed: {e}", target=target_scope)
             continue
 
         n_notified += 1
@@ -977,7 +980,8 @@ async def _run_tick_locked(*, now: datetime | None = None) -> dict[str, str]:
             len(clean),
         )
         replies[action.id] = clean
-        mark_success(
+        await asyncio.to_thread(
+            mark_success,
             action,
             now,
             last_outcome="notified",
@@ -986,15 +990,15 @@ async def _run_tick_locked(*, now: datetime | None = None) -> dict[str, str]:
             run_seconds=round(time.monotonic() - action_t0, 2),
         )
         if action.kind == ActionKind.AT:
-            _archive_with_lock(action.id, now)
+            await asyncio.to_thread(_archive_with_lock, action.id, now)
 
     # Orphan rows (cancelled, or archived then evicted past _COMPLETED_CAP)
     # would otherwise make a reused id look "already run" forever.
     try:
-        ledger_now = load_ledger()
+        ledger_now = await asyncio.to_thread(load_ledger)
         keep = {a.id for a in ledger_now.actions}
         keep.update(str(c.get("id", "")) for c in ledger_now.completed)
-        prune_state(keep)
+        await asyncio.to_thread(prune_state, keep)
     except Exception:
         log.exception("heartbeat state prune failed")
     log.info(

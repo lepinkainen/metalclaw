@@ -84,7 +84,7 @@ Per-row upserts: no whole-file read-modify-write, so `--daemon` + interactive `b
 Single-flight: a module-level `_tick_running` flag (not an `asyncio.Lock`, so it works across the many event loops tests create) makes an overlapping call log + return `{}` instead of running the same due actions twice. `spawn_tick()` is the only sanctioned way to fire-and-forget a tick: it refuses while one runs and keeps the task in `_background_ticks` until done (the loop holds only weak refs; an unreferenced `create_task` can be GC'd mid-run). The body lives in `_run_tick_locked`.
 
 1. Active-hours gate (`_within_active_hours(now.astimezone(), cfg.heartbeat_active_hours)`). Wraparound `[22, 6]` supported.
-2. `state = load_state()` (dict of `ActionState`); `snapshot = load_ledger()`.
+2. `state = await asyncio.to_thread(load_state)`; `snapshot = await asyncio.to_thread(load_ledger)`. Every ledger/state call in the tick (`mark_success`, `mark_failure`, `_archive_with_lock`, `prune_state`, the end-of-tick `load_ledger`) is wrapped in `asyncio.to_thread` because they take `flock`/SQLite locks that another process may hold (#33). `_fail` is therefore an `async` closure.
 3. For each `action` in snapshot:
    - `is_action_due(action, state[id].last_run, now)` → skip if not; due but `now < state[id].retry_at()` → skip (backoff, no model call).
    - `_run_action(...)` runs `chat_loop.chat(messages)` in a thread executor.

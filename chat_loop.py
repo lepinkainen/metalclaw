@@ -545,8 +545,9 @@ async def run_turn(
 ) -> tuple[str, str, str]:
     """Single user-turn orchestration shared by every frontend.
 
-    Refreshes the system prompt, appends ``user_text``, runs ``chat_call`` in a
-    thread executor, then splits ``<think>`` tags from the result. Returns
+    Appends ``user_text``, then refreshes the system prompt and runs
+    ``chat_call`` in a thread executor, then splits ``<think>`` tags from the
+    result. Returns
     ``(raw_reply, thinking, clean_reply)``. On any exception from the chat call,
     pops the user message from ``session`` (so the caller's session state
     stays consistent) and re-raises.
@@ -554,7 +555,6 @@ async def run_turn(
     ``chat_call`` is a no-arg closure so callers can bind ``chat`` /
     ``chat_via_escalation`` plus any ``on_tool_call`` hook themselves.
     """
-    _refresh_system_prompt(session)
     session.append_user(user_text)
     log.info(
         "run_turn scope=%s session=%d messages user_text=%d chars",
@@ -563,9 +563,16 @@ async def run_turn(
         len(user_text),
     )
     log.debug("run_turn user text: %.500s", user_text)
+
+    def _work() -> str:
+        # The refresh reads memory.md and the heartbeat ledger under flock;
+        # keep that off the event loop thread together with the chat call.
+        _refresh_system_prompt(session)
+        return chat_call()
+
     loop = asyncio.get_running_loop()
     try:
-        reply = await loop.run_in_executor(None, chat_call)
+        reply = await loop.run_in_executor(None, _work)
     except Exception:
         log.exception("run_turn failed; reverting user message")
         session.history.pop()

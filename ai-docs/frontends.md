@@ -41,7 +41,7 @@ Each frontend registers a `Channel` with `channels.register(...)` on startup:
 Shared registry: `frontends/common.py:230 TOOL_COMMANDS` for `/train /weather /mail /search /wilma`.
 Shared async runners: `run_remember`, `run_forget`, `run_memory`, `run_heartbeat`, `run_big`. Each takes a `SendFn = Callable[[str], Awaitable[None]]`.
 
-CLI does **not** delegate `/remember /forget /memory /heartbeat /big` to `common.run_*` — it has Rich-styled sync handlers (`cli.py:142-156`). The other frontends do delegate:
+CLI does **not** delegate `/remember /forget /memory /heartbeat /big` to `common.run_*` — it has Rich-styled sync handlers. CLI tool slash commands (`_make_tool_handler`) and `/self-edit` are `async` and run their blocking body via `asyncio.to_thread` so a slow HTTP call or the minutes-long `claude -p` run doesn't freeze Telegram/Discord polling (#33). The other frontends do delegate:
 - Telegram: `_telegram_dispatch_command` (`telegram.py:154`).
 - Discord: `_discord_dispatch_command` (`discord.py:140`).
 

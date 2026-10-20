@@ -95,7 +95,7 @@ async def _handle_diff(_: str) -> None:
     await common.run_diff(_cli_send_dim, "cli")
 
 
-def _handle_self_edit(args: str) -> None:
+async def _handle_self_edit(args: str) -> None:
     log.info("cli: /self-edit args=%.200r", args)
     if not get_config().allow_self_modification:
         log.warning("cli: /self-edit refused: allow_self_modification=false")
@@ -104,7 +104,13 @@ def _handle_self_edit(args: str) -> None:
             "(allow_self_modification: false in config.yaml)"
         )
         return
-    result = self_change.run_self_change(args, REPO_ROOT)
+    # Minutes of subprocess plus an interactive input() prompt: keep it off
+    # the event loop so Telegram/Discord stay responsive meanwhile.
+    try:
+        result = await asyncio.to_thread(self_change.run_self_change, args, REPO_ROOT)
+    except self_change.SelfModificationBusy as e:
+        console.print(f"[dim]{e}[/dim]")
+        return
     status = "approved" if result.approved else "rejected"
     console.print(f"\n[dim][self-change {status}][/dim]\n")
 
@@ -142,7 +148,7 @@ def _print_bot_markdown(text: str) -> None:
 def _make_tool_handler(
     tool_name: str, parser: Callable, formatter: Callable
 ) -> Callable:
-    def handler(args: str) -> None:
+    async def handler(args: str) -> None:
         params = parser(args)
         log.info("cli: tool command -> %s params=%.200s", tool_name, params)
         tool_obj = TOOLS.get(tool_name)
@@ -151,7 +157,8 @@ def _make_tool_handler(
             console.print(f"{tool_name} tool is not available")
             return
         try:
-            result = tool_obj.func(**params)
+            # Tool bodies do blocking HTTP; run off the loop thread.
+            result = await asyncio.to_thread(tool_obj.func, **params)
         except Exception as e:
             log.exception("cli: tool command %s failed", tool_name)
             console.print(f"\n[bold]bot>[/bold] Error: {e}\n")
