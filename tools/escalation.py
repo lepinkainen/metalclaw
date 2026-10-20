@@ -35,21 +35,21 @@ def escalate_to_big_model(query: str, reason: str) -> dict[str, Any]:
     import chat_loop
     from providers import get_provider
 
-    snapshot = chat_loop._active_session_messages.get()
+    snapshot = chat_loop._active_session.get()
     if snapshot is None:
-        sub_messages: list[dict] = [{"role": "user", "content": query}]
+        sub = chat_loop.Session()
+        sub.append_user(query)
     elif cfg.escalation_provider != cfg.provider:
         # Session history is in the local provider's wire format; the cloud
         # provider would choke on it (missing tool_call_id / id). Keep text only.
-        sub_messages = chat_loop.strip_tool_history(snapshot)
-        sub_messages.append(
-            {"role": "user", "content": f"[escalation: {reason}] {query}"}
+        sub = chat_loop.Session(
+            system=snapshot.system,
+            history=chat_loop.strip_tool_history(snapshot.history),
         )
+        sub.append_user(f"[escalation: {reason}] {query}")
     else:
-        sub_messages = list(snapshot)
-        sub_messages.append(
-            {"role": "user", "content": f"[escalation: {reason}] {query}"}
-        )
+        sub = snapshot.snapshot()
+        sub.append_user(f"[escalation: {reason}] {query}")
 
     big = get_provider(cfg.escalation_provider, model_override=cfg.escalation_model)
     log.info(
@@ -57,10 +57,10 @@ def escalate_to_big_model(query: str, reason: str) -> dict[str, Any]:
         cfg.escalation_provider,
         cfg.escalation_model,
         snapshot is not None,
-        len(sub_messages),
+        len(sub.history),
     )
     reply = chat_loop._chat_with_provider(
-        big, sub_messages, exclude_tools={"escalate_to_big_model"}
+        big, sub, exclude_tools={"escalate_to_big_model"}
     )
     log.info("escalate_to_big_model done reply=%d chars", len(reply))
     return {

@@ -14,18 +14,19 @@ If you add a new tool module under `tools/`, re-export it from `tools/__init__.p
 
 ## Test imports
 
-Tests import directly from the defining module — `chat_loop._chat_with_provider`, `chat_loop._active_session_messages`, `frontends.discord._split_for_discord`, etc. `bot.py` is a thin entrypoint and re-exports nothing; `import bot; bot._foo` will fail.
+Tests import directly from the defining module — `chat_loop._chat_with_provider`, `chat_loop._active_session`, `frontends.discord._split_for_discord`, etc. `bot.py` is a thin entrypoint and re-exports nothing; `import bot; bot._foo` will fail.
 
 ## `messages` mutation contract
 
-- `chat()` and `chat_via_escalation()` mutate the passed list in place via `messages[:] = ...` at end — except cross-provider escalation, which works on a `strip_tool_history` copy and appends only the final assistant text (foreign tool-call payloads must never enter the session).
+- `chat()` and `chat_via_escalation()` take a `Session` and commit `session.history` / `session.system` only on a normal return — a provider exception leaves the session as it was. Cross-provider escalation works on a `strip_tool_history` copy and appends only the final assistant text (foreign tool-call payloads must never enter the session).
 - `_parse_command("/")` returns `("", "")` (unknown command), never raises.
-- Frontends append the user message then call `chat`. On exception they `pop()` to revert.
-- The system message at index 0 is **rebuilt** by `_refresh_system_prompt` before each turn AND mid-loop on memory writes — don't rely on `messages[0]` content to be stable across a turn.
+- `run_turn` appends the user message then calls `chat`. On exception it pops it to revert.
+- `session.system` is **rebuilt** by `_refresh_system_prompt` before each turn AND mid-loop on memory writes — don't rely on it being stable across a turn. There is no system message inside `history`.
+- `Session.provider_name` is the provider stamp; a stale `id()`-keyed global no longer exists, so sessions need no cleanup call on `/new`.
 
-## ContextVar `_active_session_messages`
+## ContextVar `_active_session`
 
-Set by `_chat_with_provider` and republished before each provider call (a point-in-time copy of system + completed exchanges, never the in-flight assistant tool call), read by `escalate_to_big_model` to splice conversation context into the escalation. **Reset on exit via `try/finally`.** If you call `_chat_with_provider` recursively (e.g. escalation), the inner call sets and resets — outer's snapshot is preserved by `ContextVar.set`/`reset` token semantics. Don't replace with a global mutable.
+Set by `_chat_with_provider` and republished before each provider call (a point-in-time `Session` copy of system + completed exchanges, never the in-flight assistant tool call), read by `escalate_to_big_model` to splice conversation context into the escalation. **Reset on exit via `try/finally`.** If you call `_chat_with_provider` recursively (e.g. escalation), the inner call sets and resets — outer's snapshot is preserved by `ContextVar.set`/`reset` token semantics. Don't replace with a global mutable.
 
 ## Memory mutator detection is name-based
 

@@ -18,6 +18,7 @@ import channels
 import memory
 import self_change
 from chat_loop import (
+    Session,
     _parse_command,
     build_system_prompt,
     chat,
@@ -43,7 +44,7 @@ _COMMANDS = common.cli_command_table()
 _show_thinking = False
 _show_tools = False  # initialised from config.show_tool_calls in run_cli_repl
 _prompt_session: PromptSession | None = None
-_cli_messages: list[dict] | None = None
+_cli_messages: Session | None = None
 
 
 class _SlashCompleter(Completer):
@@ -164,7 +165,7 @@ def _handle_help(_: str) -> None:
     _print_help()
 
 
-def _cli_messages_ref() -> list[dict] | None:
+def _cli_messages_ref() -> Session | None:
     return _cli_messages
 
 
@@ -308,12 +309,7 @@ async def run_cli_repl() -> None:
         complete_while_typing=True,
     )
 
-    messages: list[dict] = [
-        {
-            "role": "system",
-            "content": build_system_prompt(now),
-        },
-    ]
+    messages = Session(system=build_system_prompt(now))
     _cli_messages = messages
 
     cfg = get_config()

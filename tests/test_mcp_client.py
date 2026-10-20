@@ -9,7 +9,7 @@ from mcp.server import MCPServer
 import config
 import mcp_client
 import registry
-from chat_loop import _chat_with_provider
+from chat_loop import Session, _chat_with_provider
 from config import McpServer
 from providers.base import AssistantMessage, ToolCall
 
@@ -169,9 +169,9 @@ def test_chat_loop_end_to_end(mcp):
                 {"role": "tool", "tool_call_id": c.id, "content": j} for c, j in results
             ]
 
-    messages = [{"role": "user", "content": "3+4"}]
-    assert _chat_with_provider(Stub(), messages) == "7"
-    assert '"result": 7' in messages[-1]["content"]
+    session = Session(history=[{"role": "user", "content": "3+4"}])
+    assert _chat_with_provider(Stub(), session) == "7"
+    assert '"result": 7' in session.history[-1]["content"]
 
 
 def test_schema_mapping():

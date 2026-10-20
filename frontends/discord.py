@@ -11,10 +11,10 @@ import discord
 import channels
 import history
 from chat_loop import (
+    Session,
     _parse_command,
     build_system_prompt,
     chat,
-    forget_session_provider,
     format_now,
     run_turn,
     scoped_chat,
@@ -25,7 +25,7 @@ from registry import TOOLS
 
 log = logging.getLogger(__name__)
 
-_discord_sessions: dict[int, list[dict]] = {}
+_discord_sessions: dict[int, Session] = {}
 _discord_session_locks: dict[int, asyncio.Lock] = {}
 # In-memory mirror of the ``known_chats`` rows for frontend="discord"
 # (history.db). Loaded in ``start_discord``; every handled message touches the row.
@@ -166,13 +166,11 @@ class _DiscordChannel:
         return tuple(common.discord_scope(cid) for cid in _known_discord_channels)
 
 
-def _get_discord_session(channel_id: int) -> list[dict]:
+def _get_discord_session(channel_id: int) -> Session:
     if channel_id not in _discord_sessions:
         log.info("discord: new session channel_id=%d", channel_id)
         now = format_now()
-        _discord_sessions[channel_id] = [
-            {"role": "system", "content": build_system_prompt(now)}
-        ]
+        _discord_sessions[channel_id] = Session(system=build_system_prompt(now))
     return _discord_sessions[channel_id]
 
 
@@ -223,8 +221,6 @@ async def _discord_dispatch_command(
         await common.run_usage(send)
     elif canon == "new":
         old = _discord_sessions.pop(channel_id, None)
-        if old is not None:
-            forget_session_provider(old)
         log.info(
             "discord: session reset channel_id=%d (had_session=%s)",
             channel_id,

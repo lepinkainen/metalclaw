@@ -11,6 +11,7 @@ import re
 import time
 from collections.abc import Callable
 from contextvars import ContextVar
+from dataclasses import dataclass, field
 from typing import Any
 
 from pydantic import ValidationError
@@ -27,19 +28,19 @@ from registry import TOOLS
 log = logging.getLogger(__name__)
 
 __all__ = [
-    "_active_session_messages",
+    "Session",
+    "_active_session",
     "_chat_with_provider",
     "_parse_command",
     "_refresh_system_prompt",
     "_run_tool",
-    "_split_system",
     "_split_thinking",
     "build_system_prompt",
     "chat",
     "chat_via_escalation",
     "current_scope",
-    "forget_session_provider",
     "format_now",
+    "new_session",
     "run_turn",
     "scoped_chat",
 ]
@@ -127,16 +128,42 @@ def build_system_prompt(now: str) -> str:
     return base
 
 
-def _refresh_system_prompt(messages: list[dict]) -> None:
-    """Rewrite messages[0] with current memory summary so mid-session writes are visible."""
-    now = format_now()
-    prompt = build_system_prompt(now)
-    if messages and messages[0].get("role") == "system":
-        messages[0] = {"role": "system", "content": prompt}
-    else:
-        messages.insert(0, {"role": "system", "content": prompt})
+@dataclass
+class Session:
+    """One conversation: the system prompt plus provider-shaped history.
+
+    ``history`` holds the wire-format messages each provider appends
+    (``AssistantMessage.raw`` / ``format_tool_results``); the system prompt is
+    kept apart so it can be rebuilt without touching history. ``provider_name``
+    is stamped by ``chat()`` so a mid-session ``provider:`` switch can drop the
+    foreign-format history. Single owner per chat; frontends hold one per
+    CLI / Telegram chat / Discord channel, heartbeat builds one per action run.
+    """
+
+    system: str = ""
+    history: list[dict] = field(default_factory=list)
+    provider_name: str | None = None
+
+    def append_user(self, text: str) -> None:
+        self.history.append({"role": "user", "content": text})
+
+    def snapshot(self) -> Session:
+        """Point-in-time copy for tools (``provider_name`` not carried)."""
+        return Session(system=self.system, history=list(self.history))
+
+
+def new_session() -> Session:
+    """Session with a fresh system prompt (memory + heartbeat summary) and no history."""
+    return Session(system=build_system_prompt(format_now()))
+
+
+def _refresh_system_prompt(session: Session) -> None:
+    """Rebuild ``session.system`` so mid-session memory writes are visible."""
+    session.system = build_system_prompt(format_now())
     log.debug(
-        "system prompt refreshed (%d chars, %d messages)", len(prompt), len(messages)
+        "system prompt refreshed (%d chars, %d messages)",
+        len(session.system),
+        len(session.history),
     )
 
 
@@ -161,9 +188,7 @@ def _tool_result_json(result: object) -> str:
 # (notably escalate_to_big_model) see this turn's earlier tool results. The
 # assistant message currently being resolved is never included: its tool
 # calls have no results yet and would leave a dangling call in the snapshot.
-_active_session_messages: ContextVar[list[dict] | None] = ContextVar(
-    "active_session_messages", default=None
-)
+_active_session: ContextVar[Session | None] = ContextVar("active_session", default=None)
 
 
 # Channel scope of the current chat turn — set by each frontend before chat()
@@ -187,17 +212,6 @@ def scoped_chat(scope: str | None, fn: Callable[[], str]) -> str:
         return fn()
     finally:
         current_scope.reset(token)
-
-
-def _split_system(messages: list[dict]) -> tuple[str, list[dict]]:
-    if messages and messages[0].get("role") == "system":
-        return messages[0].get("content", "") or "", list(messages[1:])
-    return "", list(messages)
-
-
-def _join_system(system: str, history: list[dict]) -> list[dict]:
-    """Inverse of `_split_system`: fresh list, system message first when set."""
-    return ([{"role": "system", "content": system}] if system else []) + history
 
 
 def _run_tool(name: str, args: dict) -> object:
@@ -237,15 +251,21 @@ def _run_tool(name: str, args: dict) -> object:
 
 def _chat_with_provider(
     provider: Provider,
-    messages: list[dict],
+    session: Session,
     *,
     on_tool_call: Callable[[str, dict, str], None] | None = None,
     exclude_tools: frozenset[str] | set[str] = frozenset(),
 ) -> str:
-    """Run the tool-call loop against `provider`, mutating `messages` in place."""
+    """Run the tool-call loop against `provider`.
+
+    Works on a copy of ``session.history`` and commits it (plus any mid-loop
+    system-prompt rebuild) back to ``session`` only on a normal return, so a
+    provider exception leaves the session exactly as it was.
+    """
     tool_schemas = [t.schema for name, t in TOOLS.items() if name not in exclude_tools]
-    system, history = _split_system(messages)
-    token = _active_session_messages.set(_join_system(system, history))
+    system = session.system
+    history = list(session.history)
+    token = _active_session.set(Session(system=system, history=list(history)))
     pname = getattr(provider, "name", type(provider).__name__)
     pmodel = getattr(provider, "model", None)
     turn_t0 = time.monotonic()
@@ -279,7 +299,7 @@ def _chat_with_provider(
                     pname,
                 )
             # Republish so tools run in this round see completed exchanges.
-            _active_session_messages.set(_join_system(system, history))
+            _active_session.set(Session(system=system, history=list(history)))
             call_t0 = time.monotonic()
             try:
                 am = provider.chat_once(history, schemas, system)
@@ -318,7 +338,7 @@ def _chat_with_provider(
                     "tool loop: model still emitted %d tool call(s) after cap; giving up",
                     len(am.tool_calls),
                 )
-                messages[:] = _join_system(system, history)
+                session.system, session.history = system, history
                 return am.text or (
                     f"Error: stopped after {max_iterations} tool-call rounds "
                     "without a final answer."
@@ -339,7 +359,7 @@ def _chat_with_provider(
                     len(am.text),
                 )
                 log.debug("turn reply: %.500s", am.text)
-                messages[:] = _join_system(system, history)
+                session.system, session.history = system, history
                 return am.text
 
             signature = tuple(
@@ -400,69 +420,49 @@ def _chat_with_provider(
                     len(system),
                 )
     finally:
-        _active_session_messages.reset(token)
+        _active_session.reset(token)
 
 
-# Session -> provider name. Each call to `chat()` stamps the session so we can
-# detect a mid-session config switch (Ollama and litellm both produce
-# OpenAI-shaped envelopes, but tool-call ids and message-result formats still
-# differ enough that history must be reset on a swap).
-_session_providers: dict[int, str] = {}
-
-
-def forget_session_provider(messages: list[dict]) -> None:
-    """Drop the provider stamp for `messages` (call on /new or session disposal)."""
-    _session_providers.pop(id(messages), None)
-
-
-def _check_session_provider(messages: list[dict], provider_name: str) -> bool:
+def _check_session_provider(session: Session, provider_name: str) -> bool:
     """Stamp the session; if the provider switched, drop tainted history.
 
-    Keeps the leading system message and the trailing user turn (both wire-
-    format-agnostic) and discards everything in between. Returns True if a
-    reset happened.
+    Ollama and litellm both produce OpenAI-shaped envelopes, but tool-call ids
+    and tool-result formats differ enough that history must be reset on a
+    swap. Keeps only the trailing user turn (wire-format-agnostic). Returns
+    True if a reset happened.
     """
-    sid = id(messages)
-    stamped = _session_providers.get(sid)
-    _session_providers[sid] = provider_name
+    stamped = session.provider_name
+    session.provider_name = provider_name
     if stamped is None or stamped == provider_name:
         return False
-    kept: list[dict] = []
-    if messages and messages[0].get("role") == "system":
-        kept.append(messages[0])
-    if (
-        messages
-        and messages[-1].get("role") == "user"
-        and (not kept or messages[-1] is not kept[0])
-    ):
-        kept.append(messages[-1])
+    history = session.history
+    kept = [history[-1]] if history and history[-1].get("role") == "user" else []
     log.warning(
         "provider switch %s -> %s: dropped history %d -> %d messages",
         stamped,
         provider_name,
-        len(messages),
+        len(history),
         len(kept),
     )
-    messages[:] = kept
+    session.history = kept
     return True
 
 
 def chat(
-    messages: list[dict],
+    session: Session,
     on_tool_call: Callable[[str, dict, str], None] | None = None,
 ) -> str:
-    """Send messages via the configured provider, handle tool calls, return final text.
+    """Run one turn via the configured provider, handle tool calls, return final text.
 
-    Mutates `messages` in place, appending tool-call/result entries so the
-    caller retains full conversation history. If the configured provider
-    changed since this session's last turn, prior tool-call history is
-    dropped (system + current user turn preserved) so the new provider does
-    not choke on foreign wire formats.
+    Appends tool-call/result entries to ``session.history``. If the configured
+    provider changed since this session's last turn, prior history is dropped
+    (current user turn preserved) so the new provider does not choke on
+    foreign wire formats.
     """
     cfg = get_config()
-    _check_session_provider(messages, cfg.provider)
+    _check_session_provider(session, cfg.provider)
     provider = get_provider(cfg.provider)
-    return _chat_with_provider(provider, messages, on_tool_call=on_tool_call)
+    return _chat_with_provider(provider, session, on_tool_call=on_tool_call)
 
 
 def strip_tool_history(messages: list[dict]) -> list[dict]:
@@ -490,14 +490,14 @@ def strip_tool_history(messages: list[dict]) -> list[dict]:
 
 
 def chat_via_escalation(
-    messages: list[dict],
+    session: Session,
     on_tool_call: Callable[[str, dict, str], None] | None = None,
 ) -> str:
     """Run a chat turn through the escalation provider, no recursion into itself.
 
     When the escalation provider differs from the session's provider the turn
     runs on a sanitised copy of the history (see `strip_tool_history`) and only
-    the final assistant text is appended back to `messages`, so neither
+    the final assistant text is appended back to ``session``, so neither
     provider's tool-call wire format ever leaks into the other's session.
     """
     cfg = get_config()
@@ -505,12 +505,16 @@ def chat_via_escalation(
         raise RuntimeError("escalation is disabled in config")
     big = get_provider(cfg.escalation_provider, model_override=cfg.escalation_model)
     cross_provider = cfg.escalation_provider != cfg.provider
-    work = strip_tool_history(messages) if cross_provider else messages
+    work = (
+        Session(system=session.system, history=strip_tool_history(session.history))
+        if cross_provider
+        else session
+    )
     log.info(
         "escalation start provider=%s model=%s messages=%d",
         cfg.escalation_provider,
         cfg.escalation_model,
-        len(messages),
+        len(session.history),
     )
     t0 = time.monotonic()
     try:
@@ -524,7 +528,7 @@ def chat_via_escalation(
         log.exception("escalation failed after %.2fs", time.monotonic() - t0)
         raise
     if cross_provider:
-        messages.append({"role": "assistant", "content": out})
+        session.history.append({"role": "assistant", "content": out})
     log.info(
         "escalation end duration=%.2fs reply=%d chars cross_provider=%s",
         time.monotonic() - t0,
@@ -535,7 +539,7 @@ def chat_via_escalation(
 
 
 async def run_turn(
-    messages: list[dict],
+    session: Session,
     user_text: str,
     chat_call: Callable[[], str],
 ) -> tuple[str, str, str]:
@@ -544,18 +548,18 @@ async def run_turn(
     Refreshes the system prompt, appends ``user_text``, runs ``chat_call`` in a
     thread executor, then splits ``<think>`` tags from the result. Returns
     ``(raw_reply, thinking, clean_reply)``. On any exception from the chat call,
-    pops the user message from ``messages`` (so the caller's session state
+    pops the user message from ``session`` (so the caller's session state
     stays consistent) and re-raises.
 
     ``chat_call`` is a no-arg closure so callers can bind ``chat`` /
     ``chat_via_escalation`` plus any ``on_tool_call`` hook themselves.
     """
-    _refresh_system_prompt(messages)
-    messages.append({"role": "user", "content": user_text})
+    _refresh_system_prompt(session)
+    session.append_user(user_text)
     log.info(
         "run_turn scope=%s session=%d messages user_text=%d chars",
         current_scope.get(),
-        len(messages),
+        len(session.history),
         len(user_text),
     )
     log.debug("run_turn user text: %.500s", user_text)
@@ -564,7 +568,7 @@ async def run_turn(
         reply = await loop.run_in_executor(None, chat_call)
     except Exception:
         log.exception("run_turn failed; reverting user message")
-        messages.pop()
+        session.history.pop()
         raise
     thinking, clean_reply = _split_thinking(reply)
     return reply, thinking, clean_reply

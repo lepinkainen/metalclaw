@@ -23,10 +23,10 @@ import channels
 import history
 import telegram_format
 from chat_loop import (
+    Session,
     _parse_command,
     build_system_prompt,
     chat,
-    forget_session_provider,
     format_now,
     run_turn,
     scoped_chat,
@@ -37,7 +37,7 @@ from registry import TOOLS
 
 log = logging.getLogger(__name__)
 
-_telegram_sessions: dict[int, list[dict]] = {}
+_telegram_sessions: dict[int, Session] = {}
 _telegram_chat_locks: dict[int, asyncio.Lock] = {}
 # In-memory mirror of the ``known_chats`` rows for frontend="telegram"
 # (history.db). Loaded in ``start_telegram``; every message touches the row.
@@ -235,13 +235,11 @@ class _TelegramChannel:
         return tuple(common.telegram_scope(cid) for cid in _known_chats)
 
 
-def _get_telegram_session(chat_id: int) -> list[dict]:
+def _get_telegram_session(chat_id: int) -> Session:
     if chat_id not in _telegram_sessions:
         log.info("telegram: new session chat_id=%d", chat_id)
         now = format_now()
-        _telegram_sessions[chat_id] = [
-            {"role": "system", "content": build_system_prompt(now)}
-        ]
+        _telegram_sessions[chat_id] = Session(system=build_system_prompt(now))
     return _telegram_sessions[chat_id]
 
 
@@ -306,8 +304,6 @@ async def _dispatch_command_locked(
         await common.run_usage(send)
     elif canon == "new":
         old = _telegram_sessions.pop(chat_id, None)
-        if old is not None:
-            forget_session_provider(old)
         log.info(
             "telegram: session reset chat_id=%d (had_session=%s)",
             chat_id,

@@ -8,9 +8,11 @@ Each frontend keeps **per-conversation** message lists (short-term context). Lon
 
 | Frontend | Session key | Storage |
 |---|---|---|
-| CLI | none (single REPL) | `_cli_messages` global (`cli.py:52`) |
-| Telegram | `chat_id: int` | `_telegram_sessions: dict[int, list[dict]]` (`telegram.py:28`) |
-| Discord | `channel.id: int` | `_discord_sessions: dict[int, list[dict]]` (`discord.py:23`) |
+| CLI | none (single REPL) | `_cli_messages: Session | None` global (`cli.py`) |
+| Telegram | `chat_id: int` | `_telegram_sessions: dict[int, Session]` (`telegram.py`) |
+| Discord | `channel.id: int` | `_discord_sessions: dict[int, Session]` (`discord.py`) |
+
+Each value is a `chat_loop.Session` (system prompt + provider-shaped history + provider stamp). `/new` pops the entry; nothing else to release.
 
 `/new` clears the session (`telegram.py:163`, `discord.py:149`). CLI has no `/new` — exit and restart.
 

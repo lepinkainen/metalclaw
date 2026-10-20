@@ -11,7 +11,7 @@ Per-module symbol map. `→` = imports. `←` = imported by.
 
 ## chat_loop.py — provider-agnostic loop
 
-- Public: `chat(messages, on_tool_call=None) -> str`, `chat_via_escalation(messages) -> str`, `build_system_prompt(now) -> str`, `_parse_command`, `_split_system`, `_split_thinking`, `_refresh_system_prompt`, `_run_tool`, `_chat_with_provider`, `_active_session_messages` (ContextVar).
+- Public: `Session` (dataclass: `system`, `history`, `provider_name`; `append_user`, `snapshot`), `new_session()`, `chat(session, on_tool_call=None) -> str`, `chat_via_escalation(session) -> str`, `run_turn(session, text, chat_call)`, `build_system_prompt(now) -> str`, `_parse_command`, `_split_thinking`, `_refresh_system_prompt(session)`, `_run_tool`, `_chat_with_provider(provider, session, ...)`, `_active_session` (ContextVar[Session | None]).
 - Constants: `_SYSTEM_PROMPT_BASE` (chat_loop.py:49), `_ESCALATION_HINT` (chat_loop.py:67), `_MEMORY_MUTATORS = {"set_user_preference","add_user_fact","add_user_instruction","forget_user_memory"}` (chat_loop.py:96).
 - → `memory`, `config`, `providers`, `registry`.
 

@@ -31,7 +31,7 @@ import history
 import live_tool
 import mcp_client
 import memory
-from chat_loop import chat_via_escalation, run_turn, scoped_chat
+from chat_loop import Session, chat_via_escalation, run_turn, scoped_chat
 from config import get_config
 
 log = logging.getLogger(__name__)
@@ -636,7 +636,7 @@ async def run_heartbeat(
 async def run_big(
     send: SendFn,
     typing_ctx,
-    messages: list[dict],
+    session: Session,
     query: str,
     scope: str | None = None,
     on_tool_call: Callable[[str, dict, str], None] | None = None,
@@ -658,11 +658,11 @@ async def run_big(
     try:
         async with typing_ctx:
             _, _, clean_reply = await run_turn(
-                messages,
+                session,
                 query,
                 lambda: scoped_chat(
                     scope,
-                    lambda: chat_via_escalation(messages, on_tool_call=on_tool_call),
+                    lambda: chat_via_escalation(session, on_tool_call=on_tool_call),
                 ),
             )
     except Exception as e:

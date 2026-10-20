@@ -5,6 +5,7 @@ import pytest
 
 import config
 import memory
+from chat_loop import Session
 from frontends import common
 
 
@@ -206,43 +207,43 @@ def test_run_heartbeat_warn_no_discord_channel(vault):
 
 def test_run_big_empty_query(vault):
     send, captured = _send_capture()
-    asyncio.run(common.run_big(send, contextlib.nullcontext(), [], ""))
+    asyncio.run(common.run_big(send, contextlib.nullcontext(), Session(), ""))
     assert captured == ["usage: /big <query>"]
 
 
 def test_run_big_disabled_when_escalation_off(vault):
     send, captured = _send_capture()
-    asyncio.run(common.run_big(send, contextlib.nullcontext(), [], "hi"))
+    asyncio.run(common.run_big(send, contextlib.nullcontext(), Session(), "hi"))
     assert any("escalation disabled" in c for c in captured)
 
 
 def test_run_big_routes_through_escalation(vault_with_escalation, monkeypatch):
-    def fake_escalate(msgs: list[dict], on_tool_call=None) -> str:
-        msgs.append({"role": "assistant", "content": "cloud reply"})
+    def fake_escalate(session: Session, on_tool_call=None) -> str:
+        session.history.append({"role": "assistant", "content": "cloud reply"})
         return "cloud reply"
 
     monkeypatch.setattr(common, "chat_via_escalation", fake_escalate)
 
-    messages: list[dict] = [{"role": "system", "content": "x"}]
+    session = Session(system="x")
     send, captured = _send_capture()
-    asyncio.run(common.run_big(send, contextlib.nullcontext(), messages, "hi"))
+    asyncio.run(common.run_big(send, contextlib.nullcontext(), session, "hi"))
 
-    assert messages[-2] == {"role": "user", "content": "hi"}
-    assert messages[-1] == {"role": "assistant", "content": "cloud reply"}
+    assert session.history[-2] == {"role": "user", "content": "hi"}
+    assert session.history[-1] == {"role": "assistant", "content": "cloud reply"}
     assert captured[-1] == "cloud reply"
 
 
 def test_run_big_rolls_back_on_exception(vault_with_escalation, monkeypatch):
-    def boom(_msgs, on_tool_call=None):
+    def boom(_session, on_tool_call=None):
         raise RuntimeError("boom")
 
     monkeypatch.setattr(common, "chat_via_escalation", boom)
 
-    messages: list[dict] = [{"role": "system", "content": "x"}]
+    session = Session(system="x")
     send, captured = _send_capture()
-    asyncio.run(common.run_big(send, contextlib.nullcontext(), messages, "hi"))
+    asyncio.run(common.run_big(send, contextlib.nullcontext(), session, "hi"))
 
-    assert all(m.get("role") != "user" for m in messages)
+    assert session.history == []
     assert any("Error: boom" in c for c in captured)
 
 

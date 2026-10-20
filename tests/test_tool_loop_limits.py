@@ -1,6 +1,6 @@
 """Guards against runaway tool loops (issue #30)."""
 
-from chat_loop import _chat_with_provider
+from chat_loop import Session, _chat_with_provider
 from providers.base import AssistantMessage, ToolCall
 
 
@@ -35,15 +35,15 @@ def test_iteration_cap_forces_tool_less_final_call(cfg_file, write_config):
     import tools  # noqa: F401  (registers roll_die)
 
     provider = _LoopingProvider()
-    messages = [{"role": "system", "content": "sys"}, {"role": "user", "content": "go"}]
-    out = _chat_with_provider(provider, messages)
+    session = Session(system="sys", history=[{"role": "user", "content": "go"}])
+    out = _chat_with_provider(provider, session)
 
     assert out == "final answer"
     # 4 tool-bearing calls, then exactly one call with an empty tool list.
     assert len(provider.calls) == 5
     assert all(provider.calls[i] for i in range(4))
     assert provider.calls[4] == []
-    assert messages[-1] == {"role": "assistant", "content": "final answer"}
+    assert session.history[-1] == {"role": "assistant", "content": "final answer"}
 
 
 def test_repeated_identical_call_gets_error_result_instead_of_rerun(
@@ -58,13 +58,15 @@ def test_repeated_identical_call_gets_error_result_instead_of_rerun(
     )
 
     provider = _LoopingProvider()
-    messages = [{"role": "user", "content": "go"}]
-    _chat_with_provider(provider, messages)
+    session = Session(history=[{"role": "user", "content": "go"}])
+    _chat_with_provider(provider, session)
 
     # Rounds 1-2 execute; round 3 onwards are identical -> refused, not run.
     assert ran == ["roll_die", "roll_die"]
     refused = [
-        m for m in messages if m.get("role") == "tool" and "Error:" in m["content"]
+        m
+        for m in session.history
+        if m.get("role") == "tool" and "Error:" in m["content"]
     ]
     assert refused, "stuck call should be answered with an Error: tool result"
     assert "Do not call it again" in refused[0]["content"]
@@ -88,11 +90,11 @@ def test_cap_with_model_ignoring_empty_tools_returns_error_without_dangling_call
             )
 
     provider = Stubborn()
-    messages = [{"role": "user", "content": "go"}]
-    out = _chat_with_provider(provider, messages)
+    session = Session(history=[{"role": "user", "content": "go"}])
+    out = _chat_with_provider(provider, session)
 
     assert out.startswith("Error: stopped after 2 tool-call rounds")
     assert len(provider.calls) == 3
     # Last recorded message is a tool result, not an assistant tool_call
     # without results.
-    assert messages[-1]["role"] == "tool"
+    assert session.history[-1]["role"] == "tool"

@@ -11,20 +11,21 @@ user types "What's the weather in Helsinki?"
 frontend handler (cli.py / telegram.py / discord.py)
         │
         ├─ _parse_command(text) → None  (not a slash command)
-        ├─ _refresh_system_prompt(messages)   # rebuilds messages[0]
-        ├─ messages.append({"role":"user","content": text})
+        ├─ run_turn(session, text, ...):
+        │     _refresh_system_prompt(session)   # rebuilds session.system
+        │     session.append_user(text)
         ▼
-loop.run_in_executor(None, lambda: chat(messages, on_tool_call=...))
+loop.run_in_executor(None, lambda: chat(session, on_tool_call=...))
         │
         ▼
-chat() → _chat_with_provider(provider, messages)
+chat() → _check_session_provider(session) → _chat_with_provider(provider, session)
         │
         ├─ tool_schemas = TOOLS values
-        ├─ system, history = _split_system(messages)
-        ├─ _active_session_messages.set(_join_system(system, history))
+        ├─ system = session.system; history = list(session.history)   # work on a copy
+        ├─ _active_session.set(Session(system, list(history)))
         ▼
 loop:
-    _active_session_messages.set(_join_system(system, history))   # republish each round
+    _active_session.set(Session(system, list(history)))   # republish each round
     am = provider.chat_once(history, tool_schemas, system)
     history += am.raw
     if not am.tool_calls:
@@ -45,11 +46,10 @@ back to frontend: reply text → render → send
 
 ### Via `/big`:
 ```
-common.run_big(send, typing_ctx, messages, query)
-    ├─ _refresh_system_prompt(messages)
-    ├─ messages.append({"role":"user","content": query})
+common.run_big(send, typing_ctx, session, query)
+    ├─ run_turn: _refresh_system_prompt(session); session.append_user(query)
     ▼
-chat_via_escalation(messages)
+chat_via_escalation(session)
     ├─ big = get_provider(cfg.escalation_provider, model_override=cfg.escalation_model)
     └─ _chat_with_provider(big, messages, exclude_tools={"escalate_to_big_model"})
     ▼
@@ -65,8 +65,8 @@ _run_tool("escalate_to_big_model", {...})
     ▼
 tools.escalate_to_big_model(query, reason):
     ├─ if not cfg.escalation_enabled: return {"status":"disabled"}
-    ├─ snapshot = chat_loop._active_session_messages.get()    # ContextVar
-    ├─ sub_messages = list(snapshot) + [{"role":"user","content": f"[escalation: {reason}] {query}"}]
+    ├─ snapshot = chat_loop._active_session.get()    # ContextVar, Session | None
+    ├─ sub = snapshot.snapshot(); sub.append_user(f"[escalation: {reason}] {query}")
     ├─ big = get_provider(cfg.escalation_provider, model_override=cfg.escalation_model)
     └─ reply = chat_loop._chat_with_provider(big, sub_messages, exclude_tools={"escalate_to_big_model"})
     ▼
@@ -87,7 +87,7 @@ run_tick()
     └─ for action in ledger.actions:
          ├─ if not is_action_due(action, state.last_run.get(id), now): skip
          ├─ if now < state[id].retry_at(): skip           # backoff after failures, no model call
-         ├─ messages = _build_action_messages(action, now, build_system_prompt)
+         ├─ session = _build_action_session(action, now, build_system_prompt)
          │       ▲ system prompt (format_now(now) clock) + HEARTBEAT MODE postscript
          ├─ reply = await _run_action(...)                # chat_loop.chat in executor
          │       on exception → mark_failure (row upsert), continue

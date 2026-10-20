@@ -97,7 +97,7 @@ Each action is wrapped in try/except — one bad action does not stop the others
 
 ## System-prompt injection (`chat_loop.build_system_prompt`)
 
-The `now` string passed to `build_system_prompt` always comes from `heartbeat.format_now()` (`2026-10-20 15:30 EEST (UTC+0300)` — local wall clock **with** offset) so the model can emit tz-aware `at` values; every frontend session bootstrap, `_refresh_system_prompt`, the mid-loop rebuild and `_build_action_messages` use it. Do not reintroduce a bare `datetime.now().strftime(...)`.
+The `now` string passed to `build_system_prompt` always comes from `heartbeat.format_now()` (`2026-10-20 15:30 EEST (UTC+0300)` — local wall clock **with** offset) so the model can emit tz-aware `at` values; every frontend session bootstrap, `_refresh_system_prompt`, the mid-loop rebuild and `_build_action_session` use it. Do not reintroduce a bare `datetime.now().strftime(...)`.
 
 After memory summary, `heartbeat.summary()` is appended:
 

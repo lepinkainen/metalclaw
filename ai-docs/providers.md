@@ -29,7 +29,7 @@ class Provider(Protocol):
 
 `usage`: Ollama fills tokens from `prompt_eval_count`/`eval_count` (cost None); litellm from `resp.usage` + `completion_cost`. `chat_loop._chat_with_provider` persists it via `history.record_usage` after every `chat_once` (failures logged, never raised).
 
-`raw` shape is provider-specific. The chat loop treats history as opaque — only the active provider parses it. `chat_loop._session_providers` stamps each session and drops tainted history when the active provider switches mid-session (`chat_loop.py:248-277`).
+`raw` shape is provider-specific. The chat loop treats history as opaque — only the active provider parses it. `chat()` stamps `Session.provider_name` and drops tainted history when the active provider switches mid-session (`chat_loop._check_session_provider`).
 
 ## Factory (`providers/__init__.py:4`)
 

@@ -39,7 +39,7 @@ import time
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import yaml
@@ -47,6 +47,9 @@ import yaml
 import channels
 import history as history_db
 from config import get_config
+
+if TYPE_CHECKING:
+    import chat_loop
 
 log = logging.getLogger("metalclaw.heartbeat")
 
@@ -730,9 +733,11 @@ def next_due(
 # --- Tick logic ---
 
 
-def _build_action_messages(
+def _build_action_session(
     action: HeartbeatAction, now: datetime, build_system_prompt
-) -> list[dict]:
+) -> chat_loop.Session:
+    import chat_loop  # local: chat_loop imports heartbeat at module load
+
     system = build_system_prompt(format_now(now))
     system += (
         "\n\nHEARTBEAT MODE: This is a scheduled wake-up, not a user message. "
@@ -745,10 +750,9 @@ def _build_action_messages(
         "",
         action.prompt,
     ]
-    return [
-        {"role": "system", "content": system},
-        {"role": "user", "content": "\n".join(user_lines)},
-    ]
+    session = chat_loop.Session(system=system)
+    session.append_user("\n".join(user_lines))
+    return session
 
 
 def _resolve_channel(
@@ -764,9 +768,9 @@ def _resolve_channel(
 async def _run_action(
     action: HeartbeatAction, now: datetime, chat_fn, build_system_prompt
 ) -> str:
-    messages = _build_action_messages(action, now, build_system_prompt)
+    session = _build_action_session(action, now, build_system_prompt)
     loop = asyncio.get_running_loop()
-    return await loop.run_in_executor(None, lambda: chat_fn(messages))
+    return await loop.run_in_executor(None, lambda: chat_fn(session))
 
 
 # Single-flight guard: the scheduler loop and ``/heartbeat run`` both call

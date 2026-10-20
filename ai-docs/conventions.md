@@ -73,4 +73,4 @@ House rules — observed in code, enforce when editing.
 - Don't add abstractions for hypothetical future providers/frontends — `chat_loop.py` is intentionally thin.
 - Don't introduce relative imports.
 - Don't read `cfg = get_config()` at module top-level — it forces import-time validation. Read inside functions.
-- Don't mutate `messages` after `chat()` returns expecting the system message to stay in sync — call `_refresh_system_prompt` before each user turn.
+- Don't expect `session.system` to stay in sync with memory on its own — `run_turn` calls `_refresh_system_prompt(session)` before each user turn; do the same if you drive `chat()` directly.
