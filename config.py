@@ -132,6 +132,9 @@ class Config(BaseModel):
     message_debounce_seconds: float = 1.0
     max_tool_iterations: int = 25
     max_repeated_tool_calls: int = 3
+    # Conversation trimming (see chat_loop.Session.load). 0 disables either.
+    session_idle_reset_seconds: int = 3600
+    session_max_messages: int = 40
     mcp_servers: tuple[McpServer, ...] = ()
 
     @property

@@ -134,6 +134,17 @@ message_debounce_seconds: 1.0
 max_tool_iterations: 25
 max_repeated_tool_calls: 3
 
+# Conversation trimming. Chats are persisted and replayed to the model on every
+# turn, so without these only /new would ever shorten them. If a chat has been
+# quiet for session_idle_reset_seconds, the next message starts a fresh
+# conversation (like an automatic /new). Within a live conversation at most
+# session_max_messages recent messages are sent (cut at a user message so tool
+# calls stay paired with their results). Older turns are never deleted and stay
+# reachable through the search_conversation_history tool; the model is told
+# when history was trimmed. 0 disables either rule.
+session_idle_reset_seconds: 3600
+session_max_messages: 40
+
 # Glob patterns (relative to vault_path) excluded from /search and the
 # search_vault tool. Defaults to empty — full vault is searched. ripgrep
 # already skips hidden dirs (.obsidian, .trash) and respects .gitignore, so

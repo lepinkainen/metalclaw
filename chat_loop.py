@@ -12,6 +12,7 @@ import time
 from collections.abc import Callable, Sequence
 from contextvars import ContextVar
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from typing import Any
 
 from pydantic import ValidationError
@@ -118,12 +119,20 @@ _ESCALATION_HINT = (
 )
 
 
-def build_system_prompt(now: str) -> str:
+_HISTORY_TRIMMED_NOTE = (
+    "Earlier parts of this conversation were archived and are not shown. If the "
+    "user refers to something you cannot see, use search_conversation_history "
+    "instead of guessing."
+)
+
+
+def build_system_prompt(now: str, *, history_trimmed: bool = False) -> str:
     """Stable instructions, then ``SYSTEM_CACHE_BOUNDARY``, then the volatile tail.
 
     The clock, memory summary and heartbeat summary change between calls, so
     they live after the boundary where a caching provider leaves them out of
     the cached prefix (see ``providers.litellm_provider._system_message``).
+    ``history_trimmed`` adds the archived-history note (see ``Session.load``).
     """
     cfg = get_config()
     base = _SYSTEM_PROMPT_BASE
@@ -133,6 +142,8 @@ def build_system_prompt(now: str) -> str:
     if mcp_note:
         base += "\n\n" + mcp_note
     tail = f"The current date and time is {now}."
+    if history_trimmed:
+        tail += "\n\n" + _HISTORY_TRIMMED_NOTE
     mem_summary = memory.summary()
     if mem_summary:
         tail += f"\n\nKnown about user:\n{mem_summary}"
@@ -156,23 +167,52 @@ class Session:
     boundary and ``commit()`` appends the new messages, so conversations
     survive restarts and no frontend keeps sessions in memory. Heartbeat runs
     and tests use scope-less, in-memory sessions.
+
+    Because nothing else ever shortens a persisted conversation, ``load``
+    trims: a chat idle for ``session_idle_reset_seconds`` restarts from a new
+    boundary, and at most ``session_max_messages`` recent messages are
+    replayed. Either case sets ``history_trimmed`` so the system prompt tells
+    the model to search history rather than guess.
     """
 
     system: str = ""
     history: list[Message] = field(default_factory=list)
     scope: str | None = None
+    history_trimmed: bool = False
     # How many leading ``history`` entries are already in the turns table.
     _persisted: int = field(default=0, repr=False, compare=False)
 
     @classmethod
     def load(cls, scope: str) -> Session:
-        """Session for ``scope`` with its persisted history and a fresh system prompt."""
-        msgs = history_db.turns_load(scope)
-        log.debug("session load scope=%s messages=%d", scope, len(msgs))
+        """Session for ``scope``: persisted history (idle-expired / windowed) + fresh prompt."""
+        cfg = get_config()
+        trimmed = False
+        last_ts = history_db.turns_last_ts(scope)
+        if last_ts is not None and cfg.session_idle_reset_seconds > 0:
+            idle = datetime.now(UTC) - datetime.fromisoformat(last_ts)
+            if idle.total_seconds() > cfg.session_idle_reset_seconds:
+                history_db.turns_reset(scope)
+                log.info(
+                    "session idle-reset scope=%s idle=%ds", scope, idle.total_seconds()
+                )
+                trimmed = True
+        msgs, skipped = history_db.turns_window(scope, cfg.session_max_messages)
+        if skipped:
+            log.info(
+                "session windowed scope=%s skipped=%d kept=%d",
+                scope,
+                skipped,
+                len(msgs),
+            )
+            trimmed = True
+        log.debug(
+            "session load scope=%s messages=%d trimmed=%s", scope, len(msgs), trimmed
+        )
         return cls(
-            system=build_system_prompt(format_now()),
+            system=build_system_prompt(format_now(), history_trimmed=trimmed),
             history=msgs,
             scope=scope,
+            history_trimmed=trimmed,
             _persisted=len(msgs),
         )
 
@@ -216,7 +256,9 @@ def new_session() -> Session:
 
 def _refresh_system_prompt(session: Session) -> None:
     """Rebuild ``session.system`` so mid-session memory writes are visible."""
-    session.system = build_system_prompt(format_now())
+    session.system = build_system_prompt(
+        format_now(), history_trimmed=session.history_trimmed
+    )
     log.debug(
         "system prompt refreshed (%d chars, %d messages)",
         len(session.system),

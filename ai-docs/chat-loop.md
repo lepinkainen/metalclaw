@@ -20,7 +20,9 @@ class Session:                            # chat_loop.py:146
     _persisted: int = 0                   # leading history entries already in the turns table (repr/compare excluded)
 
     @classmethod
-    def load(cls, scope) -> Session       # :168 history_db.turns_load(scope) + fresh build_system_prompt(format_now()); _persisted=len(history)
+    history_trimmed: bool = False         # set by load when idle-expired or windowed → archived-history note in system prompt
+    @classmethod
+    def load(cls, scope) -> Session       # idle expiry (turns_last_ts vs session_idle_reset_seconds → turns_reset) then turns_window(scope, session_max_messages); fresh build_system_prompt(format_now(), history_trimmed=…); _persisted=len(history)
     @staticmethod
     def reset(scope) -> None              # :180 /new → history_db.turns_reset(scope) (boundary row; old rows stay searchable)
     def commit(self, work) -> None        # :185 persist work.history[_persisted:] (if scope) THEN adopt work.system/history

@@ -120,6 +120,43 @@ def turns_load(session: str) -> list[Message]:
     return [message_from_dict(json.loads(payload)) for (payload,) in rows]
 
 
+def turns_last_ts(session: str) -> str | None:
+    """ISO timestamp of the newest live (post-boundary) row, or None if empty."""
+    with _LOCK:
+        db = _conn()
+        since = _last_boundary_id(db, session)
+        row = db.execute(
+            "SELECT MAX(ts) FROM turns WHERE session = ? AND id > ? AND kind != ?",
+            (session, since, _BOUNDARY),
+        ).fetchone()
+    return row[0]
+
+
+def turns_window(session: str, limit: int) -> tuple[list[Message], int]:
+    """The most recent live messages, at most ``limit`` (0 = all).
+
+    The cut is moved back to the ``user`` row that opened that turn, so an
+    assistant tool call is never split from its results. Returns ``(messages, skipped)`` where ``skipped`` is how
+    many older live rows were left out.
+    """
+    with _LOCK:
+        db = _conn()
+        since = _last_boundary_id(db, session)
+        rows = db.execute(
+            "SELECT kind, payload FROM turns WHERE session = ? AND id > ? "
+            "AND kind != ? ORDER BY id",
+            (session, since, _BOUNDARY),
+        ).fetchall()
+    start = 0
+    if limit > 0 and len(rows) > limit:
+        # Walk back to the user row that opened the turn, so the window keeps
+        # at least ``limit`` messages and never starts mid tool round.
+        start = len(rows) - limit
+        while start > 0 and rows[start][0] != "user":
+            start -= 1
+    return [message_from_dict(json.loads(p)) for _, p in rows[start:]], start
+
+
 def turns_append(session: str, new: Sequence[Message]) -> None:
     """Persist ``new`` in order, atomically (all rows or none)."""
     if not new:

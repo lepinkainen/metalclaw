@@ -34,6 +34,8 @@
 | `litellm_prompt_caching` | `bool` | `True` | `LiteLLMProvider`: put `cache_control: ephemeral` on the system block and the last tool. Only takes effect for Claude model strings (`anthropic/…`, `bedrock/…anthropic.…`/`…claude…`); see `providers.md`. |
 | `show_tool_calls` | `bool` | `True` | Live tool-call status messages (Telegram/Discord). Per-chat `/tools on\|off` overrides in memory (not persisted). |
 | `message_debounce_seconds` | `float` | `1.0` | Telegram/Discord: quiet period before buffered non-command messages become ONE turn. `0` disables. Slash commands never debounced. |
+| `session_idle_reset_seconds` | `int` | `3600` | `Session.load`: a persisted chat whose newest row is older than this gets an automatic `/new` (boundary row) before the turn. `0` disables. |
+| `session_max_messages` | `int` | `40` | `Session.load`: replay at most this many recent live messages, cut at a `user` row so tool rounds stay intact (`history.turns_window`). `0` disables. Either trim sets `Session.history_trimmed` → archived-history note in the system prompt tail. |
 | `max_tool_iterations` | `int` | `25` | Chat loop: max tool-call rounds per turn; then one tool-less call forces a text answer. See `chat-loop.md`. |
 | `max_repeated_tool_calls` | `int` | `3` | Chat loop: identical consecutive tool-call sets at this count are refused with an `Error:` result instead of re-run. |
 | `escalation_enabled` | `bool` | `False` | Gates `escalate_to_big_model` + `/big`. |

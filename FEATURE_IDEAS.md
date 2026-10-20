@@ -15,7 +15,7 @@ Missing core pieces
 
 Conversation quality
 
-- [ ] Session summarisation / compaction. Long Telegram/Discord sessions grow without limit, now on disk in the `turns` table including full tool results. When a session crosses a threshold, summarise the old turns into one message and write a boundary.
+- [~] Session summarisation / compaction. *Done: idle expiry (`session_idle_reset_seconds`, 1h) auto-resets a quiet chat, and `session_max_messages` (40) caps what is replayed, cut at a user message; the model is told history was archived and can use `search_conversation_history`. Not done: summarising the trimmed turns into one message instead of dropping them.*
 - [x] Episodic memory. Search past conversations. history.db already exists, so a search_history tool over it is cheap. *Done as `search_conversation_history` in `tools/conversation_history.py`.*
 - [ ] Image input. Telegram and Discord photos go to the vision model (gemma4 can do vision). Use cases: receipts, school papers, screenshots.
 - [ ] Voice messages. Telegram voice goes through whisper.cpp locally to text. Finnish works reasonably well with whisper large-v3.
