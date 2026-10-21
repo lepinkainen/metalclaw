@@ -11,6 +11,7 @@ from typing import Any
 
 from telegram import BotCommand, Update
 from telegram.constants import ChatAction
+from telegram.error import NetworkError, TelegramError
 from telegram.ext import (
     Application,
     CommandHandler,
@@ -434,6 +435,19 @@ def _make_telegram_cmd_handler(cmd: str):
     return handler
 
 
+def _on_polling_error(exc: TelegramError) -> None:
+    # PTB retries polling itself; log one line instead of its full traceback.
+    log.warning("telegram: polling error (will retry): %s", exc)
+
+
+async def _on_handler_error(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
+    err = context.error
+    if isinstance(err, NetworkError):
+        log.warning("telegram: network error in handler: %s", err)
+    else:
+        log.error("telegram: handler error", exc_info=err)
+
+
 async def start_telegram(token: str) -> Application:
     global _known_chats
     _known_chats = _load_known_chats()
@@ -446,6 +460,7 @@ async def start_telegram(token: str) -> Application:
     )
     for cmd, _desc in _TELEGRAM_BOT_COMMANDS:
         app.add_handler(CommandHandler(cmd, _make_telegram_cmd_handler(cmd)))
+    app.add_error_handler(_on_handler_error)
 
     channels.register(_TelegramChannel(app))
 
@@ -458,7 +473,9 @@ async def start_telegram(token: str) -> Application:
         log.warning("failed to register Telegram bot commands: %s", e)
     await app.start()
     assert app.updater is not None
-    await app.updater.start_polling(allowed_updates=Update.ALL_TYPES)
+    await app.updater.start_polling(
+        allowed_updates=Update.ALL_TYPES, error_callback=_on_polling_error
+    )
     log.info("telegram: polling started (%d known chats)", len(_known_chats))
     return app
 

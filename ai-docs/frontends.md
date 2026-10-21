@@ -61,6 +61,11 @@ Shared async runners: `run_remember`, `run_forget`, `run_memory`, `run_manual`, 
 - `/status` (`common.format_status`): provider/model, escalation, uptime (since `common` import), registered channels + active scope counts, heartbeat actions with `heartbeat.next_due`, last 5 WARNING+ records from `common.recent_warnings` (ring buffer handler, `bot._setup_logging` installs it on root).
 - `/usage` (`common.format_usage`): today (local midnight) and last 30 days from the `usage` table, grouped by provider/model; cost `n/a` when unknown, `(partial)` when some calls unpriced.
 
+## Network errors
+
+- **Startup fails fast, on purpose.** `start_telegram` does not retry `app.initialize()` (`getMe`) or `start_polling` bootstrap (`bootstrap_retries=0`); a network failure there raises out of `bot._async_main` and the process exits. In Docker this surfaces as a container that won't start (restart policy / healthcheck takes over) instead of a bot silently idling offline. Don't add startup retries.
+- **Runtime errors are logged, not raised.** Once running, PTB retries polling itself; `_on_polling_error` (passed as `start_polling(error_callback=...)`) logs one `WARNING` line per failure instead of PTB's full traceback. `_on_handler_error` (`app.add_error_handler`) logs `NetworkError` from handlers (e.g. replying while offline) as a one-line `WARNING`; any other handler error is logged at `ERROR` with traceback.
+
 ## Telegram specifics
 
 - Library: `python-telegram-bot >= 21`.

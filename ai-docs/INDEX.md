@@ -12,7 +12,7 @@ AI-only architecture docs. Dense, indexed, cross-referenced. No human-friendly p
 | `tools.md` | Adding/modifying tools, slash-command wiring, schema gen. |
 | `providers.md` | Adding/modifying provider, canonical message model, per-provider `_to_wire`. |
 | `memory.md` | Editing `memory.py`, locking, parse/render, migration. |
-| `frontends.md` | Telegram/Discord delta, DB-backed sessions (`Session.load`/`reset`), response gating. |
+| `frontends.md` | Telegram/Discord delta, DB-backed sessions (`Session.load`/`reset`), response gating, network-error policy (fail fast at startup, warn at runtime). |
 | `heartbeat.md` | Scheduler, scope file format, channel routing, sentinel. |
 | `config.md` | Adding fields, env overrides, validation. |
 | `dataflow.md` | Sequence diagrams: user turn, escalation turn, heartbeat tick, memory write. |
