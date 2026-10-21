@@ -60,19 +60,25 @@ A pipeline is readable top to bottom:
 
 ```python
 async def run(ctx: PipelineContext) -> Outcome:
-    heads = await fetch_unread_heads(ctx)            # mail-specific: ids + mailboxIds only, uncapped
-    heads = drop_labelled(heads, ctx.config)         # mail-specific
+    heads = await fetch_unread_heads(
+        ctx
+    )  # mail-specific: ids + mailboxIds only, uncapped
+    heads = drop_labelled(heads, ctx.config)  # mail-specific
     heads = ctx.ledger.drop_reported("mail", heads)  # shared
     if not heads:
-        return Outcome.SUPPRESSED                    # zero tokens
-    heads = heads[:MAX_BATCH]                        # cap AFTER filtering, oldest first
-    emails = await fetch_bodies(ctx, heads)          # mail-specific: full properties for the residue only
-    emails = attach_handler_hints(emails)            # mail-specific (hint field is shared)
-    reply = await ctx.ask_model(system=MAIL_SYSTEM, items=emails, tools=MAIL_TOOLS)  # shared
+        return Outcome.SUPPRESSED  # zero tokens
+    heads = heads[:MAX_BATCH]  # cap AFTER filtering, oldest first
+    emails = await fetch_bodies(
+        ctx, heads
+    )  # mail-specific: full properties for the residue only
+    emails = attach_handler_hints(emails)  # mail-specific (hint field is shared)
+    reply = await ctx.ask_model(
+        system=MAIL_SYSTEM, items=emails, tools=MAIL_TOOLS
+    )  # shared
     if reply.is_ok_sentinel:
         ctx.ledger.mark("mail", emails, outcome="dismissed")
         return Outcome.DISMISSED
-    await ctx.deliver(reply.text)                    # shared; raises on failure
+    await ctx.deliver(reply.text)  # shared; raises on failure
     ctx.ledger.mark("mail", emails, outcome="delivered")
     return Outcome.DELIVERED
 ```
