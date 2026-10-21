@@ -94,6 +94,23 @@ class McpServer(BaseModel):
         return self
 
 
+class PipelineAction(BaseModel):
+    """One scheduled watcher pipeline from ``heartbeat_pipelines``.
+
+    Same schedule vocabulary as a model-prompt heartbeat action: exactly one
+    of ``every`` (seconds or ``5m``-style) or ``schedule`` (``days`` / ``time``
+    / ``timezone``). ``channel`` defaults to ``heartbeat_default_channel``.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    pipeline: str
+    every: int | str | None = None
+    schedule: dict[str, Any] | None = None
+    channel: str | None = None
+    id: str | None = None
+
+
 class Config(BaseModel):
     model_config = ConfigDict(frozen=True, extra="ignore")
 
@@ -136,6 +153,12 @@ class Config(BaseModel):
     session_idle_reset_seconds: int = 3600
     session_max_messages: int = 40
     mcp_servers: tuple[McpServer, ...] = ()
+    # Watcher pipelines (ai-docs/mail-pipeline-plan.md): Fastmail labels whose
+    # mail the code-first mail check drops before the model sees anything, the
+    # cap on mails per model call, and the scheduled pipeline actions.
+    mail_ignore_labels: tuple[str, ...] = ()
+    mail_pipeline_max_batch: int = 50
+    heartbeat_pipelines: tuple[PipelineAction, ...] = ()
 
     @property
     def memory_dir(self) -> Path:
@@ -145,6 +168,24 @@ class Config(BaseModel):
     @classmethod
     def _expand_vault_path(cls, v: Any) -> Path:
         return Path(str(v)).expanduser()
+
+    @field_validator("mail_ignore_labels", mode="before")
+    @classmethod
+    def _coerce_ignore_labels(cls, v: Any) -> tuple[str, ...]:
+        if v is None:
+            return ()
+        if isinstance(v, str):
+            return (v,)
+        return tuple(str(x) for x in v)
+
+    @field_validator("heartbeat_pipelines", mode="before")
+    @classmethod
+    def _coerce_pipelines(cls, v: Any) -> tuple[Any, ...]:
+        if v is None:
+            return ()
+        if isinstance(v, dict):
+            return (v,)
+        return tuple(v)
 
     @field_validator("discord_chat_channels", mode="before")
     @classmethod

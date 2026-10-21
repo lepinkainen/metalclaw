@@ -733,6 +733,32 @@ def format_status() -> str:
             plural = "s" if st.failure_count != 1 else ""
             suffix = f" ({st.failure_count} failure{plural}, backing off)"
         lines.append(f"  • {a.id} [{a.kind}] next: {when}{suffix} | {a.prompt[:50]}")
+    try:
+        pipeline_actions = heartbeat.config_pipeline_actions()
+        latest_runs = {r[1]: r for r in history.pipeline_runs_latest()}
+    except Exception as e:
+        log.exception("/status: pipeline read failed")
+        lines.append(f"pipelines: read failed: {e}")
+        pipeline_actions, latest_runs = [], {}
+    if pipeline_actions:
+        lines.append(f"pipelines: {len(pipeline_actions)} configured")
+        for a in pipeline_actions:
+            st = state.get(a.id)
+            nxt = heartbeat.next_due(a, st.last_run if st else None, now)
+            retry = st.retry_at() if st else None
+            if nxt is not None and retry is not None and retry > nxt:
+                nxt = retry
+            when = (
+                "never" if nxt is None else nxt.astimezone().strftime("%Y-%m-%d %H:%M")
+            )
+            run = latest_runs.get(a.pipeline or "")
+            last = "no runs yet"
+            if run is not None:
+                _, _, _, started, _, outcome, error, _ = run
+                last = f"last: {outcome} {started[:16]}"
+                if error:
+                    last += f" ({error[:60]})"
+            lines.append(f"  • {a.id} [{a.kind}] next: {when} | {last}")
     servers = mcp_client.status()
     if servers:
         lines.append(f"mcp: {len(servers)} configured")

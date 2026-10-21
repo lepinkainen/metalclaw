@@ -112,6 +112,24 @@ heartbeat_interval_seconds: 1800
 # (interval, 2x, 4x, ...) up to this cap. Clears on the next success.
 # heartbeat_failure_backoff_max_seconds: 3600
 
+# Watcher pipelines (ai-docs/mail-pipeline-plan.md): code-driven checks that
+# poll an API cheaply, filter deterministically and call the model only when
+# something survives. Scheduled like heartbeat actions (`every` seconds or
+# "5m"-style, or `schedule: {days, time, timezone}`); `channel` defaults to
+# heartbeat_default_channel. State and traces live in history.db; config is
+# the source of truth (they are not written to heartbeat.yaml).
+# heartbeat_pipelines:
+#   - pipeline: mail
+#     every: 5m
+#     channel: telegram-123456789
+# Fastmail labels (name or Parent/Child path, case-insensitive) whose unread
+# mail the mail pipeline drops before the model sees anything. Labels the bot
+# applies itself via add_email_label feed the same filter on the next run.
+# mail_ignore_labels: [Newsletters, Receipts, bot/Ads]
+# Cap on mails handed to the model per run (applied after filtering, oldest
+# first; the rest roll to the next run).
+# mail_pipeline_max_batch: 50
+
 # Allow `/add-tool` to spawn `claude -p` and mutate the bot's own source.
 # Default true. Set to false on deployments where Telegram or Discord might
 # be reachable by anyone other than you — `/add-tool` registers arbitrary new

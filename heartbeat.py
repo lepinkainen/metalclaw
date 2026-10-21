@@ -99,6 +99,9 @@ class HeartbeatAction:
     at: str | None = None
     schedule: CronSchedule | None = None
     every: int | None = None
+    # Watcher pipeline name (``pipelines.REGISTRY``) instead of a model prompt.
+    # ``kind`` stays the schedule type; ``prompt`` is empty for these.
+    pipeline: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         out: dict[str, Any] = {
@@ -109,6 +112,8 @@ class HeartbeatAction:
             "created_at": self.created_at,
             "created_from": self.created_from,
         }
+        if self.pipeline:
+            out["pipeline"] = self.pipeline
         if self.kind == ActionKind.AT:
             out["at"] = self.at
         elif self.kind == ActionKind.CRON:
@@ -251,6 +256,7 @@ def _action_from_dict(raw: dict[str, Any]) -> HeartbeatAction:
         at=str(raw["at"]) if kind == ActionKind.AT else None,
         schedule=schedule,
         every=int(raw["every"]) if kind == ActionKind.EVERY else None,
+        pipeline=str(raw["pipeline"]) if raw.get("pipeline") else None,
     )
 
 
@@ -498,6 +504,8 @@ def _meta_for(action: HeartbeatAction, **extra: Any) -> dict[str, Any]:
         "channel": action.channel,
         "prompt": action.prompt[:120],
     }
+    if action.pipeline:
+        meta["pipeline"] = action.pipeline
     if action.kind == ActionKind.AT:
         meta["at"] = action.at
     elif action.kind == ActionKind.EVERY:
@@ -733,6 +741,22 @@ def next_due(
 # --- Tick logic ---
 
 
+def strip_sentinel(reply: str) -> tuple[str, bool]:
+    """``(text, acked)``: ``acked`` when ``HEARTBEAT_OK`` appears. Short text
+    around the sentinel (a "nothing to report" sentence) is dropped; a longer
+    remainder is a real alert that happens to carry a stray sentinel."""
+    clean = reply.strip()
+    acked = SENTINEL in clean
+    if acked:
+        rest = clean.replace(SENTINEL, "").strip()
+        if len(rest) <= _ACK_MAX_CHARS:
+            if rest:
+                log.info("heartbeat: ack suppressed, dropped text: %r", rest)
+            rest = ""
+        clean = rest
+    return clean, acked
+
+
 def _build_action_session(
     action: HeartbeatAction, now: datetime, build_system_prompt
 ) -> chat_loop.Session:
@@ -771,6 +795,120 @@ async def _run_action(
     session = _build_action_session(action, now, build_system_prompt)
     loop = asyncio.get_running_loop()
     return await loop.run_in_executor(None, lambda: chat_fn(session))
+
+
+def config_pipeline_actions() -> list[HeartbeatAction]:
+    """Pipeline actions declared under ``heartbeat_pipelines`` in config.yaml.
+
+    They are not written to heartbeat.yaml (config is their source of truth);
+    their state rows use the id ``pipeline-<name>`` unless ``id`` is set.
+    """
+    out: list[HeartbeatAction] = []
+    for spec in get_config().heartbeat_pipelines:
+        try:
+            if spec.every is not None:
+                kind, every, schedule = (
+                    ActionKind.EVERY,
+                    parse_interval(spec.every),
+                    None,
+                )
+            elif spec.schedule:
+                sd = spec.schedule
+                kind, every = ActionKind.CRON, None
+                schedule = CronSchedule(
+                    days=normalise_weekdays(sd.get("days") or []),
+                    time=validate_time_string(str(sd.get("time", ""))),
+                    timezone=validate_timezone(str(sd.get("timezone", ""))),
+                )
+            else:
+                raise ValueError("needs 'every' or 'schedule'")
+        except ValueError as e:
+            log.warning("heartbeat_pipelines: skipping %r: %s", spec.pipeline, e)
+            continue
+        out.append(
+            HeartbeatAction(
+                id=spec.id or f"pipeline-{spec.pipeline}",
+                kind=kind,
+                prompt="",
+                channel=spec.channel or "",
+                created_at="",
+                created_from="config",
+                schedule=schedule,
+                every=every,
+                pipeline=spec.pipeline,
+            )
+        )
+    return out
+
+
+async def _run_pipeline_action(action: HeartbeatAction, now: datetime) -> str:
+    """Run ``action.pipeline`` and return its outcome. Delivery happens inside
+    the pipeline; the trace row is written whatever happens. Raises on failure
+    so the caller applies the usual ``mark_failure`` backoff."""
+    import pipelines
+
+    assert action.pipeline is not None
+    fn = pipelines.REGISTRY.get(action.pipeline)
+    if fn is None:
+        raise ValueError(f"unknown pipeline {action.pipeline!r}")
+    target_scope, channel = _resolve_channel(action.channel)
+
+    async def _deliver(text: str) -> None:
+        if channel is None:
+            raise RuntimeError(f"no channel resolves for {target_scope!r}")
+        await channel.notify(target_scope or "", text)
+        log.info(
+            "heartbeat pipeline %s: notified %s (%d chars)",
+            action.id,
+            target_scope,
+            len(text),
+        )
+
+    trace = pipelines.Trace()
+    ctx = pipelines.PipelineContext(
+        config=get_config(),
+        now=now,
+        channel=target_scope,
+        trace=trace,
+        ledger=pipelines.Ledger(),
+        ask_model=pipelines.context.default_ask_model(format_now(now)),
+        deliver=_deliver,
+    )
+    run_id = secrets.token_hex(8)
+    started = datetime.now(UTC)
+    outcome: str = "failed"
+    error: str | None = None
+    try:
+        outcome = str(await fn(ctx))
+        return outcome
+    except Exception as e:
+        error = f"{type(e).__name__}: {e}"[:500]
+        raise
+    finally:
+        try:
+            await asyncio.to_thread(
+                history_db.pipeline_run_record,
+                run_id,
+                action.pipeline,
+                action.id,
+                started.isoformat(),
+                datetime.now(UTC).isoformat(),
+                outcome,
+                error,
+                trace.as_rows(),
+            )
+        except Exception:
+            log.exception("heartbeat pipeline %s: trace write failed", action.id)
+        log.info(
+            "heartbeat pipeline %s run=%s outcome=%s steps=%s",
+            action.id,
+            run_id,
+            outcome,
+            "; ".join(
+                f"{r['name']} {r['ms']}ms" + (f" {r['note']}" if r.get("note") else "")
+                for r in trace.as_rows()
+            ),
+        )
 
 
 # Single-flight guard: the scheduler loop and ``/heartbeat run`` both call
@@ -837,9 +975,15 @@ async def _run_tick_locked(*, now: datetime | None = None) -> dict[str, str]:
     # thread so a lock held by another process cannot stall the frontends.
     state = await asyncio.to_thread(load_state)
     snapshot = await asyncio.to_thread(load_ledger)
+    pipeline_actions = config_pipeline_actions()
+    all_actions = list(snapshot.actions) + pipeline_actions
     replies: dict[str, str] = {}
     n_due = n_ran = n_suppressed = n_notified = n_failed = n_backoff = 0
-    log.info("heartbeat tick start: %d active action(s)", len(snapshot.actions))
+    log.info(
+        "heartbeat tick start: %d active action(s), %d pipeline(s)",
+        len(snapshot.actions),
+        len(pipeline_actions),
+    )
 
     async def _fail(action: HeartbeatAction, why: str, **extra: Any) -> None:
         nonlocal n_failed
@@ -853,7 +997,7 @@ async def _run_tick_locked(*, now: datetime | None = None) -> dict[str, str]:
             backoff_seconds(count),
         )
 
-    for action in list(snapshot.actions):
+    for action in all_actions:
         st = state.get(action.id)
         last_run_iso = st.last_run if st else None
         try:
@@ -892,6 +1036,32 @@ async def _run_tick_locked(*, now: datetime | None = None) -> dict[str, str]:
         )
         action_t0 = time.monotonic()
 
+        if action.pipeline:
+            try:
+                outcome = await _run_pipeline_action(action, now)
+            except Exception as e:
+                log.exception("heartbeat pipeline %s failed", action.id)
+                await _fail(
+                    action,
+                    f"pipeline failed: {e}",
+                    run_seconds=round(time.monotonic() - action_t0, 2),
+                )
+                continue
+            n_ran += 1
+            if outcome == "delivered":
+                n_notified += 1
+            else:
+                n_suppressed += 1
+            replies[action.id] = outcome if outcome == "delivered" else ""
+            await asyncio.to_thread(
+                mark_success,
+                action,
+                now,
+                last_outcome=outcome,
+                run_seconds=round(time.monotonic() - action_t0, 2),
+            )
+            continue
+
         try:
             reply = await _run_action(
                 action, now, chat_loop.chat, chat_loop.build_system_prompt
@@ -913,8 +1083,7 @@ async def _run_tick_locked(*, now: datetime | None = None) -> dict[str, str]:
         )
         log.debug("heartbeat action %s reply: %.500s", action.id, reply)
 
-        clean = reply.strip()
-        acked = SENTINEL in clean
+        clean, acked = strip_sentinel(reply)
         if not acked and not clean:
             # Empty reply with no sentinel: the model produced nothing (common
             # for small local models after a tool round). Treat as a failed
@@ -925,16 +1094,6 @@ async def _run_tick_locked(*, now: datetime | None = None) -> dict[str, str]:
                 run_seconds=round(time.monotonic() - action_t0, 2),
             )
             continue
-        if acked:
-            clean = clean.replace(SENTINEL, "").strip()
-            if len(clean) <= _ACK_MAX_CHARS:
-                if clean:
-                    log.info(
-                        "heartbeat action %s: ack suppressed, dropped text: %r",
-                        action.id,
-                        clean,
-                    )
-                clean = ""
         if not clean:
             n_suppressed += 1
             log.info("heartbeat action %s: HEARTBEAT_OK (nothing to report)", action.id)
@@ -998,12 +1157,13 @@ async def _run_tick_locked(*, now: datetime | None = None) -> dict[str, str]:
         ledger_now = await asyncio.to_thread(load_ledger)
         keep = {a.id for a in ledger_now.actions}
         keep.update(str(c.get("id", "")) for c in ledger_now.completed)
+        keep.update(a.id for a in pipeline_actions)
         await asyncio.to_thread(prune_state, keep)
     except Exception:
         log.exception("heartbeat state prune failed")
     log.info(
         "heartbeat tick end: total=%d due=%d ran=%d suppressed=%d notified=%d failed=%d backoff=%d duration=%.2fs",
-        len(snapshot.actions),
+        len(all_actions),
         n_due,
         n_ran,
         n_suppressed,
@@ -1051,7 +1211,8 @@ def summary(max_chars: int = 400) -> str:
             tail = f"every {a.every}s"
         else:
             tail = ""
-        parts.append(f"{a.id} [{a.kind}] → {a.channel} | {tail} | {a.prompt[:80]}")
+        what = f"pipeline:{a.pipeline}" if a.pipeline else a.prompt[:80]
+        parts.append(f"{a.id} [{a.kind}] → {a.channel} | {tail} | {what}")
     text = "\n".join(parts)
     if len(text) > max_chars:
         hint = " (call list_heartbeat_actions for full list)"

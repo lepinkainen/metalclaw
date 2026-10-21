@@ -354,15 +354,22 @@ def _chat_with_provider(
     *,
     on_tool_call: Callable[[str, dict, str], None] | None = None,
     exclude_tools: frozenset[str] | set[str] = frozenset(),
+    only_tools: frozenset[str] | set[str] | None = None,
 ) -> str:
     """Run the tool-call loop against `provider`.
 
     Works on a copy of ``session`` and commits it (plus any mid-loop
     system-prompt rebuild) back to ``session`` via ``Session.commit`` only on
     a normal return, so a provider exception leaves the session (and the
-    turns table) exactly as it was.
+    turns table) exactly as it was. ``only_tools`` narrows the schema list to
+    exactly those names (watcher pipelines use it); ``exclude_tools`` then
+    still applies.
     """
-    tool_schemas = [t.schema for name, t in TOOLS.items() if name not in exclude_tools]
+    tool_schemas = [
+        t.schema
+        for name, t in TOOLS.items()
+        if name not in exclude_tools and (only_tools is None or name in only_tools)
+    ]
     work = session.snapshot()
     token = _active_session.set(work.snapshot())
     pname = getattr(provider, "name", type(provider).__name__)
@@ -524,6 +531,8 @@ def _chat_with_provider(
 def chat(
     session: Session,
     on_tool_call: Callable[[str, dict, str], None] | None = None,
+    *,
+    only_tools: frozenset[str] | set[str] | None = None,
 ) -> str:
     """Run one turn via the configured provider, handle tool calls, return final text.
 
@@ -532,7 +541,9 @@ def chat(
     """
     cfg = get_config()
     provider = get_provider(cfg.provider)
-    return _chat_with_provider(provider, session, on_tool_call=on_tool_call)
+    return _chat_with_provider(
+        provider, session, on_tool_call=on_tool_call, only_tools=only_tools
+    )
 
 
 def chat_via_escalation(
