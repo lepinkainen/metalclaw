@@ -1,11 +1,13 @@
 import logging
 import sqlite3
 import time
+from collections.abc import Sequence
 from datetime import UTC, datetime
 from typing import Any
 
 from pydantic import BaseModel, Field
 
+import history
 from config import get_config, xdg_data_dir
 from registry import tool
 from wilma import is_notification_subject
@@ -200,24 +202,210 @@ def _fetch_emails(
         time.monotonic() - t0,
     )
 
-    by_id = mbs["by_id"]
-    emails = []
-    for e in emails_raw:
-        folder_ids = list((e.get("mailboxIds") or {}).keys())
-        folders = [by_id[fid]["name"] for fid in folder_ids if fid in by_id]
-        emails.append(
+    return [_summarise_email(e, mbs["by_id"]) for e in emails_raw]
+
+
+_SUMMARY_PROPERTIES = [
+    "id",
+    "subject",
+    "from",
+    "to",
+    "receivedAt",
+    "keywords",
+    "preview",
+    "mailboxIds",
+]
+
+
+def _summarise_email(e: dict[str, Any], by_id: dict[str, Any]) -> dict[str, Any]:
+    folder_ids = list((e.get("mailboxIds") or {}).keys())
+    folders = [by_id[fid]["name"] for fid in folder_ids if fid in by_id]
+    return {
+        "id": e.get("id", ""),
+        "subject": e.get("subject", ""),
+        "from": _fmt_addrs(e.get("from")),
+        "to": _fmt_addrs(e.get("to")),
+        "received_at": e.get("receivedAt", ""),
+        "unread": "$seen" not in (e.get("keywords") or {}),
+        "flagged": "$flagged" in (e.get("keywords") or {}),
+        "preview": e.get("preview", ""),
+        "folders": folders,
+    }
+
+
+def _jmap_post(method_calls: list[Any]) -> dict[str, Any]:
+    """POST one JMAP request; returns ``{call_id: result}`` and raises on a
+    method-level error."""
+    session = _fm_session()
+    resp = HTTP.post(
+        session["api_url"],
+        headers={"Authorization": f"Bearer {session['token']}"},
+        json={
+            "using": ["urn:ietf:params:jmap:core", "urn:ietf:params:jmap:mail"],
+            "methodCalls": method_calls,
+        },
+    )
+    resp.raise_for_status()
+    out: dict[str, Any] = {}
+    for name, result, call_id in resp.json()["methodResponses"]:
+        if name == "error":
+            raise ValueError(
+                f"Fastmail rejected {call_id}: {result.get('type')} "
+                f"{result.get('description', '')}".strip()
+            )
+        out[call_id] = result
+    return out
+
+
+def _skip_mailbox_ids(mbs: dict[str, Any]) -> list[str]:
+    return [
+        mbs["by_role"][r]["id"]
+        for r in ("trash", "junk", "drafts", "sent")
+        if r in mbs["by_role"]
+    ]
+
+
+# --- Pipeline helpers (code-first mail check; see ai-docs/mail-pipeline-plan.md) ---
+
+_HEADS_PAGE = 500
+
+
+def fetch_unread_heads() -> list[dict[str, Any]]:
+    """Every unread mail outside trash/junk/drafts/sent, **oldest first**, as
+    ``{id, received_at, mailbox_ids}`` only. Uncapped (paged by
+    ``_HEADS_PAGE``) so filtered-away mail can never shadow newer mail; the
+    label and ledger filters need nothing more than this."""
+    session = _fm_session()
+    mbs = _fm_mailboxes()
+    filter_obj: dict[str, Any] = {"notKeyword": "$seen"}
+    skip = _skip_mailbox_ids(mbs)
+    if skip:
+        filter_obj = {
+            "operator": "AND",
+            "conditions": [{"inMailboxOtherThan": skip}, filter_obj],
+        }
+    heads: list[dict[str, Any]] = []
+    position = 0
+    while True:
+        t0 = time.monotonic()
+        res = _jmap_post(
+            [
+                [
+                    "Email/query",
+                    {
+                        "accountId": session["account_id"],
+                        "filter": filter_obj,
+                        "sort": [{"property": "receivedAt", "isAscending": True}],
+                        "position": position,
+                        "limit": _HEADS_PAGE,
+                    },
+                    "q",
+                ],
+                [
+                    "Email/get",
+                    {
+                        "accountId": session["account_id"],
+                        "#ids": {
+                            "resultOf": "q",
+                            "name": "Email/query",
+                            "path": "/ids",
+                        },
+                        "properties": ["id", "receivedAt", "mailboxIds"],
+                    },
+                    "g",
+                ],
+            ]
+        )
+        page = res["g"]["list"]
+        log.info(
+            "jmap: unread heads page position=%d returned=%d latency=%.2fs",
+            position,
+            len(page),
+            time.monotonic() - t0,
+        )
+        heads.extend(
             {
                 "id": e.get("id", ""),
-                "subject": e.get("subject", ""),
-                "from": _fmt_addrs(e.get("from")),
-                "to": _fmt_addrs(e.get("to")),
                 "received_at": e.get("receivedAt", ""),
-                "unread": "$seen" not in (e.get("keywords") or {}),
-                "flagged": "$flagged" in (e.get("keywords") or {}),
-                "preview": e.get("preview", ""),
-                "folders": folders,
+                "mailbox_ids": list((e.get("mailboxIds") or {}).keys()),
             }
+            for e in page
         )
+        if len(page) < _HEADS_PAGE:
+            break
+        position += len(page)
+    return heads
+
+
+def drop_labelled(
+    heads: list[dict[str, Any]], label_names: Sequence[str]
+) -> tuple[list[dict[str, Any]], dict[str, int]]:
+    """Drop heads that sit in any mailbox named in ``label_names`` (case-
+    insensitive name or ``Parent/Child`` path). Returns ``(kept, dropped_by_label)``.
+    Unknown label names are logged once and ignored."""
+    if not label_names or not heads:
+        return list(heads), {}
+    mbs = _fm_mailboxes()
+    deny: dict[str, str] = {}  # mailbox id -> configured label name
+    for name in label_names:
+        key = name.strip().lower()
+        entry = mbs["by_path"].get(key) or mbs["by_name"].get(key)
+        if entry is None:
+            log.warning("mail_ignore_labels: label %r not found in Fastmail", name)
+            continue
+        deny[entry["id"]] = name
+    kept: list[dict[str, Any]] = []
+    dropped: dict[str, int] = {}
+    for h in heads:
+        hit = next((deny[m] for m in h.get("mailbox_ids", ()) if m in deny), None)
+        if hit is None:
+            kept.append(h)
+        else:
+            dropped[hit] = dropped.get(hit, 0) + 1
+            log.debug("mail pipeline: drop id=%s label=%r", h.get("id"), hit)
+    return kept, dropped
+
+
+def fetch_bodies(ids: Sequence[str]) -> list[dict[str, Any]]:
+    """Summary records (same shape as ``list_emails`` rows) for ``ids``, in the
+    given order."""
+    if not ids:
+        return []
+    session = _fm_session()
+    mbs = _fm_mailboxes()
+    t0 = time.monotonic()
+    res = _jmap_post(
+        [
+            [
+                "Email/get",
+                {
+                    "accountId": session["account_id"],
+                    "ids": list(ids),
+                    "properties": _SUMMARY_PROPERTIES,
+                },
+                "g",
+            ]
+        ]
+    )
+    log.info(
+        "jmap: Email/get bodies requested=%d returned=%d latency=%.2fs",
+        len(ids),
+        len(res["g"]["list"]),
+        time.monotonic() - t0,
+    )
+    by_raw = {e.get("id"): e for e in res["g"]["list"]}
+    return [_summarise_email(by_raw[i], mbs["by_id"]) for i in ids if i in by_raw]
+
+
+def attach_handler_hints(emails: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Tag mails that a dedicated tool can expand (``hint`` is the generic
+    per-handler field; other integrations reuse it)."""
+    wilma_on = bool(get_config().wilma_url)
+    for e in emails:
+        if wilma_on and _is_wilma_notification(e):
+            e["hint"] = (
+                "Wilma notification: call find_wilma_message(subject, sent_at) for the full message."
+            )
     return emails
 
 
@@ -466,14 +654,35 @@ def read_email(email_id: str) -> dict[str, Any]:
 
 _last_candidates: set[str] = set()
 
+LEDGER_SOURCE = "mail"
+_LEGACY_LEDGER = "mail_reported.sqlite3"
+_legacy_ledger_checked = False
 
-def _ledger() -> sqlite3.Connection:
-    db = sqlite3.connect(xdg_data_dir() / "mail_reported.sqlite3")
-    db.execute(
-        "CREATE TABLE IF NOT EXISTS reported_messages("
-        "message_id TEXT PRIMARY KEY, first_reported_at TEXT NOT NULL)"
-    )
-    return db
+
+def migrate_legacy_ledger() -> int:
+    """One-time import of the pre-``reported_items`` ``mail_reported.sqlite3``
+    into history.db (rows become ``delivered``); the file is renamed ``.bak``.
+    Idempotent and cheap after the first call."""
+    global _legacy_ledger_checked
+    if _legacy_ledger_checked:
+        return 0
+    _legacy_ledger_checked = True
+    path = xdg_data_dir() / _LEGACY_LEDGER
+    if not path.exists():
+        return 0
+    try:
+        with sqlite3.connect(path) as db:
+            rows = db.execute(
+                "SELECT message_id, first_reported_at FROM reported_messages"
+            ).fetchall()
+    except sqlite3.Error:
+        log.exception("mail ledger migration: cannot read %s", path)
+        return 0
+    for mid, ts in rows:
+        history.reported_mark(LEDGER_SOURCE, [mid], "delivered", ts=ts)
+    path.rename(path.with_suffix(path.suffix + ".bak"))
+    log.info("mail ledger migration: imported %d row(s) from %s", len(rows), path)
+    return len(rows)
 
 
 @tool(
@@ -510,8 +719,8 @@ def check_new_mail() -> dict[str, Any]:
             "conditions": [{"inMailboxOtherThan": skip_ids}, filter_obj],
         }
     emails = _fetch_emails(filter_obj, 50)
-    with _ledger() as db:
-        seen = {r[0] for r in db.execute("SELECT message_id FROM reported_messages")}
+    migrate_legacy_ledger()
+    seen = history.reported_ids(LEDGER_SOURCE, [e["id"] for e in emails])
     fetched = len(emails)
     emails = [e for e in emails if e["id"] not in seen]
     _last_candidates = {e["id"] for e in emails}
@@ -520,7 +729,7 @@ def check_new_mail() -> dict[str, Any]:
         fetched,
         fetched - len(emails),
         len(emails),
-        len(seen),
+        history.reported_count(LEDGER_SOURCE),
     )
     for e in emails:
         log.debug(
@@ -529,12 +738,7 @@ def check_new_mail() -> dict[str, Any]:
             e["from"],
             e["subject"],
         )
-        if _is_wilma_notification(e) and get_config().wilma_url:
-            # `hint` is the generic per-email field telling the model which tool fetches the real content; other integrations should reuse it.
-            e["hint"] = (
-                "Wilma notification: call find_wilma_message(subject, sent_at) for the full message."
-            )
-    return {"count": len(emails), "emails": emails}
+    return {"count": len(emails), "emails": attach_handler_hints(emails)}
 
 
 def _is_wilma_notification(email: dict[str, Any]) -> bool:
@@ -573,11 +777,8 @@ def mark_emails_reported(ids: list[str]) -> dict[str, Any]:
             "mark_emails_reported rejected ids (not in last check_new_mail): %s",
             rejected,
         )
-    with _ledger() as db:
-        db.executemany(
-            "INSERT OR IGNORE INTO reported_messages(message_id, first_reported_at) VALUES (?, ?)",
-            [(i, now) for i in recorded],
-        )
+    migrate_legacy_ledger()
+    history.reported_mark(LEDGER_SOURCE, recorded, "delivered", ts=now)
     return {"recorded": recorded, "rejected": rejected}
 
 

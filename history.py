@@ -72,6 +72,37 @@ def _init(path: Path) -> sqlite3.Connection:
             PRIMARY KEY (frontend, chat_id)
         )
     """)
+    # Shared "already handled" ledger for every watcher pipeline (mail, wilma,
+    # …): an item that reached the model is terminal whichever way the model
+    # answered. ``outcome`` is ``delivered`` / ``dismissed`` (per batch, not
+    # per item — see ai-docs/mail-pipeline-plan.md).
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS reported_items (
+            source            TEXT NOT NULL,
+            external_id       TEXT NOT NULL,
+            outcome           TEXT NOT NULL,
+            first_reported_at TEXT NOT NULL,
+            PRIMARY KEY (source, external_id)
+        )
+    """)
+    # One row per pipeline run; ``steps`` is a JSON list of
+    # ``{name, ms, note}`` written by the runner in a ``finally`` block.
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS pipeline_runs (
+            run_id      TEXT PRIMARY KEY,
+            pipeline    TEXT NOT NULL,
+            action_id   TEXT NOT NULL,
+            started_at  TEXT NOT NULL,
+            finished_at TEXT NOT NULL,
+            outcome     TEXT NOT NULL,
+            error       TEXT,
+            steps       TEXT NOT NULL DEFAULT '[]'
+        )
+    """)
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS pipeline_runs_pipeline_started"
+        " ON pipeline_runs (pipeline, started_at)"
+    )
     conn.commit()
     return conn
 
@@ -496,3 +527,119 @@ def known_chats_import(frontend: str, chat_ids: list[str], meta: dict) -> int:
         )
         db.commit()
         return len(chat_ids)
+
+
+# --- reported_items: shared per-source "already handled" ledger ---
+#
+# Keyed by (source, external_id). Two operations only, so every watcher
+# pipeline reuses the table without a pipeline-level abstraction.
+
+
+def reported_ids(source: str, ids: Sequence[str]) -> set[str]:
+    """Subset of ``ids`` already recorded for ``source``."""
+    if not ids:
+        return set()
+    with _LOCK:
+        db = _conn()
+        placeholders = ",".join("?" * len(ids))
+        rows = db.execute(
+            f"SELECT external_id FROM reported_items WHERE source = ?"
+            f" AND external_id IN ({placeholders})",
+            (source, *ids),
+        ).fetchall()
+    return {r[0] for r in rows}
+
+
+def reported_mark(
+    source: str, ids: Sequence[str], outcome: str, *, ts: str | None = None
+) -> int:
+    """Record ``ids`` as handled with ``outcome``; existing rows are kept
+    (first outcome wins). Returns the number of ids passed in."""
+    clean = list(dict.fromkeys(i for i in ids if i))
+    if not clean:
+        return 0
+    when = ts or _now()
+    with _LOCK:
+        db = _conn()
+        db.executemany(
+            "INSERT OR IGNORE INTO reported_items"
+            " (source, external_id, outcome, first_reported_at) VALUES (?, ?, ?, ?)",
+            [(source, i, outcome, when) for i in clean],
+        )
+        db.commit()
+    return len(clean)
+
+
+def reported_count(source: str) -> int:
+    with _LOCK:
+        row = (
+            _conn()
+            .execute("SELECT COUNT(*) FROM reported_items WHERE source = ?", (source,))
+            .fetchone()
+        )
+    return int(row[0])
+
+
+# --- pipeline_runs: execution trace per watcher-pipeline run ---
+
+PipelineRunRow = tuple[str, str, str, str, str, str, str | None, str]
+"""(run_id, pipeline, action_id, started_at, finished_at, outcome, error, steps_json)"""
+
+
+def pipeline_run_record(
+    run_id: str,
+    pipeline: str,
+    action_id: str,
+    started_at: str,
+    finished_at: str,
+    outcome: str,
+    error: str | None,
+    steps: list[dict],
+) -> None:
+    with _LOCK:
+        db = _conn()
+        db.execute(
+            "INSERT OR REPLACE INTO pipeline_runs"
+            " (run_id, pipeline, action_id, started_at, finished_at, outcome, error, steps)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                run_id,
+                pipeline,
+                action_id,
+                started_at,
+                finished_at,
+                outcome,
+                error,
+                json.dumps(steps, ensure_ascii=False),
+            ),
+        )
+        db.commit()
+
+
+def pipeline_runs_latest() -> list[PipelineRunRow]:
+    """The most recent run of each pipeline, ordered by pipeline name."""
+    with _LOCK:
+        return (
+            _conn()
+            .execute(
+                "SELECT run_id, pipeline, action_id, started_at, finished_at, outcome,"
+                " error, steps FROM pipeline_runs WHERE started_at IN"
+                " (SELECT MAX(started_at) FROM pipeline_runs GROUP BY pipeline)"
+                " ORDER BY pipeline"
+            )
+            .fetchall()
+        )
+
+
+def pipeline_runs_recent(pipeline: str, limit: int = 10) -> list[PipelineRunRow]:
+    with _LOCK:
+        return (
+            _conn()
+            .execute(
+                "SELECT run_id, pipeline, action_id, started_at, finished_at, outcome,"
+                " error, steps FROM pipeline_runs WHERE pipeline = ?"
+                " ORDER BY started_at DESC LIMIT ?",
+                (pipeline, limit),
+            )
+            .fetchall()
+        )
