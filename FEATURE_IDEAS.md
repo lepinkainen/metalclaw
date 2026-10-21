@@ -62,6 +62,32 @@ Added 2026-10-20
 - [x] Prompt caching for the litellm path. *Done: `litellm_prompt_caching` (default on) puts a cache breakpoint on the stable system-prompt part and on the last tool for Anthropic / Bedrock Claude models; the volatile tail (clock, memory, heartbeat summary) sits after `SYSTEM_CACHE_BOUNDARY`. Cache read/write tokens surface on `Usage` and the DEBUG log; `/usage` does not show them yet.*
 - [ ] Obsidian daily note read. Let the bot read today's and yesterday's daily note so the morning brief has real context, even before vault writes land.
 
+Added 2026-10-21
+
+Follow-through and household tasks
+
+- [ ] Waiting-for tracking. "I emailed the plumber. Remind me Friday if they haven't replied." Track unresolved items, check for a response, and close them when resolved rather than sending an unconditional reminder.
+- [ ] Alerts only when something changes. "Tell me when this failing workflow passes." Persist the previous result and notify on changes, with cooldowns and recovery notices to keep heartbeat checks quiet.
+- [ ] Reminder buttons. Add Done, Snooze 30 min, and Tomorrow buttons in Telegram and Discord. Let reminders remain open until acknowledged.
+- [ ] Shopping and errand lists. "Add coffee." "What do I need to buy?" Keep structured lists with check-off and duplicate detection, separate from free-form inbox capture.
+- [ ] Follow-up extraction from mail and Wilma. "What do I need to act on this week?" Extract deadlines, permission requests, things to bring, and payments into a proposed task list with links to the source messages.
+- [ ] Document attachments. Forward a school PDF and ask "What dates matter here?" Extract PDF and text attachments, complementing image input, and save useful details to Obsidian with their source attached.
+- [ ] Home Assistant integration. If Home Assistant is part of the setup, query household state and control devices: "Is the garage door open?" or "Turn off the office lights." Support heartbeat checks such as a door left open overnight.
+- [ ] Household maintenance log. "Changed the ventilation filters today." Record maintenance and calculate the next due date for filters, smoke alarms, car service, and warranties.
+- [ ] Trip watch. "Watch my train journey tomorrow." Combine a booked journey, departure reminders, and disruption checks into a temporary watch that expires afterward.
+- [ ] Weekly unfinished-business review. Review open reminders, waiting-for items, and captured tasks. Present a short list to finish, defer, or discard.
+- [ ] Memory review and correction. "What do you remember about my setup?" Show stored facts with their source and last confirmation date, and replace outdated facts without accumulating contradictions.
+- [ ] Named routines. "Run my Sunday review." Save a repeatable sequence of checks and its output format, runnable manually or on a schedule without rewriting the prompt.
+
+Bot interaction improvements
+
+- [ ] Cancel a running turn. `/cancel` stops a slow model or tool chain.
+- [ ] Continue from a notification. Replying "show me the second one" to a heartbeat digest should carry that digest into the conversation. Heartbeat runs currently execute separately from chat history.
+- [ ] Explain an alert. "Why did you notify me?" Show the triggering condition, source, and check time.
+- [ ] Preview scheduled actions. Run a proposed heartbeat once and show the result before enabling its schedule.
+
+First picks from these additions: reminder buttons, alerts on changes, and waiting-for tracking. They build on the existing scheduler and help the bot handle ongoing responsibilities. Shopping and errand lists would be a useful small standalone addition.
+
 Considered and rejected
 
 - Routing local Ollama through litellm (`ollama_chat/`). Would delete one 183-line httpx client but put a 1.3 s import and a translation layer on every local turn, and tie the hot path to litellm's Ollama adapter. Keep the dedicated provider; the canonical message model already gives provider interchangeability.
