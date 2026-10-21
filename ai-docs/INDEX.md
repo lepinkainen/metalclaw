@@ -20,6 +20,7 @@ AI-only architecture docs. Dense, indexed, cross-referenced. No human-friendly p
 | `gotchas.md` | Subtle traps: circular imports, session commit/persist ordering, tool registration order, turns-table growth. |
 | `testing.md` | pytest fixtures, conftest, common stubs, session-persistence tests. |
 | `mcp-plan.md` | Plan (phase 1 implemented — see Status): MCP client — external MCP server tools bridged into `registry.TOOLS`, config, lifecycle, sync→async dispatch, security. |
+| `mail-pipeline-plan.md` | Plan (design only): code-first mail pipeline — fetch all unread, filter by Fastmail labels in code, handler hints, model only on the residue, mark-reported after delivery. Mermaid chart. |
 
 ## Source map (line counts)
 
