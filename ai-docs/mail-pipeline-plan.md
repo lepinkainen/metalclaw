@@ -60,12 +60,14 @@ A pipeline is readable top to bottom:
 
 ```python
 async def run(ctx: PipelineContext) -> Outcome:
-    emails = await fetch_unread(ctx, limit=MAX_BATCH) # mail-specific, oldest first
-    emails = drop_labelled(emails, ctx.config)       # mail-specific
-    emails = ctx.ledger.drop_reported("mail", emails) # shared
-    emails = attach_handler_hints(emails)            # mail-specific (hint field is shared)
-    if not emails:
+    heads = await fetch_unread_heads(ctx)            # mail-specific: ids + mailboxIds only, uncapped
+    heads = drop_labelled(heads, ctx.config)         # mail-specific
+    heads = ctx.ledger.drop_reported("mail", heads)  # shared
+    if not heads:
         return Outcome.SUPPRESSED                    # zero tokens
+    heads = heads[:MAX_BATCH]                        # cap AFTER filtering, oldest first
+    emails = await fetch_bodies(ctx, heads)          # mail-specific: full properties for the residue only
+    emails = attach_handler_hints(emails)            # mail-specific (hint field is shared)
     reply = await ctx.ask_model(system=MAIL_SYSTEM, items=emails, tools=MAIL_TOOLS)  # shared
     if reply.is_ok_sentinel:
         ctx.ledger.mark("mail", emails, outcome="dismissed")
@@ -106,17 +108,18 @@ Burr actions are plain functions, so the step functions above port without rewri
 
 | Stage | Owner | Notes |
 |-------|-------|-------|
-| Fetch | code | All unread, every mailbox except trash/junk/drafts/sent, with `mailboxIds`. One JMAP HTTP request chaining `Email/query` → `Email/get` via `#ids`/`resultOf`, exactly as `_fetch_emails` does today (`Email/query` alone returns only ids). **Capped** at `MAX_BATCH` (50, the existing `list_emails` ceiling), sorted oldest first; a backlog beyond the cap rolls to the next tick rather than inflating one model context. |
+| Fetch heads | code | All unread, every mailbox except trash/junk/drafts/sent, **uncapped**, oldest first. One JMAP HTTP request chaining `Email/query` → `Email/get` via `#ids`/`resultOf` as `_fetch_emails` does today, but `Email/get` asks only for `id`, `mailboxIds`, `receivedAt` (a few bytes per mail), so hundreds of unread mails are cheap. Page `Email/query` with `position` if the server's query limit is hit. The label filter and ledger need nothing more than this. Later optimisation: push the deny-list server-side with `inMailboxOtherThan` in the query filter. |
 | Label filter | code | Deny-list of label names from config (resolved to ids via `_fm_lookup_mailbox`). Set intersection, no second request. Log dropped ids + rule at DEBUG; counts into `heartbeat_state.meta`. |
 | Ledger | code | Shared `reported_items` table in `history.db` keyed by `(source, external_id)`; see "Ledger". |
 | Handlers | code | Match sender/subject → attach `hint` naming the tool that fetches full content. Wilma exists; shipping notifications next. |
 | Short-circuit | code | Empty residue → `Outcome.SUPPRESSED`, zero tokens. |
+| Cap + fetch bodies | code | `MAX_BATCH` (50) limits what reaches the **model**, not what is fetched. Applied only after the label and ledger filters, oldest first, so a backlog of filtered-away or already-reported mail can never shadow newer mail (capping before the filters would refetch the same 50 ignored mails every tick and starve everything behind them). A second `Email/get` fetches full properties for the capped residue only. The residue is marked after the model stage, so the next tick advances past it. |
 | Model | LLM | Scope-less `Session`, narrow system prompt, narrow tool set, one `chat_loop.chat()` call. `HEARTBEAT_OK` or a summary. The model no longer calls `mark_emails_reported` and the tool is not in its set. |
 | Mark dismissed | code | `HEARTBEAT_OK` → every id that reached the model is marked `dismissed`. **Required**: the fetch is unread-only, so without this any unread-but-unremarkable mail would be re-sent to the model every tick, defeating the zero-token goal. (The current tool-driven check has the same gap: its prompt only asks to mark "ids actually included".) |
 | Deliver | code | Existing channel routing. **At-least-once**: a send can succeed server-side and still raise client-side (timeout before the ack), in which case the ids stay unreported and the retry re-delivers. Occasional duplicates are accepted; exactly-once is explicitly out of scope. |
 | Mark delivered | code | Only after a successful send. Failed send → `mark_failure`, ids stay unreported, backoff as today. |
 
-`dismissed` vs `delivered` is kept distinct so a later `/usage`-style view or a tool can tell "the model saw it and shrugged" from "you were told". Both are terminal for the filter.
+Acknowledgment is **per batch**, not per email. `delivered` means "this id was in a batch whose summary was delivered", not "this id was individually mentioned"; `dismissed` means "this id was in a batch the model answered with `HEARTBEAT_OK`". Both are terminal for the filter. The distinction is kept only so a later `/usage`-style view can tell "the model saw it and shrugged" from "you were told"; per-id tracking is deliberately out of scope (see Open points).
 
 ## Ledger
 
@@ -146,6 +149,13 @@ Invest in this immediately; it is the cheapest substitute for a workflow library
 | `steps` | JSON list of `{name, ms, note}` — e.g. `fetch 420ms 17 items`, `labels 0ms dropped 12 (Newsletters 9, Receipts 3)`, `model 6100ms`. |
 
 `ctx.trace.step(name)` is a context manager the pipeline wraps each call in; it only appends to an in-memory list. The **runner** (`_run_action`) persists the row in a `finally` block, so a pipeline that raises mid-step still leaves a `failed` row with the steps completed so far and the error. No tracing framework, no spans, no exporters: a table and a list. `/status` shows the last run per pipeline; `/heartbeat` output links outcome to run id.
+
+## Tests to write
+
+- **Starvation**: 200 unread heads where the oldest 150 are all labelled-away or already reported → the model receives the newest-surviving 50, not an empty batch.
+- **Restart between deliver and mark**: simulate `deliver` succeeding and the process dying before `ledger.mark`. On the next tick the same batch is delivered again (duplicate accepted per at-least-once) and then marked; no id is lost and no row is half-written.
+- **Quiet path marks**: `HEARTBEAT_OK` → every id in the batch is `dismissed` and absent from the next tick's residue.
+- **Failed deliver**: `deliver` raises → `mark_failure`, no ledger rows, `pipeline_runs` row has `outcome=failed` with the steps up to `deliver`.
 
 ## Open points
 
