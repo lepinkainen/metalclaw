@@ -34,7 +34,13 @@ from .memory_tools import (
 from .search import read_note, search_vault
 from .trains import train_departures
 from .weather import weather
-from .wilma import find_wilma_message, list_wilma_messages, read_wilma_message
+from .wilma import (
+    find_wilma_message,
+    list_wilma_messages,
+    list_wilma_news,
+    read_wilma_message,
+    read_wilma_news,
+)
 
 __all__ = [
     "add_email_label",
@@ -52,11 +58,13 @@ __all__ = [
     "list_emails",
     "list_heartbeat_actions",
     "list_wilma_messages",
+    "list_wilma_news",
     "mark_emails_reported",
     "read_email",
     "read_manual",
     "read_note",
     "read_wilma_message",
+    "read_wilma_news",
     "remove_email_label",
     "roll_die",
     "search_conversation_history",

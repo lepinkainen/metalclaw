@@ -2,7 +2,8 @@
 
 Wilma has no public API; this speaks the same session-cookie + JSON endpoints
 the web UI uses. Protocol mirrors github.com/aikarjal/wilmai (MIT) — check its
-changelog first when something here breaks.
+changelog first when something here breaks. The bulletin (news) parsers are a
+Python port of its ``parsers/news.ts``; see THIRD_PARTY_NOTICES.md.
 
 Wilma allows one live session per account: every login cancels the previous
 one (including a browser session), so the client logs in lazily, reuses the
@@ -35,6 +36,18 @@ _BODY_CHAR_LIMIT = 20_000
 _LOGIN_FAILED_RE = re.compile(r"loginfailed", re.IGNORECASE)
 _MFA_FORMKEY_RE = re.compile(r'id="mfa-formkey"\s+value="([^"]+)"')
 _STUDENT_SLUG_RE = re.compile(r"/?!(\d+)")
+_PUBLISHED_PREFIX_RE = re.compile(
+    r"^\s*(julkaistu|publicerad|published)\s*:?\s*", re.IGNORECASE
+)
+_SHORT_DATE_RE = re.compile(r"^(\d{1,2})\.(\d{1,2})\.$")
+_NEWS_HREF_RE = re.compile(r"/news/(\d+)")
+# Side-panel headings on the bulletin list, in Finnish / Swedish / English.
+_NEWS_PINNED_RE = re.compile(
+    r"^(pysyvät|permanent|pinned|bestående|fasta|stående)", re.IGNORECASE
+)
+_NEWS_OLDER_RE = re.compile(
+    r"^(vanhat|vanhemmat|old|older|gamla|äldre|arkiv|archive)", re.IGNORECASE
+)
 _USER_AGENT = (
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
     "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0 Safari/537.36"
@@ -78,8 +91,20 @@ def parse_timestamp(value: Any) -> datetime | None:
     if isinstance(value, (int, float)):
         secs = value / 1000 if abs(value) >= 1e12 else value
         return datetime.fromtimestamp(secs, _TZ)
-    raw = str(value).strip().replace("klo", " ")
+    raw = _PUBLISHED_PREFIX_RE.sub("", str(value).strip()).replace("klo", " ")
     raw = re.sub(r"\s+", " ", raw)
+    if m := _SHORT_DATE_RE.match(raw):
+        # "27.9." (bulletin dates omit this year's year): this year, unless that
+        # would land more than six months ahead.
+        today = datetime.now(_TZ).date()
+        day, month = int(m.group(1)), int(m.group(2))
+        try:
+            dt = datetime(today.year, month, day, tzinfo=_TZ)
+            if (dt.date() - today).days > 180:
+                dt = datetime(today.year - 1, month, day, tzinfo=_TZ)
+        except ValueError:
+            return None
+        return dt
     for fmt in (
         "%Y-%m-%d %H:%M",
         "%Y-%m-%d %H:%M:%S",
@@ -241,6 +266,183 @@ def parse_message_html(html: str, message_id: int) -> dict[str, Any]:
         "recipients": [],
         "content": _html_to_markdown(str(body)),
         "replies": [],
+    }
+
+
+# --- bulletins (tiedotteet, Wilma's "news") ---
+
+
+def _news_id(href: Any) -> int | None:
+    m = _NEWS_HREF_RE.search(str(href or ""))
+    return int(m.group(1)) if m else None
+
+
+def parse_news_list(data: Any) -> list[dict[str, Any]]:
+    """``GET /news`` as JSON (newer Wilmas) → ``[{id, title, published, pinned, archived}]``."""
+    out = []
+    for item in data if isinstance(data, list) else []:
+        if not isinstance(item, dict):
+            continue
+        try:
+            nid = int(item.get("id") or item.get("Id") or 0)
+        except TypeError, ValueError:
+            continue
+        if nid <= 0:
+            continue
+        out.append(
+            {
+                "id": nid,
+                "title": _compact(item.get("Title") or item.get("title")),
+                "published": _iso(item.get("Published") or item.get("published")),
+                "pinned": False,
+                "archived": False,
+            }
+        )
+    return out
+
+
+def parse_news_list_html(html: str) -> list[dict[str, Any]]:
+    """``GET /news`` as HTML: dated bulletins under ``h2.no-border`` date headers, then the
+    side panels — pinned ("Pysyvät tiedotteet") and older ("Vanhat tiedotteet") — which only
+    carry titles."""
+    soup = BeautifulSoup(html, "html.parser")
+    out: list[dict[str, Any]] = []
+    by_id: dict[int, dict[str, Any]] = {}
+    for header in soup.select("h2.no-border"):
+        published = _iso(header.get_text(" ", strip=True))
+        sib = header.find_next_sibling()
+        while sib is not None:
+            if sib.name == "h2" and "no-border" in (sib.get("class") or []):
+                break
+            classes: list[str] = list(sib.get("class") or [])
+            if sib.name == "div" and ("well" in classes or "margin-bottom" in classes):
+                link = sib.find("a", href=_NEWS_HREF_RE)
+                nid = _news_id(link["href"]) if link else None
+                if nid and nid not in by_id:
+                    heading = sib.find(["h1", "h2", "h3", "h4"])
+                    title = (
+                        _compact(heading.get_text(" ")) if heading else ""
+                    ) or _compact(link.get_text(" ") if link else "")
+                    author = None
+                    if profile := sib.select_one("a.profile-link"):
+                        author = _compact(profile.get("title") or profile.get_text(" "))
+                    item = {
+                        "id": nid,
+                        "title": title or "Untitled",
+                        "published": published,
+                        "author": author or None,
+                        "pinned": sib.select_one(".vismaicon-locked") is not None,
+                        "archived": False,
+                    }
+                    by_id[nid] = item
+                    out.append(item)
+            sib = sib.find_next_sibling()
+    for heading in soup.select("div.panel-body > h2"):
+        label = heading.get_text(" ", strip=True)
+        pinned, archived = (
+            bool(_NEWS_PINNED_RE.match(label)),
+            bool(_NEWS_OLDER_RE.match(label)),
+        )
+        if not (pinned or archived):
+            continue
+        panel = heading.parent
+        if panel is None:
+            continue
+        for a in panel.find_all("a", href=_NEWS_HREF_RE):
+            nid = _news_id(a["href"])
+            if not nid:
+                continue
+            if nid in by_id:
+                if pinned:
+                    by_id[nid]["pinned"] = True
+                continue
+            item = {
+                "id": nid,
+                "title": _compact(a.get_text(" ")) or "Untitled",
+                "published": None,
+                "author": None,
+                "pinned": pinned,
+                "archived": archived,
+            }
+            by_id[nid] = item
+            out.append(item)
+    return out
+
+
+def _news_links(soup: BeautifulSoup | Any) -> list[dict[str, str]]:
+    links, seen = [], set()
+    for a in soup.find_all("a", href=True):
+        href = str(a["href"]).strip()
+        if not href or href.startswith("#") or href.lower().startswith("javascript:"):
+            continue
+        if href in seen:
+            continue
+        seen.add(href)
+        links.append({"label": _compact(a.get_text(" ")) or href, "url": href})
+    return links
+
+
+def parse_news_json(data: Any, news_id: int) -> dict[str, Any]:
+    """``GET /news/<id>`` as JSON → bulletin dict. Links in the body are listed separately
+    (bulletins often carry attachments as links)."""
+    content = (
+        data.get("content") or data.get("Content") if isinstance(data, dict) else None
+    )
+    html = content if isinstance(content, str) else ""
+    subtitle = data.get("subtitle") or data.get("Subtitle")
+    return {
+        "id": news_id,
+        "title": _compact(data.get("title") or data.get("Title")),
+        "subtitle": _compact(subtitle) or None,
+        "author": _compact(data.get("author") or data.get("Author")) or None,
+        "published": _iso(data.get("Published") or data.get("published")),
+        "content": _html_to_markdown(html),
+        "links": _news_links(BeautifulSoup(html, "html.parser")) if html else [],
+    }
+
+
+def parse_news_html(html: str, news_id: int) -> dict[str, Any]:
+    """``GET /news/<id>`` as HTML (the usual case)."""
+    soup = BeautifulSoup(html, "html.parser")
+    title = _compact(soup.title.get_text(" ")) if soup.title else ""
+    title = re.sub(r"\s*-\s*Wilma$", "", title)
+    if not title:
+        h = soup.select_one(
+            "#page-content-area h1, #main-content h1, h1, .panel-body h2"
+        )
+        title = _compact(h.get_text(" ")) if h else ""
+    sub = soup.select_one("p.sub-text, .subtitle")
+    # Wilma hides link-only bulletins behind an iframe and marks the container .hidden;
+    # the dedicated container is still the body, so prefer it regardless.
+    body = soup.select_one("#news-content") or soup.select_one(
+        ".news-content, .content, .ckeditor, article, .panel-body"
+    )
+    content, links = "", []
+    if body is not None:
+        for el in body.select("script, style"):
+            el.decompose()
+        links = _news_links(body)
+        content = _html_to_markdown(str(body))
+    published = author = None
+    for el in soup.find_all(["p", "span", "div"]):
+        if el.find(["p", "div"]):
+            continue
+        text = _compact(el.get_text(" "))
+        if _PUBLISHED_PREFIX_RE.match(text):
+            published = _iso(text)
+            # The author's profile link sits in the same row as "Julkaistu 27.9.".
+            row = el.parent
+            if row and (profile := row.select_one("a.profile-link")):
+                author = _compact(profile.get("title") or profile.get_text(" ")) or None
+            break
+    return {
+        "id": news_id,
+        "title": title,
+        "subtitle": _compact(sub.get_text(" ")) if sub else None,
+        "author": author,
+        "published": published,
+        "content": content,
+        "links": links,
     }
 
 
@@ -498,6 +700,30 @@ class WilmaClient:
             }
         return parse_message_html(resp.text, message_id)
 
+    def list_news(self, student: str | None) -> list[dict[str, Any]]:
+        """Bulletins (tiedotteet) visible to this student: dated ones newest first, then
+        pinned, then older (titles only)."""
+        resp = self.get("/news", student)
+        if "json" in resp.headers.get("content-type", ""):
+            try:
+                data = resp.json()
+            except ValueError:
+                data = None
+            if isinstance(data, list):
+                return parse_news_list(data)
+        return parse_news_list_html(resp.text)
+
+    def get_news(self, student: str | None, news_id: int) -> dict[str, Any]:
+        resp = self.get(f"/news/{news_id}", student)
+        if "json" in resp.headers.get("content-type", ""):
+            try:
+                data = resp.json()
+            except ValueError:
+                data = None
+            if isinstance(data, dict) and data:
+                return parse_news_json(data, news_id)
+        return parse_news_html(resp.text, news_id)
+
 
 _CLIENT: WilmaClient | None = None
 _CLIENT_LOCK = threading.Lock()
@@ -560,8 +786,19 @@ _NOTIFICATION_PREFIX_RE = re.compile(
 )
 
 
+# "Uusia tiedotteita" — Wilma's mail saying new bulletins were published (no titles).
+_BULLETIN_NOTIFICATION_RE = re.compile(
+    r"uusia tiedotteita|uusi tiedote|nya anslag|nytt anslag|new bulletins?|new news",
+    re.IGNORECASE,
+)
+
+
 def is_notification_subject(subject: str) -> bool:
     return bool(_NOTIFICATION_PREFIX_RE.match(subject))
+
+
+def is_bulletin_notification_subject(subject: str) -> bool:
+    return bool(_BULLETIN_NOTIFICATION_RE.search(subject or ""))
 
 
 def normalize_subject(subject: str) -> str:

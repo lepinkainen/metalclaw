@@ -17,7 +17,14 @@ log = logging.getLogger("metalclaw.pipelines.mail")
 
 SOURCE = mail.LEDGER_SOURCE
 TOOLS: frozenset[str] = frozenset(
-    {"read_email", "find_wilma_message", "add_email_label", "remove_email_label"}
+    {
+        "read_email",
+        "find_wilma_message",
+        "list_wilma_news",
+        "read_wilma_news",
+        "add_email_label",
+        "remove_email_label",
+    }
 )
 
 SYSTEM = (

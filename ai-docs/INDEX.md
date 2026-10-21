@@ -40,7 +40,7 @@ live_tool.py      385   /add-tool: spawn `claude -p`, focused gates, async appro
 telegram_format.py 146  CommonMark→Telegram HTML
 vault_search.py   230   ripgrep wrapper + read_note
 mcp_client.py     325   MCP client: loop thread, server owner tasks, TOOLS bridge, result wrap
-wilma.py          590   unofficial Wilma client: login/TOTP, students, messages, subject matching
+wilma.py          827   unofficial Wilma client: login/TOTP, students, messages, bulletins (news), subject matching
 messages.py       156   canonical frozen messages, validate_exchange, message_to_dict/from_dict, SYSTEM_CACHE_BOUNDARY
 providers/base.py  25   Provider Protocol (chat_once over Sequence[Message]); re-exports messages types
 providers/__init__ 44   get_provider() factory
@@ -59,7 +59,7 @@ tools/memory_tools 120  five memory mutator/reader tools
 tools/search.py    75   search_vault, read_note
 tools/trains.py   133   train_departures
 tools/weather.py  148
-tools/wilma.py    143   list_wilma_messages, read_wilma_message, find_wilma_message
+tools/wilma.py    247   list_wilma_messages, read_wilma_message, find_wilma_message, list_wilma_news, read_wilma_news
 frontends/common 1146   COMMANDS spec, parsers/formatters/runners, scope helpers, Debouncer, status/usage, tool status, /add-tool pump
 frontends/discord 417
 frontends/telegram 471

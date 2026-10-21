@@ -63,8 +63,31 @@ DETAIL = {
 }
 
 
+NEWS_LIST_HTML = """<div class="panel-body">
+<h2 class="no-border">19.10.</h2>
+<div class="margin-bottom well"><h3>Syysloma</h3><p class="sub-text">Loma alkaa</p>
+<span class="horizontal-link-container small"><a href="/!1001/news/301">Lue lisää</a>
+<a href="/!1001/profiles/teachers/7" class="profile-link" title="Rehtori R">Reh</a></span>
+<span class="vismaicon vismaicon-locked" title="Pysyvä tiedote"></span></div>
+<h2 class="no-border">1.9.</h2>
+<div class="margin-bottom well"><h3>Vanhempainilta</h3>
+<span class="small"><a href="/!1001/news/302">Lue lisää</a></span></div>
+</div>
+<div class="panel"><div class="panel-body"><h2>Pysyvät tiedotteet</h2>
+<div><a href="/!1001/news/301">Syysloma</a></div><div><a href="/!1001/news/300">Lukuvuositiedote</a></div></div></div>
+<div class="panel"><div class="panel-body"><h2>Vanhat tiedotteet</h2>
+<div><a href="/!1001/news/250">Kevätjuhla</a></div></div></div>"""
+
+NEWS_DETAIL_HTML = """<html><head><title>
+  Syysloma - Wilma</title></head><body><div class="panel-body"><h2>Syysloma</h2>
+<div class="margin-bottom hidden" id="news-content"><p>Loma on <b>viikolla 42</b>.</p>
+<p><a href="https://example.com/loma.pdf">Lomatiedote</a></p></div>
+<div class="horizontal-link-container"><span><a href="/!1001/profiles/teachers/7" class="profile-link">Rehtori R</a></span>
+<span class="small pull-right">Julkaistu 19.10.2026</span></div></div></body></html>"""
+
+
 class FakeWilma:
-    """Minimal Wilma: form login, roles, message list, message detail."""
+    """Minimal Wilma: form login, roles, message list, message detail, bulletins."""
 
     def __init__(self, password="pw", mfa=False):
         self.password = password
@@ -73,6 +96,7 @@ class FakeWilma:
         self.logins = 0
         self.calls: list[str] = []
         self.detail_json = True
+        self.news_json = False
         self.roles_status = 200
 
     def __call__(self, request: httpx.Request) -> httpx.Response:
@@ -131,6 +155,26 @@ class FakeWilma:
                     '</table><div class="ckeditor hidden"><p>Vanhan Wilman sisältö</p></div></div>'
                 ),
             )
+        if path.endswith("/news"):
+            if self.news_json:
+                return httpx.Response(
+                    200,
+                    json=[
+                        {
+                            "id": 301,
+                            "Title": "Syysloma",
+                            "Published": "2026-10-19 08:00",
+                        },
+                        {
+                            "id": 302,
+                            "Title": "Vanhempainilta",
+                            "Published": "2026-09-01 08:00",
+                        },
+                    ],
+                )
+            return httpx.Response(200, html=NEWS_LIST_HTML)
+        if path.endswith("/news/301"):
+            return httpx.Response(200, html=NEWS_DETAIL_HTML)
         return httpx.Response(404)
 
 
@@ -322,3 +366,86 @@ def test_wilma_notification_detection():
     assert not mail._is_wilma_notification(
         {"from": "x@example.com", "subject": "Viesti Wilmasta: Retki"}
     )
+
+
+def test_parse_timestamp_short_date_and_published_prefix():
+    from datetime import datetime
+
+    today = datetime.now(wilma._TZ)
+    dt = wilma.parse_timestamp("Julkaistu 27.9.")
+    assert dt is not None and (dt.month, dt.day) == (9, 27)
+    assert dt.year in (today.year, today.year - 1)
+    assert (dt.date() - today.date()).days <= 180
+    assert (
+        wilma.parse_timestamp("Julkaistu 7.10.2025").isoformat()
+        == "2025-10-07T00:00:00+03:00"
+    )
+    assert wilma.parse_timestamp("31.2.") is None
+
+
+def test_parse_news_list_html():
+    items = wilma.parse_news_list_html(NEWS_LIST_HTML)
+    assert [i["id"] for i in items] == [301, 302, 300, 250]
+    first = items[0]
+    assert first["title"] == "Syysloma"
+    assert first["author"] == "Rehtori R"
+    assert first["pinned"] and not first["archived"]
+    assert first["published"].startswith(f"{first['published'][:4]}-10-19")
+    assert items[1] == {
+        "id": 302,
+        "title": "Vanhempainilta",
+        "published": items[1]["published"],
+        "author": None,
+        "pinned": False,
+        "archived": False,
+    }
+    assert items[2]["pinned"] and items[2]["published"] is None
+    assert items[3]["archived"] and items[3]["title"] == "Kevätjuhla"
+
+
+def test_parse_news_html_detail():
+    item = wilma.parse_news_html(NEWS_DETAIL_HTML, 301)
+    assert item["title"] == "Syysloma"
+    assert item["author"] == "Rehtori R"
+    assert item["published"] == "2026-10-19T00:00+03:00"
+    assert "**viikolla 42**" in item["content"]
+    assert item["links"] == [
+        {"label": "Lomatiedote", "url": "https://example.com/loma.pdf"}
+    ]
+
+
+def test_news_list_json_when_wilma_speaks_it(client, fake):
+    fake.news_json = True
+    items = client.list_news("1001")
+    assert [i["id"] for i in items] == [301, 302]
+    assert items[0]["published"] == "2026-10-19T08:00+03:00"
+
+
+def test_list_and_read_news_tools(patched):
+    out = wilma_tools.list_wilma_news(student="sanni", since="2026-10-01")
+    (block,) = out["students"]
+    ids = [i["id"] for i in block["news"]]
+    # 302 (1.9.) is before `since`; 300 is pinned+undated and kept; 250 is archived and hidden.
+    assert ids == [301, 300]
+    with_older = wilma_tools.list_wilma_news(student="sanni", include_older=True)
+    assert [i["id"] for i in with_older["students"][0]["news"]] == [301, 302, 300, 250]
+    item = wilma_tools.read_wilma_news(301, student="1001")
+    assert item["student_name"] == "Sanni Lindblad"
+    assert "viikolla 42" in item["content"]
+    with pytest.raises(ValueError, match="since"):
+        wilma_tools.list_wilma_news(since="not a date")
+
+
+def test_wilma_bulletin_notification_hint(monkeypatch):
+    monkeypatch.setattr(
+        mail, "get_config", lambda: type("C", (), {"wilma_url": "https://w"})()
+    )
+    emails = [
+        {"from": "jarvenpaa@inschool.fi", "subject": "Uusia tiedotteita Wilmassa"},
+        {"from": "jarvenpaa@inschool.fi", "subject": "Viesti Wilmasta: Retki"},
+        {"from": "x@example.com", "subject": "Uusia tiedotteita"},
+    ]
+    mail.attach_handler_hints(emails)
+    assert "list_wilma_news" in emails[0]["hint"]
+    assert "find_wilma_message" in emails[1]["hint"]
+    assert "hint" not in emails[2]

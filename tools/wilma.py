@@ -141,3 +141,107 @@ def find_wilma_message(
     students = sorted({c[0]["name"] or c[0]["number"] or "" for c in candidates} - {""})
     msg = client.get_message(s["number"], m["id"])
     return {"status": "found", "student": s["number"], "students": students, **msg}
+
+
+class _ListWilmaNewsArgs(BaseModel):
+    student: str | None = Field(
+        default=None,
+        description="Child's name (or part of it) or Wilma student number. Omit to cover all children.",
+    )
+    since: str | None = Field(
+        default=None,
+        description=(
+            "Only bulletins published on or after this date ('2026-10-19' or '19.10.2026'). "
+            "Pinned bulletins are always included."
+        ),
+    )
+    include_older: bool = Field(
+        default=False,
+        description="Also list the archived 'Vanhat tiedotteet' (titles only until read).",
+    )
+    limit: int = Field(
+        default=20,
+        ge=1,
+        le=100,
+        description="Max dated bulletins per child, newest first.",
+    )
+
+
+@tool(
+    description=(
+        "List school bulletins (Tiedotteet) from Wilma: id, title, published date, author, pinned flag, "
+        "per child. Bulletins are announcements to all guardians, separate from messages (Viestit). "
+        "Use this when a Wilma email says 'Uusia tiedotteita' (new bulletins); then read_wilma_news "
+        "for the full text."
+    ),
+    args=_ListWilmaNewsArgs,
+)
+def list_wilma_news(
+    student: str | None = None,
+    since: str | None = None,
+    include_older: bool = False,
+    limit: int = 20,
+) -> dict[str, Any]:
+    client = wilma.get_client()
+    cutoff = wilma.parse_timestamp(since) if since else None
+    if since and cutoff is None:
+        raise ValueError(f"could not parse since={since!r}; use YYYY-MM-DD")
+    out = []
+    for s in wilma.resolve_students(client, student):
+        items = client.list_news(s["number"])
+        dated = [i for i in items if not i["archived"] and i["published"]]
+        dated.sort(key=lambda i: i["published"], reverse=True)
+        if cutoff:
+            dated = [
+                i
+                for i in dated
+                if i["pinned"]
+                or (wilma.parse_timestamp(i["published"]) or cutoff) >= cutoff
+            ]
+        undated = [i for i in items if not i["archived"] and not i["published"]]
+        older = [i for i in items if i["archived"]] if include_older else []
+        out.append(
+            {
+                "student": s["number"],
+                "student_name": s["name"],
+                "news": dated[:limit] + undated + older,
+            }
+        )
+    log.info("list_wilma_news students=%d since=%s", len(out), since)
+    return {"students": out}
+
+
+class _ReadWilmaNewsArgs(BaseModel):
+    news_id: int = Field(description="Bulletin id from list_wilma_news.")
+    student: str | None = Field(
+        default=None,
+        description="Student number (or name) the bulletin was listed under. Omit to try each child.",
+    )
+
+
+@tool(
+    description=(
+        "Read one Wilma bulletin (tiedote) in full: body as markdown plus the links it carries "
+        "(attachments are usually links)."
+    ),
+    args=_ReadWilmaNewsArgs,
+)
+def read_wilma_news(news_id: int, student: str | None = None) -> dict[str, Any]:
+    client = wilma.get_client()
+    last_error: Exception | None = None
+    for s in wilma.resolve_students(client, student):
+        try:
+            item = client.get_news(s["number"], news_id)
+        except wilma.WilmaAuthError:
+            raise
+        except wilma.WilmaError as e:
+            log.info(
+                "read_wilma_news id=%s not under student=%s: %s",
+                news_id,
+                s["number"],
+                e,
+            )
+            last_error = e
+            continue
+        return {"student": s["number"], "student_name": s["name"], **item}
+    raise last_error or ValueError(f"Wilma bulletin {news_id} not found")

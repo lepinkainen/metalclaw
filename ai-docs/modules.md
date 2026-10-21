@@ -101,12 +101,14 @@ Per-module symbol map. `→` = imports. `←` = imported by.
 
 ## wilma.py — Wilma (school portal) client
 
-- Unofficial: speaks the web UI's cookie-session + JSON endpoints. Protocol mirrors github.com/aikarjal/wilmai (TS, MIT) — diff its changelog when Wilma breaks.
+- Unofficial: speaks the web UI's cookie-session + JSON endpoints. Protocol mirrors github.com/aikarjal/wilmai (TS, MIT) — diff its changelog when Wilma breaks. Bulletin parsers are a port of its `parsers/news.ts` (MIT notice in `THIRD_PARTY_NOTICES.md`).
 - Login: `GET /login` hidden fields → `SESSIONID` (or `GET /token` → `Wilma2LoginID`) → `POST /login` form → `Wilma2SID` cookie. Redirect with `loginfailed` = bad creds. Redirect page containing `mfa-formkey` → `POST /api/v1/accounts/me/mfa/otp/check` with stdlib `totp(cfg.wilma_totp_secret)`.
-- Endpoints: `/api/v1/accounts/me/roles` (students; `passwd` role skipped; on 404/non-JSON falls back to `/!<n>/` links on the home page; 5xx/network errors propagate uncached), `/!<student>/messages/list[/archive|/outbox]`, `/!<student>/messages/<id>?format=json` (falls back to `/messages/<id>` HTML on 404).
+- Endpoints: `/api/v1/accounts/me/roles` (students; `passwd` role skipped; on 404/non-JSON falls back to `/!<n>/` links on the home page; 5xx/network errors propagate uncached), `/!<student>/messages/list[/archive|/outbox]`, `/!<student>/messages/<id>?format=json` (falls back to `/messages/<id>` HTML on 404). Bulletins: `/!<student>/news` (JSON list on newer Wilmas, else HTML: `h2.no-border` date headers + `div.well` cards, side panels `Pysyvät tiedotteet` → `pinned`, `Vanhat tiedotteet` → `archived`, titles only) and `/!<student>/news/<id>` (JSON `{title, content…}` or HTML: `#news-content` body, `a.profile-link` author, `Julkaistu D.M.[YYYY]` date). `list_news` / `get_news` → `{id, title, subtitle, author, published, content, links}`; attachments are plain links (no download).
 - **One live session per account**: every login cancels the previous one, browser included. So: lazy login, module singleton `get_client()` shared across threads (`RLock` serialises requests), re-login only on 401 / redirect to `/login` / 403-with-dead-session (`_session_alive` probes roles first so a single forbidden item doesn't log the parent out).
 - Rejected creds or missing TOTP secret set `_failed` → all later calls raise immediately until restart (repeated failed logins can lock the account).
 - Bodies: `ContentHtml` → markdown via `markdownify`, truncated at 20 000 chars. Timestamps → ISO in Europe/Helsinki.
+- `parse_timestamp` also takes `D.M.` without a year (this year unless >180 days ahead) and strips a `Julkaistu`/`Publicerad`/`Published` prefix — bulletin dates.
+- `is_bulletin_notification_subject`: `Uusia tiedotteita` / `nya anslag` / `new bulletins` (search, not anchored) — those mails carry no titles, so the hint points at `list_wilma_news(since=…)`.
 - `match_messages(msgs, subject, sent_at)`: strips `Viesti Wilmasta:` prefix, prefix-matches (notification subjects are truncated), ±15 min window when `sent_at` given.
 - `reset_client()` for tests; tests use `httpx.MockTransport(FakeWilma())` (`tests/test_wilma.py`).
 

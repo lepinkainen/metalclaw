@@ -10,7 +10,7 @@ from pydantic import BaseModel, Field
 import history
 from config import get_config, xdg_data_dir
 from registry import tool
-from wilma import is_notification_subject
+from wilma import is_bulletin_notification_subject, is_notification_subject
 
 from ._http import HTTP
 
@@ -402,9 +402,16 @@ def attach_handler_hints(emails: list[dict[str, Any]]) -> list[dict[str, Any]]:
     per-handler field; other integrations reuse it)."""
     wilma_on = bool(get_config().wilma_url)
     for e in emails:
-        if wilma_on and _is_wilma_notification(e):
+        if not wilma_on:
+            break
+        if _is_wilma_notification(e):
             e["hint"] = (
                 "Wilma notification: call find_wilma_message(subject, sent_at) for the full message."
+            )
+        elif _is_wilma_bulletin_notification(e):
+            e["hint"] = (
+                "Wilma bulletin notification: call list_wilma_news(since=<this email's date>) "
+                "and read_wilma_news(news_id) for the full text; this email carries no titles."
             )
     return emails
 
@@ -741,10 +748,18 @@ def check_new_mail() -> dict[str, Any]:
     return {"count": len(emails), "emails": attach_handler_hints(emails)}
 
 
+def _from_wilma(email: dict[str, Any]) -> bool:
+    return "inschool.fi" in (email.get("from") or "").lower()
+
+
 def _is_wilma_notification(email: dict[str, Any]) -> bool:
-    return "inschool.fi" in (
-        email.get("from") or ""
-    ).lower() and is_notification_subject(email.get("subject") or "")
+    return _from_wilma(email) and is_notification_subject(email.get("subject") or "")
+
+
+def _is_wilma_bulletin_notification(email: dict[str, Any]) -> bool:
+    return _from_wilma(email) and is_bulletin_notification_subject(
+        email.get("subject") or ""
+    )
 
 
 class _MarkReportedArgs(BaseModel):

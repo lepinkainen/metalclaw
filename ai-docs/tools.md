@@ -47,6 +47,8 @@ Ollama and litellm consume this directly (litellm normalises to per-backend form
 | `list_wilma_messages` | `tools/wilma.py` | `student?, folder="inbox", unread_only=False, limit=20` | `dict` | Per child `{student, student_name, messages[]}`; newest first. `student` = name substring or number. |
 | `read_wilma_message` | `tools/wilma.py` | `message_id: int, student?` | `dict` | Full body (markdown), recipients, replies. Without `student` tries each child. |
 | `find_wilma_message` | `tools/wilma.py` | `subject, sent_at?, student?` | `dict` | Resolves a "Viesti Wilmasta" notification email to the real message. `{status: found/ambiguous/not_found}`; dedups the same message across children (`students` lists them). `check_new_mail` adds `hint` to such emails when `wilma_url` is set. |
+| `list_wilma_news` | `tools/wilma.py` | `student?, since?, include_older=False, limit=20` | `dict` | Bulletins (tiedotteet) per child: dated newest first (filtered by `since`, pinned always kept), then undated pinned, then archived if `include_older`. Hinted for "Uusia tiedotteita" emails. |
+| `read_wilma_news` | `tools/wilma.py` | `news_id: int, student?` | `dict` | Full bulletin: markdown body, `links` (attachments are links), author, published. Without `student` tries each child. |
 | `set_user_preference` | `tools.py:618` | `key, value` | `dict` | → `memory.set_preference`. |
 | `add_user_fact` | `tools.py:635` | `text` | `dict` | → `memory.add_fact`. |
 | `add_user_instruction` | `tools.py:658` | `text` | `dict` | → `memory.add_instruction`. Behavioural rule. |
