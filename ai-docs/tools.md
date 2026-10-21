@@ -39,8 +39,8 @@ Ollama and litellm consume this directly (litellm normalises to per-backend form
 | `train_departures` | `tools.py:175` | `station: str, line?: str, count: int=5` | `dict` | Digitraffic Finnish rail. Filters by commuter line letter. |
 | `list_emails` | `tools.py:346` | `mailbox="inbox", unread_only=False, from_search?, limit?` | `dict` | Fastmail JMAP. `mailbox="all"` sweeps everywhere except trash/junk/drafts/sent. |
 | `read_email` | `tools.py:494` | `email_id: str` | `dict` | Body + attachments. Truncates at 20000 chars. HTML→markdown via `markdownify`. |
-| `check_new_mail` | `tools/mail.py` | — | `dict` | Unread-anywhere or flagged-Inbox emails (limit 50) minus SQLite ledger (`mail_reported.sqlite3`). Stores ids in `_last_candidates`. |
-| `mark_emails_reported` | `tools/mail.py` | `ids: list[str]` | `dict` | Records ids from last `check_new_mail` into ledger; others → `rejected`. Never mutates mailbox. |
+| `check_new_mail` | `tools/mail.py` | — | `dict` | Unread-anywhere or flagged-Inbox emails (limit 50) minus the shared `reported_items` ledger in history.db (`source="mail"`; a legacy `mail_reported.sqlite3` is imported once by `migrate_legacy_ledger` and renamed `.bak`). Stores ids in `_last_candidates`. Superseded for scheduled use by the `mail` pipeline (`pipelines.md`), which never calls either tool. |
+| `mark_emails_reported` | `tools/mail.py` | `ids: list[str]` | `dict` | Records ids from last `check_new_mail` into `reported_items` as `delivered`; others → `rejected`. Never mutates mailbox. |
 | `list_email_labels` | `tools/mail.py` | — | `list[dict]` | All mailboxes as `{path, role, total, unread}` sorted by path. Read-only. |
 | `add_email_label` | `tools/mail.py` | `email_ids: list[str]` (1-50), `label: str` | `dict` | Label must start with `bot/` (enforced by `_validate_bot_label`); missing `bot/...` mailboxes are created. `Email/set` patches `mailboxIds/<id>: true`. Returns `{label, updated, failed}`. |
 | `remove_email_label` | `tools/mail.py` | same | `dict` | Same `bot/` restriction; errors if label missing (never creates). Patches `mailboxIds/<id>: null`. |

@@ -49,6 +49,9 @@
 | `allow_self_modification` | `bool` | `True` | Gates `/add-tool` (the only self-modification path). Set `false` where Telegram/Discord are reachable by non-operators and in the Docker image (no `claude` CLI). |
 | `vault_search_excludes` | `tuple[str, ...]` | `()` | Glob patterns relative to vault. |
 | `mcp_servers` | `tuple[McpServer, ...]` | `()` | External MCP servers; see below. Names must be unique. |
+| `heartbeat_pipelines` | `tuple[PipelineAction, ...]` | `()` | Scheduled watcher pipelines (`pipelines.md`). Each: `pipeline` (registry name), exactly one of `every` (int seconds or `"5m"`) / `schedule` `{days,time,timezone}`, optional `channel` (falls back to `heartbeat_default_channel`), optional `id` (default `pipeline-<name>`). `extra="forbid"`. A dict is coerced to a one-tuple. Schedule errors are logged and the entry skipped (`heartbeat.config_pipeline_actions`). |
+| `mail_ignore_labels` | `tuple[str, ...]` | `()` | Fastmail mailbox names or `Parent/Child` paths (case-insensitive) dropped by the mail pipeline before the model. A bare string is coerced to a one-tuple. Unknown names warn and are ignored. |
+| `mail_pipeline_max_batch` | `int` | `50` | Mails per model call in the mail pipeline; applied **after** label+ledger filtering, oldest first. |
 
 ### `McpServer` (`extra="forbid"` — typo keys fail, unlike `Config`)
 

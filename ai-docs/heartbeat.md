@@ -85,13 +85,14 @@ Single-flight: a module-level `_tick_running` flag (not an `asyncio.Lock`, so it
 
 1. Active-hours gate (`_within_active_hours(now.astimezone(), cfg.heartbeat_active_hours)`). Wraparound `[22, 6]` supported.
 2. `state = await asyncio.to_thread(load_state)`; `snapshot = await asyncio.to_thread(load_ledger)`. Every ledger/state call in the tick (`mark_success`, `mark_failure`, `_archive_with_lock`, `prune_state`, the end-of-tick `load_ledger`) is wrapped in `asyncio.to_thread` because they take `flock`/SQLite locks that another process may hold (#33). `_fail` is therefore an `async` closure.
-3. For each `action` in snapshot:
+3. For each `action` in `snapshot.actions + config_pipeline_actions()` (config-declared watcher pipelines, ids `pipeline-<name>`; see `pipelines.md`):
+   - `action.pipeline` set → `_run_pipeline_action` (runs `pipelines.REGISTRY[name](ctx)`; delivery happens inside the pipeline; a `pipeline_runs` trace row is written in `finally`). Outcome `delivered` counts as notified, `suppressed`/`dismissed` as suppressed; any exception → `_fail` + backoff. `chat_loop.chat` is only reached if the pipeline calls `ctx.ask_model`. Then `continue` — the prompt path below is skipped.
    - `is_action_due(action, state[id].last_run, now)` → skip if not; due but `now < state[id].retry_at()` → skip (backoff, no model call).
    - `_run_action(...)` (`heartbeat.py:768`) runs `chat_loop.chat(session)` in a thread executor on a **scope-less** session (`_build_action_session`, `heartbeat.py:736`) — heartbeat runs are never written to the `turns` table and never see a chat's history.
-   - Strip reply. An empty reply **without** the sentinel counts as a failed run (`n_failed`, warning logged, state untouched, one-shot stays active) — small local models sometimes return `""` after a tool round. If `SENTINEL` appears anywhere, remove it; if ≤`_ACK_MAX_CHARS` (300) chars remain → suppress notify (longer leftovers are sent with the sentinel stripped); still update state; for `kind=at`, archive to `completed`.
+   - `strip_sentinel(reply) -> (text, acked)` (shared with pipelines). An empty reply **without** the sentinel counts as a failed run (`n_failed`, warning logged, state untouched, one-shot stays active) — small local models sometimes return `""` after a tool round. If `SENTINEL` appears anywhere, remove it; if ≤`_ACK_MAX_CHARS` (300) chars remain → suppress notify (longer leftovers are sent with the sentinel stripped); still update state; for `kind=at`, archive to `completed`.
    - Otherwise resolve channel via `_resolve_channel(action.channel)` → `(target_scope, channels.Channel)` (falls back to `cfg.heartbeat_default_channel`).
    - On notify success: `mark_success` (stamps `last_run`, clears failures); for `kind=at`, archive. On any failure: `mark_failure` → exponential backoff (see State); the action stays active and retries once the backoff elapses. `Channel.notify` implementations MUST raise on non-delivery (Discord: heartbeat channel unset / unresolvable / `send` error via `_discord_send(..., raise_on_error=True)`; Telegram: unparseable scope) — a silent `return` would be counted as delivered and archive the one-shot.
-4. `prune_state(active ∪ completed ids)` — writes already happened per action; there is no bulk save.
+4. `prune_state(active ∪ completed ∪ config-pipeline ids)` — writes already happened per action; there is no bulk save.
 
 Each action is wrapped in try/except — one bad action does not stop the others.
 
@@ -147,5 +148,7 @@ Heartbeat ticks themselves run with `current_scope` set to `None` — actions ca
 | `create_heartbeat_action(kind, prompt, at?, schedule?, every?, channel?)` | Append an action. `channel` defaults to current frontend scope, then `cfg.heartbeat_default_channel`. |
 | `list_heartbeat_actions(include_completed=False)` | Read ledger. |
 | `cancel_heartbeat_action(action_id)` | Pop active action. Returns `status='not_found'` if id unknown. |
+
+Pipeline actions are not creatable through these tools: they come from `heartbeat_pipelines` in config (or a hand-written `pipeline:` key on a ledger action — parsed by `_action_from_dict`, round-trips through `to_dict`).
 
 All three are auto-registered via `tools/__init__.py → from .heartbeat_tools import …`. The model is told (in `_SYSTEM_PROMPT_BASE`) to use these for reminders/scheduled checks/watch requests instead of stuffing them into memory.

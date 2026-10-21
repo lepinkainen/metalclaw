@@ -20,7 +20,8 @@ AI-only architecture docs. Dense, indexed, cross-referenced. No human-friendly p
 | `gotchas.md` | Subtle traps: circular imports, session commit/persist ordering, tool registration order, turns-table growth. |
 | `testing.md` | pytest fixtures, conftest, common stubs, session-persistence tests. |
 | `mcp-plan.md` | Plan (phase 1 implemented — see Status): MCP client — external MCP server tools bridged into `registry.TOOLS`, config, lifecycle, sync→async dispatch, security. |
-| `mail-pipeline-plan.md` | Plan (design only): code-first mail pipeline — fetch all unread, filter by Fastmail labels in code, handler hints, model only on the residue, mark-reported after delivery. Mermaid chart. |
+| `pipelines.md` | Watcher pipelines (`pipelines/`): context, trace, shared ledger, mail pipeline stages, heartbeat dispatch via `heartbeat_pipelines`. |
+| `mail-pipeline-plan.md` | Plan (implemented 2026-10-21 — see Status): code-first mail pipeline design, rationale, build-vs-buy, test list. Mermaid chart. |
 
 ## Source map (line counts)
 
@@ -31,8 +32,9 @@ registry.py       103   @tool decorator, TOOLS dict, pydantic→json-schema
 channels.py        54   Channel Protocol, scope→channel registry (prefix-before-`-`)
 config.py         252   pydantic Config, yaml load, env merge, lru_cache
 memory.py         395   Memory dataclass, parse/render, file lock, mutators, forget
-heartbeat.py     1083   ledger, schedule, run_tick, state rows, backoff
-history.py        461   shared locked sqlite: turns (canonical sessions) + legacy messages + usage + heartbeat_state + known_chats
+heartbeat.py     1240   ledger, schedule, run_tick, state rows, backoff, pipeline dispatch
+history.py        600   shared locked sqlite: turns + legacy messages + usage + heartbeat_state + known_chats + reported_items + pipeline_runs
+pipelines/       ~250   watcher pipelines: context.py (Outcome/Trace/Ledger/PipelineContext), mail.py (code-first mail check), REGISTRY
 self_change.py     84   busy_slot()/is_busy()/SelfModificationBusy + git/subprocess helpers for live_tool
 live_tool.py      385   /add-tool: spawn `claude -p`, focused gates, async approval, changes.jsonl
 telegram_format.py 146  CommonMark→Telegram HTML

@@ -53,13 +53,13 @@ Per-module symbol map. `→` = imports. `←` = imported by.
 
 ## heartbeat.py — scheduler
 
-- Public: `run(stop)`, `run_tick(*, now=None)`, `load_ledger()`, `create_action(...)`, `list_active()`, `list_completed()`, `cancel(action_id)` (also `forget_state`), `load_state() -> dict[id, ActionState]`, `get_state(id)`, `mark_success(action, now, **meta)`, `mark_failure(action, now, reason, **meta)`, `forget_state(id)`, `prune_state(keep)`, `backoff_seconds(count)`, `is_action_due(action, last_run_iso, now)`, `next_due(action, last_run_iso, now)`, `summary(max_chars)`, `parse_interval(text)`, `normalise_weekdays(days)`, `validate_time_string(text)`, `validate_timezone(name)`, `parse_iso(text)` (naive → local), `format_now(dt=None)` (prompt clock with UTC offset), `SENTINEL = "HEARTBEAT_OK"`.
-- Dataclasses: `ActionKind` (StrEnum), `CronSchedule`, `HeartbeatAction`, `HeartbeatLedger`, `ActionState` (one `heartbeat_state` row; `retry_at()`).
-- → `channels`, `config`, `history` (state rows), `yaml`, `asyncio`. (lazy) `chat_loop`.
+- Public: `run(stop)`, `run_tick(*, now=None)`, `load_ledger()`, `create_action(...)`, `list_active()`, `list_completed()`, `cancel(action_id)` (also `forget_state`), `load_state() -> dict[id, ActionState]`, `get_state(id)`, `mark_success(action, now, **meta)`, `mark_failure(action, now, reason, **meta)`, `forget_state(id)`, `prune_state(keep)`, `backoff_seconds(count)`, `is_action_due(action, last_run_iso, now)`, `next_due(action, last_run_iso, now)`, `summary(max_chars)`, `strip_sentinel(reply) -> (text, acked)`, `config_pipeline_actions() -> list[HeartbeatAction]` (from `cfg.heartbeat_pipelines`, ids `pipeline-<name>`, `created_from="config"`), `_run_pipeline_action(action, now)` (builds `PipelineContext`, runs registry fn, writes `pipeline_runs` row in `finally`), `parse_interval(text)`, `normalise_weekdays(days)`, `validate_time_string(text)`, `validate_timezone(name)`, `parse_iso(text)` (naive → local), `format_now(dt=None)` (prompt clock with UTC offset), `SENTINEL = "HEARTBEAT_OK"`.
+- Dataclasses: `ActionKind` (StrEnum), `CronSchedule`, `HeartbeatAction` (+ `pipeline: str | None`; `kind` stays the schedule type), `HeartbeatLedger`, `ActionState` (one `heartbeat_state` row; `retry_at()`).
+- → `channels`, `config`, `history` (state rows), `yaml`, `asyncio`. (lazy) `chat_loop`, `pipelines`.
 
-## history.py — sqlite: sessions, usage, scheduler state, known chats
+## history.py — sqlite: sessions, usage, scheduler state, known chats, pipeline ledger + traces
 
-- DB: `$XDG_DATA_HOME/metalclaw/history.db`, one shared connection behind `_LOCK`. Tables (`history.py:16 _init`): `turns(id, session, ts, kind, payload JSON)` + index `turns_session_id(session, id)` `:35-43`; legacy `messages(id, session, ts, role, content)` `:23` (read-only now); `usage(id, ts, provider, model, prompt_tokens, completion_tokens, cost_usd NULL)` `:45`; `heartbeat_state(action_id PK, last_run, failure_count, last_failed, updated_at, meta JSON)` `:56`; `known_chats(frontend, chat_id PK, first_seen, last_seen, meta JSON)` `:66`. `ts` is UTC ISO.
+- DB: `$XDG_DATA_HOME/metalclaw/history.db`, one shared connection behind `_LOCK`. Tables (`history.py:16 _init`): `turns(id, session, ts, kind, payload JSON)` + index `turns_session_id(session, id)` `:35-43`; legacy `messages(id, session, ts, role, content)` `:23` (read-only now); `usage(id, ts, provider, model, prompt_tokens, completion_tokens, cost_usd NULL)` `:45`; `heartbeat_state(action_id PK, last_run, failure_count, last_failed, updated_at, meta JSON)` `:56`; `known_chats(frontend, chat_id PK, first_seen, last_seen, meta JSON)` `:66`; `reported_items(source, external_id PK, outcome, first_reported_at)` (shared watcher ledger; `reported_ids(source, ids) -> set`, `reported_mark(source, ids, outcome, ts=None)` INSERT OR IGNORE — first outcome wins, `reported_count(source)`); `pipeline_runs(run_id PK, pipeline, action_id, started_at, finished_at, outcome, error, steps JSON)` + index `(pipeline, started_at)` (`pipeline_run_record(...)`, `pipeline_runs_latest()` one row per pipeline, `pipeline_runs_recent(pipeline, limit)`). `ts` is UTC ISO.
 - `session` column = frontend scope string: `telegram-<chat_id>` / `discord-<channel_id>` (same strings as heartbeat scopes). Legacy `messages` rows from the removed CLI have bare-timestamp sessions.
 - **turns** (`history.py:96-166`): `_BOUNDARY = "boundary"`; `_last_boundary_id(db, session)`; `turns_load(session) -> list[Message]` (rows after the latest boundary, `message_from_dict`); `turns_append(session, new)` (one `executemany` + commit, rollback on error — all rows or none; `kind` = dict `kind`, `payload` = `json.dumps(message_to_dict(m))`); `turns_reset(session)` (inserts a boundary row; nothing deleted); `turns_count(session)` (live rows). Only `chat_loop.Session` calls these.
 - `search_messages(query, limit)` `:168` — LIKE (escaped) over a UNION ALL of `turns` (`kind IN ('user','assistant')`, text via `json_extract(payload, '$.content' | '$.text')`, empty text skipped — tool calls/results never match) and legacy `messages`; `ORDER BY ts DESC`.
@@ -83,7 +83,14 @@ Per-module symbol map. `→` = imports. `←` = imported by.
 - Decorated with `@tool(...)`; auto-register on import. See `tools.md` for catalog.
 - → `httpx`, `pydantic`, `memory`, `vault_search`, `config`, `registry`, `history` (conversation_history), `heartbeat` (heartbeat_tools). (lazy) `chat_loop`, `providers` (escalation only).
 - HTTP client: module-level `_HTTP = httpx.Client(...)` (`tools/_http.py`).
-- Fastmail session/mailboxes cached at `_FM_SESSION`, `_FM_MAILBOXES` (lazy).
+- Fastmail session/mailboxes cached at `_FM_SESSION`, `_FM_MAILBOXES` (lazy). `tools/mail.py` also hosts the pipeline helpers (`fetch_unread_heads`, `drop_labelled`, `fetch_bodies`, `attach_handler_hints`, `_jmap_post`, `migrate_legacy_ledger`, `LEDGER_SOURCE = "mail"`) — see `pipelines.md`.
+
+## pipelines/ — watcher pipelines
+
+- `context.py`: `Outcome` (StrEnum `suppressed`/`dismissed`/`delivered`), `Step`, `Trace` (`step(name)` ctx manager → `Step` with `set_note`; `as_rows()`), `Ledger` (`drop_reported(source, items)`, `mark(source, items, outcome)` over `history.reported_*`), `PipelineContext(config, now, channel, trace, ledger, ask_model, deliver)`, `default_ask_model(now_text)` (scope-less `Session`, `chat_loop.chat(..., only_tools=)` in a thread).
+- `mail.py`: `run(ctx)`, `SOURCE`, `TOOLS` (read_email, find_wilma_message, add/remove_email_label), `SYSTEM`.
+- `__init__.py`: `REGISTRY = {"mail": mail.run}`, `Pipeline` type.
+- → `history`, `config`, `tools.mail`. (lazy) `chat_loop`, `heartbeat.strip_sentinel`.
 
 ## vault_search.py — Obsidian search
 
