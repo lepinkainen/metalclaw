@@ -42,7 +42,7 @@ def test_touch_drops_none_values_and_keeps_corrupt_meta():
     assert meta["_corrupt_meta"] == "{broken"
 
 
-def test_forget_and_import_ignore_existing():
+def test_import_ignores_existing():
     history.known_chats_import("telegram", ["1", "2"], {"migrated_from": "x"})
     history.known_chat_touch("telegram", "1", {"username": "a"})
     assert (
@@ -51,9 +51,7 @@ def test_forget_and_import_ignore_existing():
     rows = {r[1]: json.loads(r[4]) for r in history.known_chats_all("telegram")}
     assert set(rows) == {"1", "2", "3"}
     assert rows["1"]["username"] == "a"  # INSERT OR IGNORE left the touched row alone
-    assert history.known_chat_forget("telegram", "2") is True
-    assert history.known_chat_forget("telegram", "2") is False
-    assert history.known_chat_ids("telegram") == ["1", "3"]
+    assert history.known_chat_ids("telegram") == ["1", "2", "3"]
 
 
 def test_telegram_remember_chat_persists_with_meta(monkeypatch):

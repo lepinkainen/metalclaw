@@ -492,17 +492,6 @@ def known_chats_all(frontend: str | None = None) -> list[KnownChatRow]:
         ).fetchall()
 
 
-def known_chat_forget(frontend: str, chat_id: str) -> bool:
-    with _LOCK:
-        db = _conn()
-        cur = db.execute(
-            "DELETE FROM known_chats WHERE frontend = ? AND chat_id = ?",
-            (frontend, chat_id),
-        )
-        db.commit()
-        return cur.rowcount > 0
-
-
 def known_chats_import(frontend: str, chat_ids: list[str], meta: dict) -> int:
     """Bulk insert (legacy JSON migration); existing rows are left untouched."""
     now = _now()
