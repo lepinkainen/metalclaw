@@ -1,6 +1,6 @@
 # Plan: code-first mail pipeline
 
-Status (2026-10-21): **implemented** as designed — `pipelines/` package, `history.reported_items` + `pipeline_runs`, `heartbeat_pipelines` config, `/status` pipeline block; see `pipelines.md` for the as-built reference. This file keeps the rationale, the build-vs-buy decision and the test list. Not yet done: JMAP `queryChanges`/push, server-side `inMailboxOtherThan` for the deny-list, burst batching, `dismissed` expiry, `pipeline_runs` retention.
+Status (2026-10-21): **implemented** as designed — `pipelines/` package, `history.reported_items` + `pipeline_runs`, `heartbeat_pipelines` config, `/status` pipeline block; see `pipelines.md` for the as-built reference. This file keeps the rationale, the build-vs-buy decision and the test list. Not yet done: JMAP `queryChanges`/push, server-side `inMailboxOtherThan` for the deny-list, burst batching, `dismissed` expiry. `pipeline_runs` is kept forever (history.db rows are history: debugging, stats, introspection).
 
 Goal: invert the heartbeat mail check so code drives the loop and the model runs only on what survives deterministic filtering. Fastmail labels (applied by the user's existing server-side rules) are the filter point; the bot fetches **all** unread mail and drops labelled-away mail in code. Unread-only is deliberate: mail already read elsewhere is never reported. The model's own `add_email_label` / `remove_email_label` calls feed the same filter on the next tick.
 
@@ -168,5 +168,5 @@ Invest in this immediately; it is the cheapest substitute for a workflow library
 - Config shape for the label deny-list (`mail_ignore_labels: [...]`) and for seeding pipeline actions (`heartbeat_pipelines:`).
 - Burst batching window (fetch-stage quiet period) vs. latency.
 - Whether `dismissed` should expire (e.g. re-surface a dismissed mail if it is still unread after N days) — default no.
-- Retention for `pipeline_runs` (rows are small; prune at 90 days or leave).
+- Retention for `pipeline_runs`: decided — keep forever, no pruning (rows are small; history.db is the debugging/statistics record).
 - Per-id delivered/dismissed split: deferred. Batch marking is correct for the filter's purpose (every id that reached the model is terminal); if the split is wanted later, a trailing `INCLUDED: id, id` line parsed off the reply is the cheap route, structured output the expensive one.

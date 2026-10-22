@@ -24,6 +24,7 @@ House rules — observed in code, enforce when editing.
 ## Locking
 
 - All `memory.py` mutations through `_locked()` ctxmgr. Reads can use the cached `load()`.
+- `history.db` rows are history: never `DELETE` without a very good reason. Mark instead (`cancelled_at`/`completed_at` in meta, a `boundary` row, an outcome column). The data backs debugging, statistics and the bot's own introspection ("the user keeps asking for X → add a tool"); growth is irrelevant until millions of rows. Keep *vault* files (`heartbeat.yaml`, synced to Obsidian and read every tick) small instead.
 - `history.db`: one shared connection behind `history._LOCK` (per process). Per-chat `asyncio.Lock`s in the frontends serialise `Session.load` → turn → `commit` for one scope; the DB has no cross-process scope lock.
 
 ## Errors
