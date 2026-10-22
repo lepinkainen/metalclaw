@@ -19,6 +19,7 @@ SOURCE = mail.LEDGER_SOURCE
 TOOLS: frozenset[str] = frozenset(
     {
         "read_email",
+        "list_email_labels",
         "find_wilma_message",
         "list_wilma_news",
         "read_wilma_news",
@@ -32,7 +33,12 @@ SYSTEM = (
     "The user message lists unread emails that passed the user's own filters and "
     "have not been reported before. Decide what the user needs to know. Use "
     "read_email (or the tool named in an email's `hint`) when the preview is not "
-    "enough. Reply with a concise summary for the user, grouped sensibly; skip "
+    "enough. Label EVERY email in the batch, reported or not, with exactly one "
+    "category label via add_email_label (label must start with `bot/`, e.g. "
+    "`bot/newsletter`, `bot/receipt`, `bot/action-needed`, `bot/spam`). Call "
+    "list_email_labels first and reuse an existing bot/ label instead of "
+    "inventing a near-duplicate. Do all labelling before your final reply. Then "
+    "reply with a concise summary for the user, grouped sensibly; skip "
     "mail that needs no attention. If nothing requires the user's attention, reply "
     "with exactly `HEARTBEAT_OK` and nothing else. Do not call any marking tool; "
     "the batch is recorded automatically."
@@ -97,8 +103,11 @@ async def run(ctx: PipelineContext) -> Outcome:
         return Outcome.SUPPRESSED
 
     with ctx.trace.step("model") as st:
+        system = SYSTEM
+        if cfg.mail_pipeline_instructions:
+            system += "\n\nUser's mail rules:\n" + cfg.mail_pipeline_instructions
         reply = await ctx.ask_model(
-            system=SYSTEM, user=_user_message(emails), tools=TOOLS
+            system=system, user=_user_message(emails), tools=TOOLS
         )
         st.set_note(f"{len(reply)} chars")
 

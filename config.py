@@ -158,6 +158,7 @@ class Config(BaseModel):
     # cap on mails per model call, and the scheduled pipeline actions.
     mail_ignore_labels: tuple[str, ...] = ()
     mail_pipeline_max_batch: int = 50
+    mail_pipeline_instructions: str = ""
     heartbeat_pipelines: tuple[PipelineAction, ...] = ()
 
     @property

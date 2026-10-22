@@ -117,7 +117,10 @@ heartbeat_interval_seconds: 1800
 # something survives. Scheduled like heartbeat actions (`every` seconds or
 # "5m"-style, or `schedule: {days, time, timezone}`); `channel` defaults to
 # heartbeat_default_channel. State and traces live in history.db; config is
-# the source of truth (they are not written to heartbeat.yaml).
+# the source of truth (they are not written to heartbeat.yaml). Pipelines run
+# on heartbeat ticks, so `every` cannot be shorter than heartbeat_interval_seconds
+# (every: 5m needs heartbeat_interval_seconds: 300), and heartbeat_active_hours
+# applies to them as well.
 # heartbeat_pipelines:
 #   - pipeline: mail
 #     every: 5m
@@ -129,6 +132,8 @@ heartbeat_interval_seconds: 1800
 # Cap on mails handed to the model per run (applied after filtering, oldest
 # first; the rest roll to the next run).
 # mail_pipeline_max_batch: 50
+# Extra rules appended to the mail pipeline's system prompt.
+# mail_pipeline_instructions: "Invoices from Acme are always action-needed."
 
 # Allow `/add-tool` to spawn `claude -p` and mutate the bot's own source.
 # Default true. Set to false on deployments where Telegram or Discord might

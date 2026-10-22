@@ -163,9 +163,19 @@ def test_drop_labelled_by_name_or_path_and_unknown_ignored(fm):
 # --- pipelines.mail: outcomes and ordering ---
 
 
-def _ctx(monkeypatch, *, reply="HEARTBEAT_OK", deliver=None, max_batch=50, labels=()):
+def _ctx(
+    monkeypatch,
+    *,
+    reply="HEARTBEAT_OK",
+    deliver=None,
+    max_batch=50,
+    labels=(),
+    instructions="",
+):
     cfg = SimpleNamespace(
-        mail_ignore_labels=tuple(labels), mail_pipeline_max_batch=max_batch
+        mail_ignore_labels=tuple(labels),
+        mail_pipeline_max_batch=max_batch,
+        mail_pipeline_instructions=instructions,
     )
     calls = {"asked": [], "delivered": []}
 
@@ -454,3 +464,19 @@ def test_pipeline_action_round_trips_through_ledger_yaml(hb_cfg):
         "pipeline"
         not in heartbeat._action_from_dict({**raw, "pipeline": None}).to_dict()
     )
+
+
+def test_pipeline_instructions_appended_to_system(monkeypatch):
+    ctx, calls = _ctx(monkeypatch, instructions="Acme is urgent.")
+    _stub_mail(monkeypatch, [{"id": "1", "mailbox_ids": []}])
+    asyncio.run(mail_pipeline.run(ctx))
+    assert calls["asked"][0]["system"] == (
+        mail_pipeline.SYSTEM + "\n\nUser's mail rules:\nAcme is urgent."
+    )
+
+
+def test_pipeline_system_unchanged_without_instructions(monkeypatch):
+    ctx, calls = _ctx(monkeypatch)
+    _stub_mail(monkeypatch, [{"id": "1", "mailbox_ids": []}])
+    asyncio.run(mail_pipeline.run(ctx))
+    assert calls["asked"][0]["system"] == mail_pipeline.SYSTEM

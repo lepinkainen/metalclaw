@@ -54,7 +54,7 @@ Acknowledgment is **per batch**: `delivered` = the id was in a batch whose summa
 
 ## Config (`config.py`)
 
-`heartbeat_pipelines: tuple[PipelineAction, ...]`, `mail_ignore_labels: tuple[str, ...]`, `mail_pipeline_max_batch: int = 50`. See `config.md`.
+`heartbeat_pipelines: tuple[PipelineAction, ...]`, `mail_ignore_labels: tuple[str, ...]`, `mail_pipeline_max_batch: int = 50`, `mail_pipeline_instructions: str = ""` (appended to `SYSTEM` as "User's mail rules"). See `config.md`.
 
 ## `/status` (`frontends/common.format_status`)
 
@@ -68,6 +68,8 @@ After the heartbeat actions: `pipelines: N configured` then one line per config 
 4. Tests: `tests/test_pipelines.py` has the pattern (`_ctx` builds a context with stubbed `ask_model`/`deliver`).
 
 ## Gotchas
+
+- Pipelines run inside the heartbeat tick (`heartbeat.run` sleeps `heartbeat_interval_seconds` between ticks, default 1800), so a pipeline's `every` is effectively `max(every, heartbeat_interval_seconds)`: `every: 5m` needs `heartbeat_interval_seconds: 300`. Ticks are cheap (non-due actions cost no model call). `heartbeat_active_hours` gates pipelines too; the first tick inside the window picks up the overnight backlog.
 
 - `pipelines.mail` imports `heartbeat.strip_sentinel` lazily inside `run` (heartbeat imports `pipelines` lazily too) — keep both lazy.
 - Config pipeline actions have `created_at=""`; nothing reads it for them, but don't start.

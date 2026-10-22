@@ -52,6 +52,7 @@
 | `heartbeat_pipelines` | `tuple[PipelineAction, ...]` | `()` | Scheduled watcher pipelines (`pipelines.md`). Each: `pipeline` (registry name), exactly one of `every` (int seconds or `"5m"`) / `schedule` `{days,time,timezone}`, optional `channel` (falls back to `heartbeat_default_channel`), optional `id` (default `pipeline-<name>`). `extra="forbid"`. A dict is coerced to a one-tuple. Schedule errors are logged and the entry skipped (`heartbeat.config_pipeline_actions`). |
 | `mail_ignore_labels` | `tuple[str, ...]` | `()` | Fastmail mailbox names or `Parent/Child` paths (case-insensitive) dropped by the mail pipeline before the model. A bare string is coerced to a one-tuple. Unknown names warn and are ignored. |
 | `mail_pipeline_max_batch` | `int` | `50` | Mails per model call in the mail pipeline; applied **after** label+ledger filtering, oldest first. |
+| `mail_pipeline_instructions` | `str` | `""` | Free-text rules appended to the mail pipeline system prompt (`User's mail rules:`). |
 
 ### `McpServer` (`extra="forbid"` — typo keys fail, unlike `Config`)
 
