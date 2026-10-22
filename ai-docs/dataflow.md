@@ -107,7 +107,7 @@ run_tick()
          ├─ await channel.notify(scope, clean)           # raises on non-delivery → mark_failure
          └─ mark_success(id, now); kind=at → _archive_with_lock(id, now)
     ▼
-prune_state(active ∪ completed ids)                   # drop orphan rows; no bulk save
+_expire_completed_with_lock(now)                      # trim yaml completed: >7d; state rows kept; no bulk save
 ```
 
 ## 4. Memory write + immediate read

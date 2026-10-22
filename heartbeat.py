@@ -62,6 +62,7 @@ _LEDGER_VERSION = 1
 _LEDGER_FILENAME = "heartbeat.yaml"
 _LEDGER_LOCK_FILENAME = "heartbeat.yaml.lock"
 _COMPLETED_CAP = 50
+_COMPLETED_MAX_AGE = timedelta(days=7)
 _INTERVAL_RE = re.compile(r"^\s*(\d+)\s*([smhd])\s*$", re.IGNORECASE)
 _WEEKDAYS = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
 _TIME_RE = re.compile(r"^([01]?\d|2[0-3]):([0-5]\d)$")
@@ -413,7 +414,9 @@ def cancel(action_id: str) -> HeartbeatAction | None:
                 removed = ledger.actions.pop(i)
                 _write_ledger_locked(ledger)
                 log.info("heartbeat action cancelled id=%s", action_id)
-                forget_state(action_id)
+                history_db.heartbeat_merge_meta(
+                    action_id, _meta_for(removed, cancelled_at=_now_iso())
+                )
                 return removed
         return None
 
@@ -502,7 +505,7 @@ def _meta_for(action: HeartbeatAction, **extra: Any) -> dict[str, Any]:
     meta: dict[str, Any] = {
         "kind": str(action.kind),
         "channel": action.channel,
-        "prompt": action.prompt[:120],
+        "prompt": action.prompt,
     }
     if action.pipeline:
         meta["pipeline"] = action.pipeline
@@ -546,19 +549,6 @@ def mark_failure(
         now.isoformat(),
         _meta_for(action, last_outcome="failed", last_error=reason[:500], **extra),
     )
-
-
-def forget_state(action_id: str) -> None:
-    """Drop the state row (cancel / archive-eviction) so a reused id starts clean."""
-    history_db.heartbeat_state_forget(action_id)
-
-
-def prune_state(keep: set[str]) -> int:
-    """Remove rows whose action is neither active nor in ``completed``."""
-    removed = history_db.heartbeat_state_prune(keep)
-    if removed:
-        log.info("heartbeat state pruned %d orphan row(s)", removed)
-    return removed
 
 
 # One-time migration of the pre-SQLite ``heartbeat_state.json``. Accepts the
@@ -892,7 +882,7 @@ async def _run_pipeline_action(action: HeartbeatAction, now: datetime) -> str:
                 action.pipeline,
                 action.id,
                 started.isoformat(),
-                datetime.now(UTC).isoformat(),
+                _now_iso(),
                 outcome,
                 error,
                 trace.as_rows(),
@@ -1151,16 +1141,10 @@ async def _run_tick_locked(*, now: datetime | None = None) -> dict[str, str]:
         if action.kind == ActionKind.AT:
             await asyncio.to_thread(_archive_with_lock, action.id, now)
 
-    # Orphan rows (cancelled, or archived then evicted past _COMPLETED_CAP)
-    # would otherwise make a reused id look "already run" forever.
     try:
-        ledger_now = await asyncio.to_thread(load_ledger)
-        keep = {a.id for a in ledger_now.actions}
-        keep.update(str(c.get("id", "")) for c in ledger_now.completed)
-        keep.update(a.id for a in pipeline_actions)
-        await asyncio.to_thread(prune_state, keep)
+        await asyncio.to_thread(_expire_completed_with_lock, now)
     except Exception:
-        log.exception("heartbeat state prune failed")
+        log.exception("heartbeat completed expiry failed")
     log.info(
         "heartbeat tick end: total=%d due=%d ran=%d suppressed=%d notified=%d failed=%d backoff=%d duration=%.2fs",
         len(all_actions),
@@ -1184,8 +1168,33 @@ def _archive_with_lock(action_id: str, now: datetime) -> None:
                 removed = ledger.actions.pop(i)
                 _archive_completed(removed, ledger, completed_at)
                 _write_ledger_locked(ledger)
+                history_db.heartbeat_merge_meta(
+                    action_id, _meta_for(removed, completed_at=completed_at)
+                )
                 log.info("heartbeat action %s archived to completed", action_id)
                 return
+
+
+def _expire_completed_with_lock(now: datetime) -> int:
+    cutoff = now - _COMPLETED_MAX_AGE
+    with _ledger_lock():
+        ledger = _read_ledger_locked()
+        keep: list[dict] = []
+        dropped: list[str] = []
+        for c in ledger.completed:
+            try:
+                old = parse_iso(str(c["completed_at"])) < cutoff
+            except KeyError, ValueError:
+                old = False
+            if old:
+                dropped.append(str(c.get("id", "")))
+            else:
+                keep.append(c)
+        if dropped:
+            ledger.completed = keep
+            _write_ledger_locked(ledger)
+            log.info("heartbeat expired completed actions: %s", ", ".join(dropped))
+        return len(dropped)
 
 
 # --- System-prompt summary ---

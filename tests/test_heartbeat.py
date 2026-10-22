@@ -227,16 +227,51 @@ def test_state_meta_survives_corrupt_json(cfg):
     assert st is not None and st.meta["last_error"] == "x"
 
 
-def test_forget_and_prune_state(cfg):
+def test_cancel_keeps_row_with_cancelled_at(cfg):
+    a = heartbeat.create_action(
+        kind=heartbeat.ActionKind.EVERY,
+        prompt="p" * 200,
+        every=60,
+        channel="telegram-1",
+        created_from=None,
+    )
+    heartbeat.mark_success(a, datetime.now(UTC))
+    heartbeat.cancel(a.id)
+    st = heartbeat.get_state(a.id)
+    assert (
+        st is not None and "cancelled_at" in st.meta and st.meta["prompt"] == "p" * 200
+    )
+    assert st.last_run is not None
+
+
+def test_cancel_never_run_creates_bare_row(cfg):
+    a = heartbeat.create_action(
+        kind=heartbeat.ActionKind.EVERY,
+        prompt="p",
+        every=60,
+        channel="telegram-1",
+        created_from=None,
+    )
+    heartbeat.cancel(a.id)
+    st = heartbeat.get_state(a.id)
+    assert st is not None and st.last_run is None and "cancelled_at" in st.meta
+
+
+def test_archive_sets_completed_at_and_tick_keeps_orphan_rows(cfg):
     now = datetime.now(UTC)
-    for aid in ("a1", "b2", "c3"):
-        heartbeat.mark_success(_every(action_id=aid), now)
-    heartbeat.forget_state("a1")
-    assert set(heartbeat.load_state()) == {"b2", "c3"}
-    assert heartbeat.prune_state({"c3"}) == 1
-    assert set(heartbeat.load_state()) == {"c3"}
-    assert heartbeat.prune_state(set()) == 1
-    assert heartbeat.load_state() == {}
+    heartbeat.mark_success(_every(action_id="orphan"), now)
+    a = heartbeat.create_action(
+        kind=heartbeat.ActionKind.EVERY,
+        prompt="p",
+        every=60,
+        channel="telegram-1",
+        created_from=None,
+    )
+    heartbeat._archive_with_lock(a.id, now)
+    st = heartbeat.get_state(a.id)
+    assert st is not None and st.meta["completed_at"] == now.isoformat()
+    asyncio.run(heartbeat.run_tick(now=now))
+    assert heartbeat.get_state("orphan") is not None
 
 
 def test_backoff_seconds_doubles_and_caps(cfg):
@@ -284,7 +319,7 @@ def test_legacy_json_state_is_migrated(cfg, payload):
     assert set(heartbeat.load_state()) == set(st)
 
 
-def test_cancel_forgets_state(cfg):
+def test_cancel_keeps_state(cfg):
     a = heartbeat.create_action(
         kind=heartbeat.ActionKind.EVERY,
         prompt="poll",
@@ -295,7 +330,7 @@ def test_cancel_forgets_state(cfg):
     heartbeat.mark_success(a, datetime.now(UTC))
     assert a.id in heartbeat.load_state()
     heartbeat.cancel(a.id)
-    assert a.id not in heartbeat.load_state()
+    assert a.id in heartbeat.load_state()
 
 
 def test_generate_id_skips_ids_with_state(cfg, monkeypatch):
@@ -313,12 +348,12 @@ def test_generate_id_skips_ids_with_state(cfg, monkeypatch):
     assert a.id == "bbbbbb"
 
 
-def test_run_tick_prunes_orphan_state(cfg):
+def test_run_tick_keeps_orphan_state(cfg):
     heartbeat.mark_success(_every(action_id="orphan"), datetime.now(UTC))
     channels.register(_StubChannel())
     with patch("chat_loop.chat", return_value="HEARTBEAT_OK"):
         asyncio.run(heartbeat.run_tick())
-    assert "orphan" not in heartbeat.load_state()
+    assert "orphan" in heartbeat.load_state()
 
 
 # --- due logic ---
@@ -524,6 +559,31 @@ def test_run_tick_one_shot_archives_after_notify(cfg):
     assert ledger.actions == []
     assert len(ledger.completed) == 1
     assert ledger.completed[0]["kind"] == "at"
+
+
+def _seed_completed(ages_days):
+    now = datetime.now(UTC)
+    with heartbeat._ledger_lock():
+        ledger = heartbeat._read_ledger_locked()
+        ledger.completed = [
+            {"id": f"old{d}", "completed_at": (now - timedelta(days=d)).isoformat()}
+            for d in ages_days
+        ]
+        heartbeat._write_ledger_locked(ledger)
+    return now
+
+
+def test_expire_completed_drops_old_keeps_recent(cfg):
+    now = _seed_completed([8, 1])
+    assert heartbeat._expire_completed_with_lock(now) == 1
+    assert [c["id"] for c in heartbeat.load_ledger().completed] == ["old1"]
+
+
+def test_expire_completed_noop_does_not_rewrite(cfg):
+    now = _seed_completed([1])
+    with patch.object(heartbeat, "_write_ledger_locked") as w:
+        assert heartbeat._expire_completed_with_lock(now) == 0
+    w.assert_not_called()
 
 
 def test_run_tick_one_shot_kept_when_notify_fails(cfg):

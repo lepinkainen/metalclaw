@@ -378,30 +378,19 @@ def heartbeat_mark_failure(action_id: str, failed_at: str, meta: dict) -> int:
         return int(row[0])
 
 
-def heartbeat_state_forget(action_id: str) -> bool:
+def heartbeat_merge_meta(action_id: str, meta: dict) -> None:
+    """Merge ``meta`` into the row (creating a bare one if absent); run/failure fields untouched."""
     with _LOCK:
         db = _conn()
-        cur = db.execute(
-            "DELETE FROM heartbeat_state WHERE action_id = ?", (action_id,)
+        merged = _merge_meta(db, action_id, meta)
+        db.execute(
+            "INSERT INTO heartbeat_state (action_id, failure_count, updated_at, meta)"
+            " VALUES (?, 0, ?, ?)"
+            " ON CONFLICT(action_id) DO UPDATE SET"
+            "  updated_at = excluded.updated_at, meta = excluded.meta",
+            (action_id, _now(), merged),
         )
         db.commit()
-        return cur.rowcount > 0
-
-
-def heartbeat_state_prune(keep: set[str]) -> int:
-    """Delete rows for ids not in ``keep``. Returns the number removed."""
-    with _LOCK:
-        db = _conn()
-        if keep:
-            placeholders = ",".join("?" * len(keep))
-            cur = db.execute(
-                f"DELETE FROM heartbeat_state WHERE action_id NOT IN ({placeholders})",
-                tuple(sorted(keep)),
-            )
-        else:
-            cur = db.execute("DELETE FROM heartbeat_state")
-        db.commit()
-        return cur.rowcount
 
 
 def heartbeat_state_import(rows: list[HeartbeatStateRow]) -> int:

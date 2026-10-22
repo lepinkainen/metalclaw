@@ -89,7 +89,7 @@ def test_run_tick_ledger_and_state_io_runs_off_the_loop_thread(cfg, monkeypatch)
 
         monkeypatch.setattr(heartbeat, name, wrapped)
 
-    for name in ("load_state", "load_ledger", "mark_success", "prune_state"):
+    for name in ("load_state", "load_ledger", "mark_success"):
         spy(name)
 
     async def fake_run_action(action, now, chat, build_system_prompt):
@@ -99,6 +99,6 @@ def test_run_tick_ledger_and_state_io_runs_off_the_loop_thread(cfg, monkeypatch)
         result = asyncio.run(heartbeat.run_tick())
 
     assert list(result.values()) == ["all good, notify"]
-    for name in ("load_state", "load_ledger", "mark_success", "prune_state"):
+    for name in ("load_state", "load_ledger", "mark_success"):
         assert name in threads, f"{name} never called"
         assert _main_thread() not in threads[name], f"{name} ran on the loop thread"
