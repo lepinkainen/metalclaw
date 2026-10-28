@@ -2,7 +2,7 @@
 
 Ideas below are based on what's already in the repo plus what I know about your setup from vault memory (homelab, Jellyfin, hovimestari, hermes, and so on).
 
-Legend: `[x]` done, `[~]` partially done, `[ ]` not started. Status last reviewed 2026-10-20.
+Legend: `[x]` done, `[~]` partially done, `[ ]` not started. Status last reviewed 2026-10-27.
 
 Standard agent features
 
@@ -37,7 +37,7 @@ Homelab / media
 
 Finnish life
 
-- [ ] Wilma extensions. Schedule, exams, homework and absences, not just messages. A morning heartbeat could cover "kids' day today".
+- [~] Wilma extensions. Schedule, exams, homework and absences, not just messages. A morning heartbeat could cover "kids' day today". *Done: bulletins (tiedotteet) via `list_wilma_news` / `read_wilma_news`, and `check_new_mail` hints both Wilma email kinds. Not done: schedule, exams, homework, absences, morning heartbeat.*
 - [ ] Föli/HSL/Nysse (whichever applies). Local bus departures next to the existing VR trains tool. Digitransit is one GraphQL API for all of Finland.
 - [ ] FMI weather warnings. The Finnish Meteorological Institute has open data, which is better than generic weather for warnings.
 - [ ] Electricity spot price (porssisahko.net / ENTSO-E). "Cheapest 3h window tonight for the sauna/EV/dishwasher." A heartbeat can alert when the price spikes.
@@ -67,7 +67,7 @@ Added 2026-10-21
 Follow-through and household tasks
 
 - [ ] Waiting-for tracking. "I emailed the plumber. Remind me Friday if they haven't replied." Track unresolved items, check for a response, and close them when resolved rather than sending an unconditional reminder.
-- [ ] Alerts only when something changes. "Tell me when this failing workflow passes." Persist the previous result and notify on changes, with cooldowns and recovery notices to keep heartbeat checks quiet.
+- [~] Alerts only when something changes. "Tell me when this failing workflow passes." Persist the previous result and notify on changes, with cooldowns and recovery notices to keep heartbeat checks quiet. *Done for mail only: the `reported_items` ledger behind the mail pipeline makes each unread mail fire once. Not done: generic previous-result persistence, cooldowns, recovery notices for model-driven heartbeat actions.*
 - [ ] Reminder buttons. Add Done, Snooze 30 min, and Tomorrow buttons in Telegram and Discord. Let reminders remain open until acknowledged.
 - [ ] Shopping and errand lists. "Add coffee." "What do I need to buy?" Keep structured lists with check-off and duplicate detection, separate from free-form inbox capture.
 - [ ] Follow-up extraction from mail and Wilma. "What do I need to act on this week?" Extract deadlines, permission requests, things to bring, and payments into a proposed task list with links to the source messages.
