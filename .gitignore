@@ -47,3 +47,7 @@ dmypy.json
 
 # OS files
 .DS_Store
+
+# Local eval data (private mail)
+eval/emails/
+eval/results/
