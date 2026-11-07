@@ -670,7 +670,7 @@ class RecentWarnings(logging.Handler):
         self.records: collections.deque[str] = collections.deque(maxlen=maxlen)
 
     def emit(self, record: logging.LogRecord) -> None:
-        ts = datetime.fromtimestamp(record.created).strftime("%H:%M:%S")
+        ts = datetime.fromtimestamp(record.created).strftime("%Y-%m-%d %H:%M:%S")
         self.records.append(
             f"{ts} {record.levelname} {record.name}: {record.getMessage()}"
         )
