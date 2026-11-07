@@ -5,4 +5,5 @@ useDefault = true
 paths = [
   '''^\.envrc$''',
   '''^config\.yaml$''',
+  '''^eval/(emails|results)/''',
 ]
