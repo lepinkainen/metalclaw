@@ -257,10 +257,14 @@ def start(servers: tuple[McpServer, ...]) -> None:
         except Exception as e:
             if isinstance(e, TimeoutError):
                 e = TimeoutError(f"no handshake after {s.startup_timeout_seconds:g}s")
-            st.status, st.error = "down", repr(e)
+            leaf: BaseException = e
+            while isinstance(leaf, BaseExceptionGroup) and len(leaf.exceptions) == 1:
+                leaf = leaf.exceptions[0]  # anyio TaskGroups nest the real error
+            st.status, st.error = "down", repr(leaf)
             if st.task is not None:
                 st.task.cancel()
-            log.warning("mcp: %s failed to start: %r", s.name, e, exc_info=True)
+            log.warning("mcp: %s failed to start: %r", s.name, leaf)
+            log.debug("mcp: %s startup traceback", s.name, exc_info=e)
             continue
         st.status = "up"
         log.info(
