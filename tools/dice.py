@@ -15,6 +15,7 @@ class _RollDieArgs(BaseModel):
 @tool(
     description="Roll a die with the specified number of sides (e.g. 6 for a standard die, 20 for a d20).",
     args=_RollDieArgs,
+    parallel_safe=True,
 )
 def roll_die(sides: int) -> str:
     result = random.randint(1, sides)

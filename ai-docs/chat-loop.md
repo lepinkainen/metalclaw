@@ -63,18 +63,27 @@ Loop body:
      signature = tuple((tc.name, json.dumps(tc.arguments, sort_keys=True)) for tc in am.tool_calls)
      repeat_count = repeat_count+1 if signature == last_signature else 1
      stuck = repeat_count >= cfg.max_repeated_tool_calls   # default 3
-     for each tc in am.tool_calls:
+     parallel = len(calls) > 1 and not stuck and every TOOLS[tc.name].parallel_safe
+     if parallel:   # see "Parallel tool rounds" below
+         futures = [_TOOL_POOL.submit(copy_context().run, _run_tool, tc.name, tc.arguments) ...]
+         results = [_finish(tc, f.result(), elapsed) for tc, f in zip(calls, futures)]   # call order
+     else:
+       for each tc in am.tool_calls:
          if stuck: result = "Error: you have already called X with these exact arguments N times ... answer the user now"
          else:     result = _run_tool(tc.name, tc.arguments)   # catches Exception → "Error: ..."
-         result_json = json.dumps(result, ensure_ascii=False)
-         on_tool_call?(tc.name, tc.arguments, result_json[:120])
-         if tc.name in _MEMORY_MUTATORS: memory_dirty = True
-     work.append_exchange(am, [ToolResultMessage(tc.id, tc.name, result_json) ...])  # validates ids
-     if memory_dirty:
+         results.append(_finish(tc, result, elapsed))
+     # _finish (local helper): result_json = _tool_result_json(result); failed check; log;
+     #   on_tool_call?(tc.name, tc.arguments, result_json); return ToolResultMessage(tc.id, tc.name, result_json)
+     work.append_exchange(am, results)  # validates ids
+     if any(tc.name in _MEMORY_MUTATORS for tc in am.tool_calls):
          work.system = build_system_prompt(now, history_trimmed=session.history_trimmed)   # rebuild so model sees its own writes; keeps the archived-history note (#50)
 ```
 
 `commit` adopts `work.system` too, so a mid-loop rebuilt system prompt is what the next turn starts from (until `_refresh_system_prompt` replaces it).
+
+### Parallel tool rounds (issue #56)
+
+A round runs concurrently only if it has more than one call, is not `stuck`, and every called name exists in `TOOLS` with `parallel_safe=True` (list in `tools.md`); otherwise the sequential loop runs unchanged. Calls go to the module-level `_TOOL_POOL` (`ThreadPoolExecutor(max_workers=4, thread_name_prefix="tool")`), each wrapped in its own fresh `contextvars.copy_context().run` so `current_scope` / `_active_session` reach the worker (threads do not inherit ContextVars). Results are collected in `am.tool_calls` order, not completion order; `_run_tool` already turns exceptions into `Error: ...` so one failure never drops another result. Post-processing (`_finish`: JSON, failed check, logging, `on_tool_call`, `ToolResultMessage`) runs afterwards on the loop thread in call order, so `ToolStatusReporter` output is stable. The logged per-call duration in the parallel path is the round's wall time. Tests: `tests/test_parallel_tools.py`.
 
 ### Runaway-loop guards (issue #30)
 

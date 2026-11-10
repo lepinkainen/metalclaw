@@ -46,6 +46,7 @@ class _TrainDeparturesArgs(BaseModel):
 @tool(
     description="Get the next departing trains from a Finnish railway station by name. Can optionally filter by commuter line letter such as R, I, K, or Z.",
     args=_TrainDeparturesArgs,
+    parallel_safe=True,
 )
 def train_departures(
     station: str, count: int = 5, line: str | None = None

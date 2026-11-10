@@ -79,6 +79,7 @@ class _WeatherArgs(BaseModel):
 @tool(
     description="Get the weather for a location: current conditions, today's forecast, and tomorrow's forecast. Accepts a city name or place.",
     args=_WeatherArgs,
+    parallel_safe=True,
 )
 def weather(location: str) -> dict[str, Any]:
     log.info("weather location=%r", location)

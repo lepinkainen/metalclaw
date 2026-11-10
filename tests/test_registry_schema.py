@@ -1,5 +1,8 @@
+import json
+
 from pydantic import BaseModel, Field
 
+import registry
 from registry import _EMPTY_PARAMETERS, _schema_from_model, tool
 
 
@@ -123,3 +126,20 @@ def test_create_heartbeat_action_schedule_is_self_contained():
     sched = params["properties"]["schedule"]
     assert "$ref" not in repr(params)
     assert set(sched["properties"]) == {"days", "time", "timezone"}
+
+
+def test_parallel_safe_defaults_false_and_stays_out_of_schema(monkeypatch):
+    monkeypatch.setattr(registry, "TOOLS", dict(registry.TOOLS))
+
+    @tool(description="plain")
+    def _plain() -> str:
+        return ""
+
+    @tool(description="read-only", parallel_safe=True)
+    def _ro() -> str:
+        return ""
+
+    assert registry.TOOLS["_plain"].parallel_safe is False
+    assert registry.TOOLS["_ro"].parallel_safe is True
+    for name in ("_plain", "_ro"):
+        assert "parallel_safe" not in json.dumps(registry.TOOLS[name].schema)

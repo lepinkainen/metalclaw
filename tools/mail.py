@@ -447,6 +447,7 @@ class _ListEmailsArgs(BaseModel):
         "rank by source (e.g. Newsletters vs Work)."
     ),
     args=_ListEmailsArgs,
+    parallel_safe=True,
 )
 def list_emails(
     mailbox: str = "inbox",
@@ -544,6 +545,7 @@ class _ReadEmailArgs(BaseModel):
         "(name, type, size, blob_id, cid). Image bytes are not fetched."
     ),
     args=_ReadEmailArgs,
+    parallel_safe=True,
 )
 def read_email(email_id: str) -> dict[str, Any]:
     log.info("read_email id=%s", email_id)
@@ -893,6 +895,7 @@ def _resolve_bot_label(segments: list[str], create: bool) -> str:
         "List all Fastmail labels (mailboxes) with full path, role, total and unread counts. "
         "Read-only. Labels you may add/remove live under 'bot/'."
     ),
+    parallel_safe=True,
 )
 def list_email_labels() -> list[dict[str, Any]]:
     mbs = _fm_mailboxes()
