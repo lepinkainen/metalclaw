@@ -127,6 +127,10 @@ heartbeat_interval_seconds: 1800
 # After an action's run or delivery fails, retries back off exponentially
 # (interval, 2x, 4x, ...) up to this cap. Clears on the next success.
 # heartbeat_failure_backoff_max_seconds: 3600
+# Upper bound on a single action's (or pipeline's) run within a tick, so one
+# slow action cannot stall the others. A timeout counts as a failed run (the
+# action stays active and backs off). 0 disables.
+# heartbeat_action_timeout_seconds: 300
 
 # Watcher pipelines (ai-docs/mail-pipeline-plan.md): code-driven checks that
 # poll an API cheaply, filter deterministically and call the model only when

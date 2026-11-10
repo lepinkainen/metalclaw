@@ -1,5 +1,7 @@
 import asyncio
 import json
+import threading
+import time
 from datetime import UTC, datetime, timedelta
 from unittest.mock import patch
 from zoneinfo import ZoneInfo
@@ -1036,3 +1038,124 @@ def test_spawn_tick_keeps_reference_until_done(cfg):
         assert not heartbeat.is_tick_running()
 
     asyncio.run(scenario())
+
+
+# --- per-action timeout ---
+
+
+def _set_action_timeout(tmp_path, write_config, seconds):
+    write_config(
+        tmp_path / "config.yaml",
+        vault_path=str(tmp_path / "vault"),
+        memory_subdir="Mem",
+        heartbeat_interval_seconds=60,
+        heartbeat_default_channel="cli",
+        heartbeat_action_timeout_seconds=seconds,
+    )
+    config.reset_cache()
+
+
+def _tick_then_release(release):
+    """Run one tick, then free the abandoned worker thread *inside* the loop:
+    ``asyncio.run`` joins the default executor on exit, so releasing after it
+    returns would make the test wait out the blocked thread."""
+
+    async def scenario():
+        t0 = time.monotonic()
+        try:
+            return await heartbeat.run_tick(), time.monotonic() - t0
+        finally:
+            release.set()
+
+    try:
+        return asyncio.run(scenario())
+    finally:
+        release.set()
+
+
+def test_run_tick_action_timeout_marks_failure(cfg, tmp_path, write_config):
+    _set_action_timeout(tmp_path, write_config, 1)
+    heartbeat.create_action(
+        kind=heartbeat.ActionKind.EVERY,
+        prompt="poll",
+        channel="cli",
+        created_from="cli",
+        every=1,
+    )
+    ch = _StubChannel()
+    channels.register(ch)
+    release = threading.Event()
+
+    def blocking_chat(session, **_):
+        release.wait(10)
+        return "ALERT"
+
+    with patch("chat_loop.chat", side_effect=blocking_chat):
+        replies, elapsed = _tick_then_release(release)
+    assert elapsed < 3
+    assert replies == {}
+    assert ch.calls == []
+    (row,) = heartbeat.load_state().values()
+    assert row.failure_count == 1
+    assert row.last_run is None
+    assert row.meta["last_error"] == "timed out after 1s"
+
+
+def test_run_tick_timeout_does_not_block_next_action(cfg, tmp_path, write_config):
+    _set_action_timeout(tmp_path, write_config, 1)
+    slow = heartbeat.create_action(
+        kind=heartbeat.ActionKind.EVERY,
+        prompt="slow",
+        channel="cli",
+        created_from="cli",
+        every=1,
+    )
+    fast = heartbeat.create_action(
+        kind=heartbeat.ActionKind.EVERY,
+        prompt="fast",
+        channel="cli",
+        created_from="cli",
+        every=1,
+    )
+    ch = _StubChannel()
+    channels.register(ch)
+    release = threading.Event()
+
+    def chat(session, **_):
+        if "slow" in session.history[-1].content:
+            release.wait(10)
+            return "SLOW ALERT"
+        return "FAST ALERT"
+
+    with patch("chat_loop.chat", side_effect=chat):
+        replies, _ = _tick_then_release(release)
+    assert replies == {fast.id: "FAST ALERT"}
+    assert ch.calls == [("cli", "FAST ALERT")]
+    st = heartbeat.load_state()
+    assert st[slow.id].failure_count == 1
+    assert st[fast.id].failure_count == 0
+
+
+def test_run_tick_timeout_zero_disables(cfg, tmp_path, write_config):
+    _set_action_timeout(tmp_path, write_config, 0)
+    heartbeat.create_action(
+        kind=heartbeat.ActionKind.EVERY,
+        prompt="poll",
+        channel="cli",
+        created_from="cli",
+        every=1,
+    )
+    ch = _StubChannel()
+    channels.register(ch)
+
+    def short_blocking_chat(session, **_):
+        time.sleep(0.2)
+        return "ALERT"
+
+    with (
+        patch("chat_loop.chat", side_effect=short_blocking_chat),
+        patch("asyncio.wait_for", side_effect=AssertionError("timeout applied")),
+    ):
+        replies = asyncio.run(heartbeat.run_tick())
+    assert list(replies.values()) == ["ALERT"]
+    assert ch.calls == [("cli", "ALERT")]

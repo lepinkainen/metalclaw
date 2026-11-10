@@ -152,6 +152,8 @@ class Config(BaseModel):
     heartbeat_active_hours: tuple[int, int] | None = None
     heartbeat_default_channel: str | None = None
     heartbeat_failure_backoff_max_seconds: int = 3600
+    # Upper bound on one action's run within a tick. 0 disables.
+    heartbeat_action_timeout_seconds: int = 300
     vault_search_excludes: tuple[str, ...] = ()
     allow_self_modification: bool = False
     show_tool_calls: bool = True
