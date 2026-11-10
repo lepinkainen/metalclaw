@@ -181,7 +181,7 @@ def test_telegram_debounces_messages_into_one_turn(cfg_file, write_config, monke
     async def fake_typing(*_):
         yield
 
-    monkeypatch.setattr(tg, "run_turn", fake_run_turn)
+    monkeypatch.setattr(common, "run_turn", fake_run_turn)
     monkeypatch.setattr(tg, "_tg_reply", fake_reply)
     monkeypatch.setattr(tg, "_typing", fake_typing)
     monkeypatch.setattr(tg, "_tool_status_for", lambda *_: None)

@@ -13,9 +13,6 @@ import history
 from chat_loop import (
     Session,
     _parse_command,
-    chat,
-    run_turn,
-    scoped_chat,
 )
 from config import get_config
 from frontends import common
@@ -363,26 +360,14 @@ async def _discord_handle_message(
 async def _run_text_turn(channel_id: int, text: str, message: discord.Message) -> None:
     """One chat turn for ``text``; replies in the channel of the latest message."""
     async with _session_lock(channel_id):
-        scope = _discord_scope_for(channel_id)
-        messages = await asyncio.to_thread(Session.load, scope)
-        on_tool = _tool_status_for(message.channel)
-        try:
-            async with message.channel.typing():
-                _, _, clean_reply = await run_turn(
-                    messages,
-                    text,
-                    lambda: scoped_chat(
-                        scope, lambda: chat(messages, on_tool_call=on_tool)
-                    ),
-                )
-        except Exception as e:
-            log.exception("discord: turn failed channel_id=%d", channel_id)
-            await _discord_send(message.channel, f"Error: {e}")
-            return
-        if on_tool is not None:
-            await on_tool.drain()
-        log.info("discord: reply channel_id=%d len=%d", channel_id, len(clean_reply))
-        await _discord_send(message.channel, clean_reply)
+        await common.run_text_turn(
+            frontend="discord",
+            scope=_discord_scope_for(channel_id),
+            text=text,
+            send=_send_for(message.channel),
+            typing=message.channel.typing,
+            on_tool=_tool_status_for(message.channel),
+        )
 
 
 _debouncer = common.Debouncer(_run_text_turn)

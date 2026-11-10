@@ -26,9 +26,6 @@ import telegram_format
 from chat_loop import (
     Session,
     _parse_command,
-    chat,
-    run_turn,
-    scoped_chat,
 )
 from config import get_config, xdg_data_dir
 from frontends import common
@@ -403,26 +400,14 @@ async def _run_text_turn(chat_id: int, text: str, ctx: tuple) -> None:
     """One chat turn for ``text``; replies to the latest message's ``update``."""
     update, context = ctx
     async with _chat_lock(chat_id):
-        scope = _telegram_scope_for(chat_id)
-        messages = await asyncio.to_thread(Session.load, scope)
-        on_tool = _tool_status_for(chat_id, context.bot)
-        try:
-            async with _typing(chat_id, context.bot):
-                _, _, clean_reply = await run_turn(
-                    messages,
-                    text,
-                    lambda: scoped_chat(
-                        scope, lambda: chat(messages, on_tool_call=on_tool)
-                    ),
-                )
-        except Exception as e:
-            log.exception("telegram: turn failed chat_id=%d", chat_id)
-            await _tg_reply(update, f"Error: {e}")
-            return
-        if on_tool is not None:
-            await on_tool.drain()
-        log.info("telegram: reply chat_id=%d len=%d", chat_id, len(clean_reply))
-        await _tg_reply(update, clean_reply)
+        await common.run_text_turn(
+            frontend="telegram",
+            scope=_telegram_scope_for(chat_id),
+            text=text,
+            send=_send_for(update),
+            typing=lambda: _typing(chat_id, context.bot),
+            on_tool=_tool_status_for(chat_id, context.bot),
+        )
 
 
 _debouncer = common.Debouncer(_run_text_turn)

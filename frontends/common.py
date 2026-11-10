@@ -17,6 +17,7 @@ are re-exported here so ``common.X`` call sites keep working.
 import asyncio
 import logging
 from collections.abc import Awaitable, Callable, Hashable
+from contextlib import AbstractAsyncContextManager
 from pathlib import Path
 from typing import Any
 
@@ -24,7 +25,7 @@ import heartbeat
 import live_tool
 import memory
 import self_change
-from chat_loop import Session, chat_via_escalation, run_turn, scoped_chat
+from chat_loop import Session, chat, chat_via_escalation, run_turn, scoped_chat
 from config import get_config
 from frontends.commands import (
     ALL_FRONTENDS,
@@ -113,6 +114,7 @@ __all__ = [
     "run_reject",
     "run_remember",
     "run_status",
+    "run_text_turn",
     "run_usage",
     "split_message",
     "telegram_bot_commands",
@@ -354,6 +356,39 @@ async def run_big(
     log.info("/big reply %d chars", len(clean_reply))
     if isinstance(on_tool_call, ToolStatusReporter):
         await on_tool_call.drain()
+    await send(clean_reply)
+
+
+async def run_text_turn(
+    *,
+    frontend: str,
+    scope: str,
+    text: str,
+    send: SendFn,
+    typing: Callable[[], AbstractAsyncContextManager[Any]],
+    on_tool: ToolStatusReporter | None,
+) -> None:
+    """One plain chat turn for ``text`` in ``scope`` (Telegram + Discord).
+
+    Loads the persisted session, runs the turn inside ``typing()``, sends the
+    reply (or ``Error: ...``) through ``send``. ``frontend`` only labels log
+    lines. The caller holds its per-chat lock around this call.
+    """
+    session = await asyncio.to_thread(Session.load, scope)
+    try:
+        async with typing():
+            _, _, clean_reply = await run_turn(
+                session,
+                text,
+                lambda: scoped_chat(scope, lambda: chat(session, on_tool_call=on_tool)),
+            )
+    except Exception as e:
+        log.exception("%s: turn failed scope=%s", frontend, scope)
+        await send(f"Error: {e}")
+        return
+    if on_tool is not None:
+        await on_tool.drain()
+    log.info("%s: reply scope=%s len=%d", frontend, scope, len(clean_reply))
     await send(clean_reply)
 
 
