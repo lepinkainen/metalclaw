@@ -53,9 +53,18 @@ Per-module symbol map. `→` = imports. `←` = imported by.
 
 ## heartbeat.py — scheduler
 
-- Public: `run(stop)`, `run_tick(*, now=None)`, `load_ledger()`, `create_action(...)`, `list_active()`, `list_completed()`, `cancel(action_id)` (records `cancelled_at` in row meta), `load_state() -> dict[id, ActionState]`, `get_state(id)`, `mark_success(action, now, **meta)`, `mark_failure(action, now, reason, **meta)`, `backoff_seconds(count)`, `is_action_due(action, last_run_iso, now)`, `next_due(action, last_run_iso, now)`, `summary(max_chars)`, `strip_sentinel(reply) -> (text, acked)`, `config_pipeline_actions() -> list[HeartbeatAction]` (from `cfg.heartbeat_pipelines`, ids `pipeline-<name>`, `created_from="config"`), `_run_pipeline_action(action, now)` (builds `PipelineContext`, runs registry fn, writes `pipeline_runs` row in `finally`), `parse_interval(text)`, `normalise_weekdays(days)`, `validate_time_string(text)`, `validate_timezone(name)`, `parse_iso(text)` (naive → local), `format_now(dt=None)` (prompt clock with UTC offset), `SENTINEL = "HEARTBEAT_OK"`.
-- Dataclasses: `ActionKind` (StrEnum), `CronSchedule`, `HeartbeatAction` (+ `pipeline: str | None`; `kind` stays the schedule type), `HeartbeatLedger`, `ActionState` (one `heartbeat_state` row; `retry_at()`).
-- → `channels`, `config`, `history` (state rows), `yaml`, `asyncio`. (lazy) `chat_loop`, `pipelines`.
+- Public (own): `run(stop)`, `run_tick(*, now=None)`, `load_ledger()`, `create_action(...)`, `list_active()`, `list_completed()`, `cancel(action_id)` (records `cancelled_at` in row meta), `load_state() -> dict[id, ActionState]`, `get_state(id)`, `mark_success(action, now, **meta)`, `mark_failure(action, now, reason, **meta)`, `backoff_seconds(count)`, `summary(max_chars)`, `strip_sentinel(reply) -> (text, acked)`, `config_pipeline_actions() -> list[HeartbeatAction]` (from `cfg.heartbeat_pipelines`, ids `pipeline-<name>`, `created_from="config"`), `_run_pipeline_action(action, now)` (builds `PipelineContext`, runs registry fn, writes `pipeline_runs` row in `finally`), `format_now(dt=None)` (prompt clock with UTC offset), `SENTINEL = "HEARTBEAT_OK"`.
+- Dataclasses (own): `HeartbeatLedger`, `ActionState` (one `heartbeat_state` row; `retry_at()`).
+- Re-exports everything from `heartbeat_schedule` (below), so `heartbeat.is_action_due`, `heartbeat.HeartbeatAction`, `heartbeat.parse_interval`, … keep working. `_run_tick_locked` calls `is_action_due` / `_within_active_hours` through `heartbeat`'s namespace, so patching them on `heartbeat` still takes effect for the tick.
+- → `channels`, `config`, `history` (state rows), `heartbeat_schedule`, `yaml`, `asyncio`. (lazy) `chat_loop`, `pipelines`.
+
+## heartbeat_schedule.py — pure schedule model + due logic
+
+- Dataclasses: `ActionKind` (StrEnum), `CronSchedule`, `HeartbeatAction` (+ `pipeline: str | None`; `kind` stays the schedule type).
+- Validation: `parse_interval(text)`, `normalise_weekdays(days)`, `validate_time_string(text)`, `validate_timezone(name)`, `parse_iso(text)` (naive → local).
+- Due logic: `_within_active_hours(now, window)`, `is_action_due(action, last_run_iso, now)`, `next_due(action, last_run_iso, now)` (logs via its own `log`).
+- Constants: `_INTERVAL_RE`, `_WEEKDAYS`, `_TIME_RE`.
+- → **stdlib only** (no project imports; no I/O, no config). Keep it that way — a function that needs config stays in `heartbeat.py`.
 
 ## history.py — sqlite: sessions, usage, scheduler state, known chats, pipeline ledger + traces
 

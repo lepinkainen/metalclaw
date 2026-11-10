@@ -2,6 +2,8 @@
 
 Proactive scheduler. Runs in `bot._async_main` as `asyncio.create_task(heartbeat.run(stop))`.
 
+Code split: `heartbeat_schedule.py` holds the pure parts (stdlib only, no I/O/config): `ActionKind` / `CronSchedule` / `HeartbeatAction`, the input validators (`parse_interval`, `normalise_weekdays`, `validate_time_string`, `validate_timezone`, `parse_iso`) and the due logic (`_within_active_hours`, `is_action_due`, `next_due`). `heartbeat.py` keeps `HeartbeatLedger`, ledger I/O, state, the tick runner, pipeline dispatch, `summary()`, `format_now()` and the scheduler loop, and re-exports every `heartbeat_schedule` name (so `heartbeat.is_action_due` etc. still work).
+
 ## Ledger: `<vault>/<memory_subdir>/heartbeat.yaml`
 
 Bot-owned. Users do **not** edit it by hand — actions are created via the model-facing tools `create_heartbeat_action` / `list_heartbeat_actions` / `cancel_heartbeat_action` (see `tools/heartbeat_tools.py`).
@@ -67,7 +69,7 @@ Per-row upserts: no whole-file read-modify-write, so two processes on one `histo
 
 **Failure backoff.** Every failure path in `run_tick` (chat exception, per-action timeout, empty reply without sentinel, no resolvable channel, `notify` raised) calls `mark_failure`; a success (notified or `HEARTBEAT_OK`) calls `mark_success` which stamps `last_run` and zeroes the counter. `backoff_seconds(count) = min(heartbeat_interval_seconds * 2**(count-1), heartbeat_failure_backoff_max_seconds)` (cap default 3600). `ActionState.retry_at()` = `last_failed + backoff`; a due action with `now < retry_at` is skipped **before** any model call (logged at INFO, counted as `backoff=` in the tick-end line). Net effect: first failure retries next tick, then every 2nd, 4th… tick, up to once per hour. `/status` shows `next: <retry time> (N failures, backing off)`.
 
-## Due logic (`heartbeat.is_action_due`)
+## Due logic (`heartbeat_schedule.is_action_due`, re-exported as `heartbeat.is_action_due`)
 
 | kind | due iff |
 |------|---------|
@@ -77,7 +79,7 @@ Per-row upserts: no whole-file read-modify-write, so two processes on one `histo
 
 `cron` uses `zoneinfo.ZoneInfo`. A missed schedule (server down at 07:00, tick at 09:00) still fires — better late than never — and updates `last_run` so it won't re-fire today.
 
-`heartbeat.next_due(action, last_run_iso, now)` returns when an action is next due (`now` if due already, None if never again); used by `/status`. Actual execution waits for the next tick.
+`heartbeat_schedule.next_due(action, last_run_iso, now)` (re-exported from `heartbeat`) returns when an action is next due (`now` if due already, None if never again); used by `/status`. Actual execution waits for the next tick.
 
 ## `run_tick` (`heartbeat.py:run_tick`)
 
