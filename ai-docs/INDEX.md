@@ -60,7 +60,10 @@ tools/search.py    75   search_vault, read_note
 tools/trains.py   133   train_departures
 tools/weather.py  148
 tools/wilma.py    247   list_wilma_messages, read_wilma_message, find_wilma_message, list_wilma_news, read_wilma_news
-frontends/common 1146   COMMANDS spec, parsers/formatters/runners, scope helpers, Debouncer, status/usage, tool status, /add-tool pump
+frontends/common  503   allowlist, scope helpers, run_* runners, Debouncer, /add-tool pump; re-exports the three below
+frontends/commands 407  COMMANDS spec, canonicalize/help, tool-command parsers/formatters, TOOL_COMMANDS
+frontends/status  163   format_status/format_usage, RecentWarnings ring buffer
+frontends/tool_status 229 split_message, format_tool_status, ToolStatusReporter, parse_tools_arg
 frontends/discord 417
 frontends/telegram 471
 ```

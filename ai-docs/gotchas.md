@@ -28,7 +28,7 @@ Tests import directly from the defining module — `chat_loop._chat_with_provide
 - `_persisted` counts leading history entries; `commit` assumes `work.history` is `self.history + new tail`. Anything that rewrites earlier history on the `work` copy (a future compaction, a truncation) must also reset `_persisted`/the table, or old rows are duplicated/orphaned.
 - `Session.snapshot()` (`chat_loop.py:207`) returns a `Session` with `scope=None`. That is what makes the loop's `work` copy, the `_active_session` ContextVar value and the escalation sub-session safe: calling `commit` on any of them is a no-op for the DB. If you ever give `snapshot()` the scope, nested `_chat_with_provider` calls will start persisting.
 - `Session.load` is one SQLite read + `build_system_prompt` (memory + ledger under `flock`) — call it via `asyncio.to_thread`, never on the event loop, and only under the chat's lock: two loads of the same scope followed by two commits interleave rows and the next load replays a history with mismatched tool-call/result pairs.
-- Scope strings are the DB key. Renaming the `telegram-`/`discord-` prefixes (`frontends/common.py:44-45`) orphans every existing conversation.
+- Scope strings are the DB key. Renaming the `telegram-`/`discord-` prefixes (`frontends/common.py:128-129`) orphans every existing conversation.
 - Only `history` is persisted. `system` is rebuilt on load; `Usage` is dropped by `message_to_dict`; `/tools` toggles and `_pending_self_change` are in-memory.
 
 ## Turns table growth

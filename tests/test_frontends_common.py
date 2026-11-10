@@ -248,6 +248,91 @@ def test_run_big_rolls_back_on_exception(vault_with_escalation, monkeypatch):
     assert any("Error: boom" in c for c in captured)
 
 
+# --- run_text_turn ---
+
+
+class _Typing:
+    def __init__(self) -> None:
+        self.entered = 0
+        self.exited = 0
+
+    def __call__(self):
+        @contextlib.asynccontextmanager
+        async def _cm():
+            self.entered += 1
+            try:
+                yield
+            finally:
+                self.exited += 1
+
+        return _cm()
+
+
+class _FakeReporter:
+    def __init__(self) -> None:
+        self.drained = 0
+
+    async def drain(self) -> None:
+        self.drained += 1
+
+
+def _run_text_turn(send, typing, on_tool, scope="telegram-1"):
+    asyncio.run(
+        common.run_text_turn(
+            frontend="telegram",
+            scope=scope,
+            text="hi",
+            send=send,
+            typing=typing,
+            on_tool=on_tool,  # type: ignore[arg-type]
+        )
+    )
+
+
+def test_run_text_turn_sends_reply_once(vault, monkeypatch):
+    seen = {}
+
+    def fake_chat(session, on_tool_call=None):
+        seen["on_tool_call"] = on_tool_call
+        return "hello back"
+
+    monkeypatch.setattr(common, "chat", fake_chat)
+    send, captured = _send_capture()
+    typing = _Typing()
+    reporter = _FakeReporter()
+    _run_text_turn(send, typing, reporter)
+
+    assert captured == ["hello back"]
+    assert typing.entered == 1 and typing.exited == 1
+    assert reporter.drained == 1
+    assert seen["on_tool_call"] is reporter
+
+
+def test_run_text_turn_error_sends_error_and_persists_nothing(vault, monkeypatch):
+    import history
+
+    def boom(session, on_tool_call=None):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(common, "chat", boom)
+    send, captured = _send_capture()
+    typing = _Typing()
+    reporter = _FakeReporter()
+    _run_text_turn(send, typing, reporter, scope="discord-9")
+
+    assert captured == ["Error: boom"]
+    assert history.turns_count("discord-9") == 0
+    assert typing.entered == 1 and typing.exited == 1
+    assert reporter.drained == 0
+
+
+def test_run_text_turn_without_reporter(vault, monkeypatch):
+    monkeypatch.setattr(common, "chat", lambda session, on_tool_call=None: "ok")
+    send, captured = _send_capture()
+    _run_text_turn(send, _Typing(), None)
+    assert captured == ["ok"]
+
+
 def test_run_heartbeat_run_reports_already_running(vault, monkeypatch):
     import heartbeat
 

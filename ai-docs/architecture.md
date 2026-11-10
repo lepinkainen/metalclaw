@@ -24,6 +24,7 @@
                    config.py (leaf — only stdlib + pydantic + yaml)
 
     frontends/common ── live_tool.py ── self_change.py (busy slot + git helpers)
+    frontends/common ──▶ frontends/commands, frontends/status, frontends/tool_status
 ```
 
 Rules:
@@ -33,6 +34,7 @@ Rules:
 - `tools/escalation.py` lazy-imports `chat_loop` + `providers` inside `escalate_to_big_model` (`tools/escalation.py:30`) to avoid the `chat_loop → registry → tools` cycle at module load.
 - `heartbeat.py` lazy-imports `chat_loop` inside `run_tick` (`heartbeat.py:241`) for the same reason.
 - Frontends know nothing of each other — they coordinate via `channels.py` registry.
+- `frontends/commands.py`, `frontends/status.py` and `frontends/tool_status.py` never import `frontends.common`; `common` imports and re-exports them.
 
 ## Lifecycle
 

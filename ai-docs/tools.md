@@ -98,13 +98,13 @@ Adding a new memory-mutating tool? Update this set, else mid-loop system rebuild
 
 `_chat_with_provider` then serializes via `json.dumps(result, ensure_ascii=False)` into a `ToolResultMessage(call_id, name, content)`; the provider's `_to_wire` turns that into its envelope on the next call. That same `content` string is what `Session.commit` persists to the `turns` table, **uncut** — keep tool outputs bounded (see `gotchas.md#turns-table-growth`).
 
-## Slash command wiring (`frontends/common.py`)
+## Slash command wiring (`frontends/commands.py`, re-exported via `frontends/common.py`)
 
 Each tool that wants a slash command needs:
 1. **Parser**: `parse_<name>_args(args: str) -> dict` (uses `argparse` via `_ArgParser` that raises `ValueError`, or manual parse for free-form).
 2. **Formatter**: `format_<name>_result(result: dict) -> str` — markdown-friendly for Discord; HTML conversion happens automatically for Telegram.
-3. **Registry entry**: `TOOL_COMMANDS["<slash>"] = ("<tool_registry_name>", parser, formatter)` (`frontends/common.py:462`).
-4. **Command spec**: a `CommandSpec` row in `common.COMMANDS` (`frontends/common.py:74`) so `/help`, Telegram's BotFather menu and `canonicalize()` know it.
+3. **Registry entry**: `TOOL_COMMANDS["<slash>"] = ("<tool_registry_name>", parser, formatter)` (`frontends/commands.py:401`).
+4. **Command spec**: a `CommandSpec` row in `common.COMMANDS` (`frontends/commands.py:39`) so `/help`, Telegram's BotFather menu and `canonicalize()` know it.
 
 Currently: `train`, `weather`, `mail`, `search`, `wilma`. Both frontends dispatch via the `canon in common.TOOL_COMMANDS` branch (`frontends/telegram.py:272 _dispatch_command_locked`, `frontends/discord.py:190 _discord_dispatch_command`), running the tool in an executor.
 
@@ -113,7 +113,7 @@ Currently: `train`, `weather`, `mail`, `search`, `wilma`. Both frontends dispatc
 1. Define pydantic args model (or skip for zero-arg) in a new `tools/<domain>.py`; re-export from `tools/__init__.py` (or let `/add-tool` do both).
 2. Define function decorated with `@tool(description="...", args=Model)` (add `parallel_safe=True` only if it is read-only and thread-safe). Keep description model-friendly — it's the prompt that decides when the tool fires. Keep results bounded: they are persisted verbatim in `turns`.
 3. If memory-mutating: add name to `_MEMORY_MUTATORS` in `chat_loop.py`.
-4. Optional slash command: add parser + formatter + `TOOL_COMMANDS` entry + `CommandSpec` in `frontends/common.py`; the Telegram bot menu and `/help` derive from `COMMANDS` automatically.
+4. Optional slash command: add parser + formatter + `TOOL_COMMANDS` entry + `CommandSpec` in `frontends/commands.py`; the Telegram bot menu and `/help` derive from `COMMANDS` automatically.
 5. Test: `tests/test_tools_registration.py` already verifies registration.
 6. Test: `tests/test_routing.py` for slash dispatch.
 
