@@ -49,6 +49,10 @@ Tests import directly from the defining module — `chat_loop._chat_with_provide
 
 Set by `_chat_with_provider` and republished before each provider call (a point-in-time `Session` copy of system + completed exchanges, never the in-flight assistant tool call), read by `escalate_to_big_model` to splice conversation context into the escalation. **Reset on exit via `try/finally`.** If you call `_chat_with_provider` recursively (e.g. escalation), the inner call sets and resets — outer's snapshot is preserved by `ContextVar.set`/`reset` token semantics. Don't replace with a global mutable.
 
+## ContextVars don't cross into tool worker threads
+
+Parallel tool rounds (`parallel_safe` tools, `chat-loop.md`) run in `chat_loop._TOOL_POOL` threads, which do **not** inherit `current_scope` / `_active_session`. Each call is submitted as `pool.submit(contextvars.copy_context().run, _run_tool, ...)` with a fresh copy per call (one `Context` cannot be entered by two threads at once). Any new thread hop that runs tool code needs the same treatment, or the tool silently sees `None`.
+
 ## Memory mutator detection is name-based
 
 `_MEMORY_MUTATORS` (`chat_loop.py:227`) is a hard-coded frozenset of tool **names** (memory tools + `create_/cancel_heartbeat_action`). If you add a memory-mutating tool, add its name here, else mid-loop system rebuild won't fire.

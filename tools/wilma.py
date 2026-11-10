@@ -31,6 +31,7 @@ class _ListWilmaMessagesArgs(BaseModel):
         "unread flag and id, per child. Use read_wilma_message with the id and student to get the full text."
     ),
     args=_ListWilmaMessagesArgs,
+    parallel_safe=True,
 )
 def list_wilma_messages(
     student: str | None = None,
@@ -67,6 +68,7 @@ class _ReadWilmaMessageArgs(BaseModel):
 @tool(
     description="Read one Wilma message in full (body as markdown, recipients, replies).",
     args=_ReadWilmaMessageArgs,
+    parallel_safe=True,
 )
 def read_wilma_message(message_id: int, student: str | None = None) -> dict[str, Any]:
     client = wilma.get_client()
@@ -113,6 +115,7 @@ class _FindWilmaMessageArgs(BaseModel):
         "Use this when reporting such emails instead of telling the user to open Wilma."
     ),
     args=_FindWilmaMessageArgs,
+    parallel_safe=True,
 )
 def find_wilma_message(
     subject: str, sent_at: str | None = None, student: str | None = None
@@ -175,6 +178,7 @@ class _ListWilmaNewsArgs(BaseModel):
         "for the full text."
     ),
     args=_ListWilmaNewsArgs,
+    parallel_safe=True,
 )
 def list_wilma_news(
     student: str | None = None,
@@ -225,6 +229,7 @@ class _ReadWilmaNewsArgs(BaseModel):
         "(attachments are usually links)."
     ),
     args=_ReadWilmaNewsArgs,
+    parallel_safe=True,
 )
 def read_wilma_news(news_id: int, student: str | None = None) -> dict[str, Any]:
     client = wilma.get_client()

@@ -28,6 +28,7 @@ class _SearchConversationHistoryArgs(BaseModel):
         "what they or you said earlier, or refers to a past conversation."
     ),
     args=_SearchConversationHistoryArgs,
+    parallel_safe=True,
 )
 def search_conversation_history(query: str, limit: int = 10) -> dict[str, Any]:
     limit = max(1, min(limit, 50))

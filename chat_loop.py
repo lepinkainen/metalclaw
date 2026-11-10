@@ -5,12 +5,14 @@ and by tests directly.
 """
 
 import asyncio
+import contextvars
 import dataclasses
 import json
 import logging
 import re
 import time
 from collections.abc import Callable, Sequence
+from concurrent.futures import ThreadPoolExecutor
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -28,6 +30,7 @@ from messages import (
     SYSTEM_CACHE_BOUNDARY,
     AssistantMessage,
     Message,
+    ToolCall,
     ToolResultMessage,
     UserMessage,
     validate_exchange,
@@ -465,6 +468,11 @@ def scoped_chat(scope: str | None, fn: Callable[[], str]) -> str:
         current_scope.reset(token)
 
 
+# Runs the calls of one model round concurrently when every called tool is
+# registered with parallel_safe=True (see _chat_with_provider).
+_TOOL_POOL = ThreadPoolExecutor(max_workers=4, thread_name_prefix="tool")
+
+
 def _run_tool(name: str, args: dict) -> object:
     tool_obj = TOOLS.get(name)
     if tool_obj is None:
@@ -542,6 +550,31 @@ def _chat_with_provider(
     iteration = 0
     last_signature: tuple[tuple[str, str], ...] | None = None
     repeat_count = 0
+
+    def _finish(tc: ToolCall, result: Any, elapsed: float) -> ToolResultMessage:
+        """Per-call post-processing shared by the sequential and parallel paths.
+
+        Always runs on the loop thread, in call order, so ``on_tool_call``
+        (e.g. ``ToolStatusReporter``) sees a stable sequence.
+        """
+        result_json = _tool_result_json(result)
+        failed = (
+            isinstance(result, str)
+            and result.startswith("Error:")
+            or (isinstance(result, dict) and "error" in result)
+        )
+        log.info(
+            "tool %s %s in %.2fs result=%d chars",
+            tc.name,
+            "FAILED" if failed else "ok",
+            elapsed,
+            len(result_json),
+        )
+        log.debug("tool %s result: %.500s", tc.name, result_json)
+        if on_tool_call:
+            on_tool_call(tc.name, tc.arguments, result_json)
+        return ToolResultMessage(call_id=tc.id, name=tc.name, content=result_json)
+
     try:
         while True:
             iteration += 1
@@ -633,43 +666,52 @@ def _chat_with_provider(
                 )
 
             results: list[ToolResultMessage] = []
-            memory_dirty = False
-            for tc in am.tool_calls:
-                log.debug("tool call: %s args=%.500s", tc.name, tc.arguments)
-                tool_t0 = time.monotonic()
-                if stuck:
-                    result: Any = (
-                        f"Error: you have already called {tc.name} with these exact "
-                        f"arguments {repeat_count} times in a row and have its result "
-                        "above. Do not call it again; answer the user now with the "
-                        "information you have."
+            parallel = (
+                len(am.tool_calls) > 1
+                and not stuck
+                and all(
+                    (t := TOOLS.get(tc.name)) is not None and t.parallel_safe
+                    for tc in am.tool_calls
+                )
+            )
+            if parallel:
+                log.debug(
+                    "tool round: running %d parallel-safe calls concurrently",
+                    len(am.tool_calls),
+                )
+                round_t0 = time.monotonic()
+                futures = []
+                for tc in am.tool_calls:
+                    log.debug("tool call: %s args=%.500s", tc.name, tc.arguments)
+                    # Worker threads do not inherit ContextVars (current_scope,
+                    # _active_session); a fresh copy per call carries them over.
+                    ctx = contextvars.copy_context()
+                    futures.append(
+                        _TOOL_POOL.submit(ctx.run, _run_tool, tc.name, tc.arguments)
                     )
-                else:
-                    result = _run_tool(tc.name, tc.arguments)
-                result_json = _tool_result_json(result)
-                failed = (
-                    isinstance(result, str)
-                    and result.startswith("Error:")
-                    or (isinstance(result, dict) and "error" in result)
-                )
-                log.info(
-                    "tool %s %s in %.2fs result=%d chars",
-                    tc.name,
-                    "FAILED" if failed else "ok",
-                    time.monotonic() - tool_t0,
-                    len(result_json),
-                )
-                log.debug("tool %s result: %.500s", tc.name, result_json)
-                if on_tool_call:
-                    on_tool_call(tc.name, tc.arguments, result_json)
-                results.append(
-                    ToolResultMessage(call_id=tc.id, name=tc.name, content=result_json)
-                )
-                if tc.name in _MEMORY_MUTATORS:
-                    memory_dirty = True
+                # Collected in call order, not completion order; _run_tool
+                # turns exceptions into "Error: ..." so one failure is isolated.
+                outcomes = [f.result() for f in futures]
+                elapsed = time.monotonic() - round_t0
+                for tc, outcome in zip(am.tool_calls, outcomes, strict=True):
+                    results.append(_finish(tc, outcome, elapsed))
+            else:
+                for tc in am.tool_calls:
+                    log.debug("tool call: %s args=%.500s", tc.name, tc.arguments)
+                    tool_t0 = time.monotonic()
+                    if stuck:
+                        result: Any = (
+                            f"Error: you have already called {tc.name} with these "
+                            f"exact arguments {repeat_count} times in a row and have "
+                            "its result above. Do not call it again; answer the user "
+                            "now with the information you have."
+                        )
+                    else:
+                        result = _run_tool(tc.name, tc.arguments)
+                    results.append(_finish(tc, result, time.monotonic() - tool_t0))
             work.append_exchange(am, results)
 
-            if memory_dirty:
+            if any(tc.name in _MEMORY_MUTATORS for tc in am.tool_calls):
                 now = format_now()
                 work.system = build_system_prompt(
                     now, history_trimmed=session.history_trimmed

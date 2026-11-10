@@ -158,6 +158,7 @@ class _ReadManualArgs(BaseModel):
         "the live registry, so they reflect the current build."
     ),
     args=_ReadManualArgs,
+    parallel_safe=True,
 )
 def read_manual(section: str | None = None) -> dict[str, Any]:
     log.info("read_manual section=%r", section)

@@ -15,6 +15,9 @@ class Tool:
     func: Callable[..., Any]
     schema: dict[str, Any]
     args_model: type[BaseModel] | None = None
+    # True only for read-only tools with no ordering dependence: chat_loop may
+    # run several of them from one model round concurrently in worker threads.
+    parallel_safe: bool = False
 
 
 TOOLS: dict[str, Tool] = {}
@@ -77,9 +80,12 @@ def tool(
     *,
     description: str,
     args: type[BaseModel] | None = None,
+    parallel_safe: bool = False,
 ):
     """Register a function as a callable tool. ``args`` is a pydantic model whose
-    fields define the tool's JSON schema; pass ``None`` for zero-argument tools."""
+    fields define the tool's JSON schema; pass ``None`` for zero-argument tools.
+    ``parallel_safe=True`` marks a read-only tool that may run concurrently with
+    other parallel-safe calls from the same model round (never sent to providers)."""
     parameters = _schema_from_model(args) if args is not None else _EMPTY_PARAMETERS
 
     def decorator(func: Callable[..., Any]) -> Callable[..., Any]:
@@ -94,6 +100,7 @@ def tool(
                 },
             },
             args_model=args,
+            parallel_safe=parallel_safe,
         )
         log.debug(
             "registry: tool registered name=%s (total=%d)", func.__name__, len(TOOLS)

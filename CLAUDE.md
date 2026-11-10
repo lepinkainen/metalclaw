@@ -82,7 +82,7 @@ When `escalation_enabled: true` in config, the local model can call the `escalat
 
 ### Adding a new tool
 
-Drop a new module under `tools/` decorating one or more functions with `@tool(...)` from `registry`. Schema follows Ollama's OpenAI-compatible function-calling format. Add the import + `__all__` entry to `tools/__init__.py` (or let `/add-tool` do it for you). To expose it as a slash command, add a parser + formatter in `frontends/common.py` and wire it into `common.TOOL_COMMANDS` — that single registry is consumed by both frontends (Telegram converts the formatted markdown to HTML; Discord sends it as-is). Add a `CommandSpec` to `common.COMMANDS` so `/help` and the Telegram bot menu list it.
+Drop a new module under `tools/` decorating one or more functions with `@tool(...)` from `registry`. Pass `parallel_safe=True` only for read-only, thread-safe tools with no ordering dependence: when every call in one model round is parallel-safe, `chat_loop` runs them concurrently in a small thread pool (default `False`; see `ai-docs/tools.md`). Schema follows Ollama's OpenAI-compatible function-calling format. Add the import + `__all__` entry to `tools/__init__.py` (or let `/add-tool` do it for you). To expose it as a slash command, add a parser + formatter in `frontends/common.py` and wire it into `common.TOOL_COMMANDS` — that single registry is consumed by both frontends (Telegram converts the formatted markdown to HTML; Discord sends it as-is). Add a `CommandSpec` to `common.COMMANDS` so `/help` and the Telegram bot menu list it.
 
 ### Self-modification flow
 
