@@ -314,6 +314,15 @@ async def _discord_handle_message(
 ) -> None:
     if message.author.bot:
         return
+    if not common.is_allowed_user(common.DISCORD, message.author.id):
+        log.warning(
+            "discord: ignored message from unauthorised user id=%s author=%s "
+            "channel_id=%s",
+            message.author.id,
+            message.author,
+            message.channel.id,
+        )
+        return
     raw = (message.content or "").strip()
     if not raw:
         return

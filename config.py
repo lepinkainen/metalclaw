@@ -10,6 +10,7 @@ from pydantic import (
     BaseModel,
     ConfigDict,
     ValidationError,
+    ValidationInfo,
     field_validator,
     model_validator,
 )
@@ -124,6 +125,9 @@ class Config(BaseModel):
     telegram_bot_token: str | None = None
     discord_bot_token: str | None = None
     discord_chat_channels: tuple[int, ...] = ()
+    # Sender allowlists; empty means nobody may use that frontend.
+    telegram_allowed_users: tuple[int, ...] = ()
+    discord_allowed_users: tuple[int, ...] = ()
     discord_heartbeat_channel: int | None = None
     ollama_url: str = "http://localhost:11434/api/chat"
     model: str = "gemma4:latest"
@@ -144,7 +148,7 @@ class Config(BaseModel):
     heartbeat_default_channel: str | None = None
     heartbeat_failure_backoff_max_seconds: int = 3600
     vault_search_excludes: tuple[str, ...] = ()
-    allow_self_modification: bool = True
+    allow_self_modification: bool = False
     show_tool_calls: bool = True
     message_debounce_seconds: float = 1.0
     max_tool_iterations: int = 25
@@ -188,21 +192,24 @@ class Config(BaseModel):
             return (v,)
         return tuple(v)
 
-    @field_validator("discord_chat_channels", mode="before")
+    @field_validator(
+        "discord_chat_channels",
+        "telegram_allowed_users",
+        "discord_allowed_users",
+        mode="before",
+    )
     @classmethod
-    def _coerce_chat_channels(cls, v: Any) -> tuple[int, ...]:
+    def _coerce_int_tuple(cls, v: Any, info: ValidationInfo) -> tuple[int, ...]:
+        what = "channel" if info.field_name == "discord_chat_channels" else "user"
+        msg = f"{info.field_name} must be a list of integer {what} IDs"
         if v is None:
             return ()
         if isinstance(v, str) or not isinstance(v, (list, tuple)):
-            raise ValueError(  # noqa: TRY004 pydantic validator
-                "discord_chat_channels must be a list of integer channel IDs"
-            )
+            raise ValueError(msg)  # noqa: TRY004 pydantic validator
         try:
             return tuple(int(c) for c in v)
         except (TypeError, ValueError) as e:
-            raise ValueError(
-                "discord_chat_channels must be a list of integer channel IDs"
-            ) from e
+            raise ValueError(msg) from e
 
     @field_validator("discord_heartbeat_channel", mode="before")
     @classmethod

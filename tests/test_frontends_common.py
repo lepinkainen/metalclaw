@@ -287,3 +287,18 @@ def test_run_heartbeat_run_fires_via_spawn_tick(vault, monkeypatch):
     asyncio.run(scenario())
     assert sent == ["heartbeat tick fired"]
     assert len(spawned) == 1
+
+
+# --- run_add_tool ---
+
+
+def test_run_add_tool_disabled_by_default(monkeypatch):
+    def boom(*_a, **_k):
+        raise AssertionError("must not run claude when disabled")
+
+    monkeypatch.setattr(common.live_tool, "run_add_tool_live", boom)
+    send, captured = _send_capture()
+    asyncio.run(common.run_add_tool(send, "x", "telegram-1"))
+    assert captured == [
+        "self-modification is disabled (set allow_self_modification: true in config.yaml)"
+    ]

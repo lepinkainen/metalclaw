@@ -166,7 +166,7 @@ def test_telegram_debounces_messages_into_one_turn(cfg_file, write_config, monke
 
     from frontends import telegram as tg
 
-    write_config(cfg_file, message_debounce_seconds=0.05)
+    write_config(cfg_file, message_debounce_seconds=0.05, telegram_allowed_users=[5])
     config.reset_cache()
     turns, replies = [], []
 
@@ -193,7 +193,7 @@ def test_telegram_debounces_messages_into_one_turn(cfg_file, write_config, monke
             n=n,
             message=SimpleNamespace(text=text),
             effective_chat=SimpleNamespace(id=77),
-            effective_user=None,
+            effective_user=SimpleNamespace(id=5, username="op"),
         )
 
     async def run():

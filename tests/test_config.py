@@ -259,3 +259,29 @@ def test_litellm_prompt_caching_yaml_round_trip(tmp_path, cfg_file, write_config
         cfg_file, vault_path=str(tmp_path / "vault"), litellm_prompt_caching=False
     )
     assert config.get_config().litellm_prompt_caching is False
+
+
+def test_allowed_users_default_empty(tmp_path, cfg_file, write_config):
+    write_config(cfg_file, vault_path=str(tmp_path / "vault"))
+    cfg = config.get_config()
+    assert cfg.telegram_allowed_users == ()
+    assert cfg.discord_allowed_users == ()
+
+
+@pytest.mark.parametrize("field", ["telegram_allowed_users", "discord_allowed_users"])
+def test_allowed_users_parse_int_list(tmp_path, cfg_file, write_config, field):
+    write_config(cfg_file, vault_path=str(tmp_path / "vault"), **{field: [1, "22"]})
+    assert getattr(config.get_config(), field) == (1, 22)
+
+
+@pytest.mark.parametrize("field", ["telegram_allowed_users", "discord_allowed_users"])
+@pytest.mark.parametrize("bad", ["123", ["abc"]])
+def test_allowed_users_reject_bad_values(tmp_path, cfg_file, write_config, field, bad):
+    write_config(cfg_file, vault_path=str(tmp_path / "vault"), **{field: bad})
+    with pytest.raises(ValueError, match=f"{field} must be a list of integer user IDs"):
+        config.get_config()
+
+
+def test_allow_self_modification_defaults_false(tmp_path, cfg_file, write_config):
+    write_config(cfg_file, vault_path=str(tmp_path / "vault"))
+    assert config.get_config().allow_self_modification is False

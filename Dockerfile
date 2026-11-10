@@ -1,7 +1,7 @@
 FROM python:3.14-slim
 # ripgrep backs search_vault / /search (vault_search.py shells out to `rg`).
 # The `claude` CLI is deliberately NOT installed: /add-tool is
-# unsupported in the container — set `allow_self_modification: false` in config.yaml.
+# unsupported in the container — keep `allow_self_modification` at its default (false).
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ripgrep \
     && rm -rf /var/lib/apt/lists/*

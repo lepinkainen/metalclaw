@@ -84,6 +84,13 @@ Shared async runners: `run_remember`, `run_forget`, `run_memory`, `run_manual`, 
   1. Cut at last `\n\n` before `limit - _FENCE_HEADROOM(32)`; else `\n`; else space; else hard cut. Headroom guarantees the fence fix-up below never has to truncate.
   2. Reopen fenced code blocks across cuts: if a chunk has odd-count fences, append `` ``` `` and prepend `` ```{lang} `` to the next.
 
+## Sender allowlist (both frontends)
+
+Runs first, before anything else touches the message: `common.is_allowed_user(frontend, user_id)` against `telegram_allowed_users` / `discord_allowed_users`. **Empty tuple = nobody** (deny by default). On refusal there is no reply, no turn, no command dispatch and no `known_chats` row (otherwise the chat would become a heartbeat fan-out target); one WARNING line logs the user id so the operator can copy it into config.
+- Telegram: `_telegram_sender_allowed(update)` in `_telegram_handle_message` (before `_remember_chat`) and in every `_make_telegram_cmd_handler` handler.
+- Discord: in `_discord_handle_message` right after the `author.bot` check, before command parsing and `_remember_channel`.
+- `bot._async_main` logs a startup WARNING when a started frontend's allowlist is empty.
+
 ## `_discord_should_respond` gating (`discord.py:282`)
 
 Non-command messages — bot replies if **any**:
@@ -92,7 +99,7 @@ Non-command messages — bot replies if **any**:
 3. `bot_user in message.mentions` → @-mention.
 4. `message.reference.resolved.author.id == bot_user.id` → reply to bot's own message.
 
-Slash commands fire regardless of gating (parsed before gate check, `discord.py:323-333`).
+Applies only to allowlisted senders. Slash commands fire regardless of this channel gating (parsed before gate check, `discord.py:323-333`).
 
 ## `_strip_bot_mention` (`discord.py:86`)
 

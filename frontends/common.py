@@ -62,6 +62,17 @@ DISCORD = "discord"
 ALL_FRONTENDS = frozenset({TELEGRAM, DISCORD})
 
 
+def is_allowed_user(frontend: str, user_id: int | None) -> bool:
+    """True if ``user_id`` is in the frontend's allowlist (empty = nobody)."""
+    cfg = get_config()
+    allowed = (
+        cfg.telegram_allowed_users
+        if frontend == TELEGRAM
+        else cfg.discord_allowed_users
+    )
+    return user_id is not None and user_id in allowed
+
+
 @dataclass(frozen=True)
 class CommandSpec:
     name: str  # canonical hyphenated form, e.g. "add-tool"
@@ -1101,7 +1112,8 @@ async def run_add_tool(send: SendFn, request: str, scope: str) -> None:
             "/add-tool refused: allow_self_modification=false (scope=%s)", scope
         )
         await send(
-            "self-modification is disabled (allow_self_modification: false in config.yaml)"
+            "self-modification is disabled "
+            "(set allow_self_modification: true in config.yaml)"
         )
         return
     if scope in _pending_self_change:

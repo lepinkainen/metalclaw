@@ -382,6 +382,8 @@ async def _telegram_handle_message(
         len(text),
     )
     log.debug("telegram: message text: %.500s", text)
+    if not _telegram_sender_allowed(update):
+        return
     _remember_chat(chat_id, _chat_meta(update))
 
     parsed = _parse_command(text)
@@ -426,8 +428,26 @@ async def _run_text_turn(chat_id: int, text: str, ctx: tuple) -> None:
 _debouncer = common.Debouncer(_run_text_turn)
 
 
+def _telegram_sender_allowed(update: Update) -> bool:
+    """Check the sender against ``telegram_allowed_users``; log refusals."""
+    user = update.effective_user
+    user_id = getattr(user, "id", None)
+    if common.is_allowed_user(common.TELEGRAM, user_id):
+        return True
+    chat = update.effective_chat
+    log.warning(
+        "telegram: ignored message from unauthorised user id=%s username=%s chat_id=%s",
+        user_id,
+        getattr(user, "username", None),
+        getattr(chat, "id", None),
+    )
+    return False
+
+
 def _make_telegram_cmd_handler(cmd: str):
     async def handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        if not _telegram_sender_allowed(update):
+            return
         await _telegram_dispatch_command(
             update, cmd, " ".join(context.args or []), context.bot
         )

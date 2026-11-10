@@ -38,6 +38,13 @@ discord_bot_token: REPLACE_WITH_DISCORD_BOT_TOKEN
 # guild channels need an @mention or a reply to the bot's own message.
 # Right-click a channel in Discord with developer mode on to copy its ID.
 discord_chat_channels: []
+
+# Who may talk to the bot. Deny by default: an empty list means EVERY message
+# on that frontend is ignored (no reply, no turn, chat not remembered). To find
+# your ID, start the bot, send it a message, and read the WARNING log line
+# "ignored message from unauthorised user id=..." — put that number here.
+telegram_allowed_users: []
+discord_allowed_users: []
 # Channel ID where Discord heartbeats post. Required for any
 # `heartbeat-discord*.md` file under the memory dir to deliver. Set to a
 # server channel ID for shared visibility, or to a DM channel ID for private.
@@ -136,10 +143,11 @@ heartbeat_interval_seconds: 1800
 # mail_pipeline_instructions: "Invoices from Acme are always action-needed."
 
 # Allow `/add-tool` to spawn `claude -p` and mutate the bot's own source.
-# Default true. Set to false on deployments where Telegram or Discord might
-# be reachable by anyone other than you — `/add-tool` registers arbitrary new
-# Python in `tools/<slug>.py`.
-allow_self_modification: true
+# Opt-in (default false): `/add-tool` registers and imports arbitrary new
+# Python in `tools/<slug>.py`. Enable only when the frontends are restricted
+# to you (telegram_allowed_users / discord_allowed_users), and never in the
+# Docker image (it has no `claude` CLI).
+allow_self_modification: false
 
 # Show live tool-call status (emoji + tool name) in chat while the bot works.
 # Per-chat override: /tools on|off in Telegram/Discord. Heartbeat runs stay quiet.

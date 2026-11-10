@@ -137,7 +137,8 @@ Slash command:
 Metalclaw can modify its own source. Two paths:
 
 - **`/add-tool <description>`** — live, available in CLI / Telegram /
-  Discord. Spawns `claude -p` with a constrained contract: write exactly
+  Discord. Off by default: set `allow_self_modification: true` in
+  `config.yaml` to enable it. Spawns `claude -p` with a constrained contract: write exactly
   one new file at `tools/<slug>.py`, edit nothing else. Focused gates run
   in seconds: ruff on the new file, import + register sanity check,
   schema-shape check. The new tool is callable in the *current* session
@@ -172,13 +173,14 @@ rendering and routing:
 - **Telegram** — per-`chat_id` short-term session. Replies are
   CommonMark converted to Telegram-flavoured HTML via `markdown-it-py`.
   Slash commands are registered as Telegram bot commands so they appear
-  in the in-app menu. The bot replies to every direct message and group
-  message it sees.
+  in the in-app menu. The bot replies only to users listed in
+  `telegram_allowed_users` (empty = nobody), in DMs and groups alike.
 
 - **Discord** — per-`channel.id` short-term session. Replies are sent
   as raw CommonMark (Discord renders it natively) and split at 2000
-  chars, reopening fenced code blocks across cuts. The bot replies to
-  every DM, every message in a channel listed in `discord_chat_channels`,
+  chars, reopening fenced code blocks across cuts. Only users listed in
+  `discord_allowed_users` are answered (empty = nobody). For them the bot
+  replies to every DM, every message in a channel listed in `discord_chat_channels`,
   and any message in any channel that mentions it or replies to one of
   its own messages. Heartbeats addressed to any `discord-…` scope post
   to the single channel set in `discord_heartbeat_channel`.

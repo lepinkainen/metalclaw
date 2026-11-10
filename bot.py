@@ -146,6 +146,11 @@ async def _async_main(*, with_telegram: bool, with_discord: bool) -> None:
                 )
             log.info("telegram: no telegram_bot_token — disabled")
         else:
+            if not cfg.telegram_allowed_users:
+                log.warning(
+                    "telegram: telegram_allowed_users is empty, "
+                    "every message will be ignored"
+                )
             tg_app = await _start_telegram(cfg.telegram_bot_token)
             log.info(
                 "telegram polling started (%d known chat(s))",
@@ -163,6 +168,11 @@ async def _async_main(*, with_telegram: bool, with_discord: bool) -> None:
                 )
             log.info("discord: no discord_bot_token — disabled")
         else:
+            if not cfg.discord_allowed_users:
+                log.warning(
+                    "discord: discord_allowed_users is empty, "
+                    "every message will be ignored"
+                )
             discord_client, discord_task = await _start_discord(cfg.discord_bot_token)
             log.info("discord: gateway connecting…")
 

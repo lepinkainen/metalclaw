@@ -24,6 +24,8 @@
 | `telegram_bot_token` | `str?` | None | `TELEGRAM_BOT_TOKEN` env. Frontend skipped if unset. |
 | `discord_bot_token` | `str?` | None | `DISCORD_BOT_TOKEN` env. Frontend skipped if unset. |
 | `discord_chat_channels` | `tuple[int, ...]` | `()` | Channels with always-respond behavior. |
+| `telegram_allowed_users` | `tuple[int, ...]` | `()` | Telegram user IDs allowed to message the bot. **Empty = nobody** (deny by default). Checked by `common.is_allowed_user`. |
+| `discord_allowed_users` | `tuple[int, ...]` | `()` | Discord user IDs allowed to message the bot. **Empty = nobody**. Same validator as `discord_chat_channels` (`_coerce_int_tuple`). |
 | `discord_heartbeat_channel` | `int?` | None | Single dest for all `discord-*` heartbeats. |
 | `provider` | `"ollama"\|"litellm"` | `"ollama"` | Active LLM provider. |
 | `ollama_url` | `str` | `"http://localhost:11434/api/chat"` | `OLLAMA_URL` env. |
@@ -46,7 +48,7 @@
 | `heartbeat_active_hours` | `tuple[int,int]?` | None | `[start, end]` 24h local; wraparound supported. |
 | `heartbeat_failure_backoff_max_seconds` | `int` | `3600` | Cap for the per-action retry backoff after failed runs/deliveries (`heartbeat.backoff_seconds`). |
 | `heartbeat_default_channel` | `str?` | None | Fallback scope (`telegram-<id>` / `discord-<id>`) when an action has no `channel`. `cli` is no longer routable. |
-| `allow_self_modification` | `bool` | `True` | Gates `/add-tool` (the only self-modification path). Set `false` where Telegram/Discord are reachable by non-operators and in the Docker image (no `claude` CLI). |
+| `allow_self_modification` | `bool` | `False` | Opt-in gate for `/add-tool` (the only self-modification path). Enable only when the sender allowlists restrict the frontends to the operator; never in the Docker image (no `claude` CLI). |
 | `vault_search_excludes` | `tuple[str, ...]` | `()` | Glob patterns relative to vault. |
 | `mcp_servers` | `tuple[McpServer, ...]` | `()` | External MCP servers; see below. Names must be unique. |
 | `heartbeat_pipelines` | `tuple[PipelineAction, ...]` | `()` | Scheduled watcher pipelines (`pipelines.md`). Each: `pipeline` (registry name), exactly one of `every` (int seconds or `"5m"`) / `schedule` `{days,time,timezone}`, optional `channel` (falls back to `heartbeat_default_channel`), optional `id` (default `pipeline-<name>`). `extra="forbid"`. A dict is coerced to a one-tuple. Schedule errors are logged and the entry skipped (`heartbeat.config_pipeline_actions`). |
