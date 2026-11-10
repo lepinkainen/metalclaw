@@ -77,14 +77,15 @@ The LLM does three jobs in one call: choose a `bot/` label for every mail, decid
 
 ```mermaid
 flowchart LR
-    B[bodies] --> T{triage<br/>decider, per mail}
-    T -->|label confidence ≥ 0.9| LB[apply label in code]
-    T -->|clearly not actionable| X[mark dismissed<br/>no LLM call]
-    T -->|uncertain, actionable,<br/>or Wilma hint| M[model<br/>LLM summarises]
-    T -.->|decider unreachable| M
-    LB --> T2[continue to gate]
+    B[bodies] --> LB[triage: label<br/>apply in code if<br/>confidence ≥ 0.9]
+    LB --> T{triage: gate<br/>needs attention?}
+    T -->|clearly not| X[mark dismissed<br/>no LLM call]
+    T -->|yes, uncertain,<br/>or Wilma hint| M[model<br/>LLM summarises]
+    B -.->|decider unreachable| M
     M --> D[deliver] --> Y[mark delivered]
 ```
+
+Both triage answers come from one decider call per mail; labelling and gating are independent decisions.
 
 What changes:
 
