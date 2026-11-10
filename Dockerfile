@@ -11,7 +11,8 @@ RUN pip install uv && useradd --create-home app
 # volumes inherit writable ownership on first mount.
 RUN mkdir -p /data /state /vault && chown app:app /data /state /vault
 WORKDIR /app
+COPY pyproject.toml uv.lock .python-version ./
+RUN uv sync --no-dev --frozen --no-install-project
 COPY . .
-RUN uv sync --no-dev --frozen
 USER app
 CMD [".venv/bin/python", "bot.py"]
