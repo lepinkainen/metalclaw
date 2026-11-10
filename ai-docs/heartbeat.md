@@ -65,7 +65,7 @@ Per-row upserts: no whole-file read-modify-write, so two processes on one `histo
 
 **Legacy migration.** The pre-SQLite `heartbeat_state.json` (flat `{"<id>": "<iso>"}`, v1 `{"version":1,"last_run":{…}}`, v2 with `failures`) is imported once by `_migrate_legacy_state_file()` on the first `load_state()`/`get_state()` of the process (guarded by `_legacy_state_checked`), then renamed to `heartbeat_state.json.bak`. Rows get `meta = {"migrated_from": "heartbeat_state.json"}`. `reset_state_migration_flag()` is the test hook.
 
-**Failure backoff.** Every failure path in `run_tick` (chat exception, empty reply without sentinel, no resolvable channel, `notify` raised) calls `mark_failure`; a success (notified or `HEARTBEAT_OK`) calls `mark_success` which stamps `last_run` and zeroes the counter. `backoff_seconds(count) = min(heartbeat_interval_seconds * 2**(count-1), heartbeat_failure_backoff_max_seconds)` (cap default 3600). `ActionState.retry_at()` = `last_failed + backoff`; a due action with `now < retry_at` is skipped **before** any model call (logged at INFO, counted as `backoff=` in the tick-end line). Net effect: first failure retries next tick, then every 2nd, 4th… tick, up to once per hour. `/status` shows `next: <retry time> (N failures, backing off)`.
+**Failure backoff.** Every failure path in `run_tick` (chat exception, per-action timeout, empty reply without sentinel, no resolvable channel, `notify` raised) calls `mark_failure`; a success (notified or `HEARTBEAT_OK`) calls `mark_success` which stamps `last_run` and zeroes the counter. `backoff_seconds(count) = min(heartbeat_interval_seconds * 2**(count-1), heartbeat_failure_backoff_max_seconds)` (cap default 3600). `ActionState.retry_at()` = `last_failed + backoff`; a due action with `now < retry_at` is skipped **before** any model call (logged at INFO, counted as `backoff=` in the tick-end line). Net effect: first failure retries next tick, then every 2nd, 4th… tick, up to once per hour. `/status` shows `next: <retry time> (N failures, backing off)`.
 
 ## Due logic (`heartbeat.is_action_due`)
 
@@ -95,6 +95,8 @@ Single-flight: a module-level `_tick_running` flag (not an `asyncio.Lock`, so it
 4. `_expire_completed_with_lock(now)` — writes already happened per action; there is no bulk save and no row pruning.
 
 Each action is wrapped in try/except — one bad action does not stop the others.
+
+**Per-action timeout.** Both action awaits (`_run_pipeline_action` and `_run_action`) go through `_bounded()` in `_run_tick_locked`, i.e. `asyncio.wait_for(..., timeout=cfg.heartbeat_action_timeout_seconds)` (default 300; `0` disables). A `TimeoutError` (caught before the generic `except Exception`) calls `_fail(action, "timed out after Ns")`: the action stays active and backs off like any other failure, and the tick moves on to the next due action. `_run_pipeline_action` catches the resulting `asyncio.CancelledError` to record `error="cancelled (timeout)"` in the `pipeline_runs` trace row, then re-raises. **Known limitation:** model actions run `chat_loop.chat` in an executor thread, which cannot be cancelled — after a timeout the turn keeps running in the background until it finishes and its result is discarded. The session is scope-less so nothing is persisted, but the tools it calls still execute. (Tests: `asyncio.run` joins the default executor on exit, so a blocked stub thread must be released inside the loop — see `_tick_then_release` in `tests/test_heartbeat.py`.)
 
 ## System-prompt injection (`chat_loop.build_system_prompt`)
 

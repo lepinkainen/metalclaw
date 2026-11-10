@@ -36,6 +36,7 @@ import secrets
 import tempfile
 import threading
 import time
+from collections.abc import Awaitable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -871,6 +872,10 @@ async def _run_pipeline_action(action: HeartbeatAction, now: datetime) -> str:
     try:
         outcome = str(await fn(ctx))
         return outcome
+    except asyncio.CancelledError:
+        # ``wait_for`` timeout in ``_run_tick_locked`` cancels us; record why.
+        error = "cancelled (timeout)"
+        raise
     except Exception as e:
         error = f"{type(e).__name__}: {e}"[:500]
         raise
@@ -975,6 +980,17 @@ async def _run_tick_locked(*, now: datetime | None = None) -> dict[str, str]:
         len(pipeline_actions),
     )
 
+    timeout = cfg.heartbeat_action_timeout_seconds
+
+    async def _bounded[T](aw: Awaitable[T]) -> T:
+        # NOTE: model actions run in an executor thread, which cannot be
+        # cancelled: after a timeout the turn keeps running in the background
+        # until it finishes and its result is discarded. The session is
+        # scope-less so nothing is persisted, but its tool calls still execute.
+        if timeout > 0:
+            return await asyncio.wait_for(aw, timeout=timeout)
+        return await aw
+
     async def _fail(action: HeartbeatAction, why: str, **extra: Any) -> None:
         nonlocal n_failed
         n_failed += 1
@@ -1028,7 +1044,14 @@ async def _run_tick_locked(*, now: datetime | None = None) -> dict[str, str]:
 
         if action.pipeline:
             try:
-                outcome = await _run_pipeline_action(action, now)
+                outcome = await _bounded(_run_pipeline_action(action, now))
+            except TimeoutError:
+                await _fail(
+                    action,
+                    f"timed out after {timeout}s",
+                    run_seconds=round(time.monotonic() - action_t0, 2),
+                )
+                continue
             except Exception as e:
                 log.exception("heartbeat pipeline %s failed", action.id)
                 await _fail(
@@ -1053,9 +1076,16 @@ async def _run_tick_locked(*, now: datetime | None = None) -> dict[str, str]:
             continue
 
         try:
-            reply = await _run_action(
-                action, now, chat_loop.chat, chat_loop.build_system_prompt
+            reply = await _bounded(
+                _run_action(action, now, chat_loop.chat, chat_loop.build_system_prompt)
             )
+        except TimeoutError:
+            await _fail(
+                action,
+                f"timed out after {timeout}s",
+                run_seconds=round(time.monotonic() - action_t0, 2),
+            )
+            continue
         except Exception:
             log.exception("heartbeat action %s: chat turn failed", action.id)
             await _fail(
