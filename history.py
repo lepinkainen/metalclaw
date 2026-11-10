@@ -1,4 +1,5 @@
 import json
+import logging
 import sqlite3
 import threading
 from collections.abc import Sequence
@@ -7,6 +8,8 @@ from pathlib import Path
 
 from config import xdg_data_dir
 from messages import Message, message_from_dict, message_to_dict
+
+log = logging.getLogger(__name__)
 
 
 def _db_path() -> Path:
@@ -17,6 +20,13 @@ def _init(path: Path) -> sqlite3.Connection:
     # check_same_thread=False: tools run in executor threads; all access goes
     # through _LOCK below.
     conn = sqlite3.connect(path, check_same_thread=False)
+    # WAL: readers and one writer proceed concurrently, so a second process
+    # (another bot.py, a script, the sqlite3 CLI) doesn't hit "database is
+    # locked". Persistent in the file; NORMAL is the recommended WAL pairing.
+    mode = conn.execute("PRAGMA journal_mode=WAL").fetchone()[0]
+    if str(mode).lower() != "wal":
+        log.warning("history.db: WAL unavailable (journal_mode=%s) at %s", mode, path)
+    conn.execute("PRAGMA synchronous=NORMAL")
     # Legacy plain-text turn log (pre-``turns``); read by search only, never
     # written any more.
     conn.execute("""

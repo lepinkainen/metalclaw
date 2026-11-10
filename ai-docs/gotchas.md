@@ -37,6 +37,10 @@ Tests import directly from the defining module — `chat_loop._chat_with_provide
 - `session.system` is **rebuilt** by `_refresh_system_prompt` before each turn AND mid-loop on memory writes — don't rely on it being stable across a turn. There is no system message inside `history`.
 - Never put a provider wire dict in `session.history`; go through `append_user` / `append_exchange` / `AssistantMessage`. `append_exchange` raises `ValueError` if result ids don't match the assistant's tool calls.
 
+## history.db is WAL
+
+`history._init` switches the database to `journal_mode=WAL` (persistent in the file) with `synchronous=NORMAL`, so a second process (another `bot.py`, a script, the `sqlite3` CLI) can read while the bot writes. Two extra files live next to it: `history.db-wal` and `history.db-shm`. A backup must copy all three together, or use `sqlite3 history.db ".backup out.db"`; copying `history.db` alone can miss recent commits still in the WAL. `NORMAL` survives application crashes; a power loss can drop the last commit but not corrupt the file. Filesystems that can't do WAL (some network mounts) keep the old journal and log a WARNING. The Docker named volume (`XDG_DATA_HOME=/data`) holds the whole directory, so no compose change is needed.
+
 ## ContextVar `_active_session`
 
 Set by `_chat_with_provider` and republished before each provider call (a point-in-time `Session` copy of system + completed exchanges, never the in-flight assistant tool call), read by `escalate_to_big_model` to splice conversation context into the escalation. **Reset on exit via `try/finally`.** If you call `_chat_with_provider` recursively (e.g. escalation), the inner call sets and resets — outer's snapshot is preserved by `ContextVar.set`/`reset` token semantics. Don't replace with a global mutable.
