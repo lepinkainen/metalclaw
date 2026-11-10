@@ -7,15 +7,16 @@ Obsidian; the bot will see your edits next time it answers.
 ## What is Metalclaw?
 
 Metalclaw is a single-user chatbot that talks to a language-model provider
-(Ollama by default, optionally OpenAI or Anthropic) with tool calling. It
-runs three frontends in parallel from one process:
+(Ollama by default, optionally any cloud model via litellm — Bedrock,
+OpenAI, Anthropic, Gemini, …) with tool calling. It runs headless as one
+process (`bot.py`) with two frontends and the heartbeat scheduler:
 
-- **CLI** — interactive REPL in your terminal.
 - **Telegram** — direct messages and groups, replies as Telegram-flavoured HTML.
 - **Discord** — DMs and configured guild channels, replies as CommonMark.
 
-Long-term memory is shared across all three frontends via a single markdown
-file in your vault. Conversations (short-term context) are kept per-channel.
+Long-term memory is shared across both frontends via a single markdown
+file in your vault. Conversations (short-term context) are kept per chat
+and persisted in `history.db`, so they survive restarts; `/new` starts fresh.
 
 ## Slash commands
 
@@ -28,8 +29,8 @@ Slash commands work in every frontend. They're grouped roughly by purpose:
 - **Tools** — `/train`, `/weather`, `/mail` invoke their respective tools
   directly without going through the model. Useful when you know exactly
   what you want.
-- **Self-modification** — `/add-tool` writes a new tool live in any
-  frontend; `/self-edit` (CLI only) makes broader code changes. Both go
+- **Self-modification** — `/add-tool` writes a new tool live in either
+  frontend (off unless `allow_self_modification: true`). It goes
   through `/approve`, `/approve_force`, `/reject`, `/diff`.
 - **Control** — `/big` routes one turn through the cloud escalation
   provider. `/heartbeat` shows scheduled-task config or fires a tick.
@@ -90,8 +91,8 @@ bot-owned ledger at `<vault>/<memory_subdir>/heartbeat.yaml` using its
 - `cron` — selected weekdays at one local time in an IANA timezone.
 - `every` — a fixed interval in seconds.
 
-Each action remembers which chat created it (`cli`, `telegram-<chat_id>`
-or `discord-<channel_id>`) and reports back there; Discord alerts post to
+Each action remembers which chat created it (`telegram-<chat_id>` or
+`discord-<channel_id>`) and reports back there; Discord alerts post to
 the channel set by `discord_heartbeat_channel` in config. Ask the model to
 list or cancel actions in plain language (`list_heartbeat_actions`,
 `cancel_heartbeat_action`). Last-run timestamps and failure counters live in the `heartbeat_state`
@@ -134,9 +135,9 @@ Slash command:
 
 ## Self-modification
 
-Metalclaw can modify its own source. Two paths:
+Metalclaw can add new tools to itself. There is one path:
 
-- **`/add-tool <description>`** — live, available in CLI / Telegram /
+- **`/add-tool <description>`** — live, available in Telegram and
   Discord. Off by default: set `allow_self_modification: true` in
   `config.yaml` to enable it. Spawns `claude -p` with a constrained contract: write exactly
   one new file at `tools/<slug>.py`, edit nothing else. Focused gates run
@@ -146,29 +147,20 @@ Metalclaw can modify its own source. Two paths:
   decorator. On `/approve`, the import is also persisted to
   `tools/__init__.py` so the tool survives restarts.
 
-- **`/self-edit <description>`** — CLI only, restart-tied. Spawns
-  `claude -p` with broader permissions; runs full `task lint/build/test`
-  gates. Approved changes take effect on the next bot launch.
-
-Both paths converge on the same approval slash commands:
+Approval slash commands:
 
 - `/approve` — accept if all gates passed.
-- `/approve_force` (or `/approve-force` in CLI) — accept regardless.
-- `/reject` — discard. For `/add-tool`, unlinks the new file and pops
-  the new keys from `registry.TOOLS`. For `/self-edit`, runs
-  `git checkout --` on tracked changes and unlinks new untracked files.
+- `/approve_force` (or `/approve-force`) — accept regardless.
+- `/reject` — discard. Unlinks the new file and pops the new keys from
+  `registry.TOOLS`.
 - `/diff` — show the diff; the pending change stays in place.
 
 Approved entries are appended to `changes.jsonl` at the repo root.
 
 ## Frontends
 
-The three frontends share the chat loop and memory but differ in
+The two frontends share the chat loop and memory but differ in
 rendering and routing:
-
-- **CLI** — `prompt_toolkit` input loop with slash-command completion.
-  Replies are rendered with Rich (`rich.markdown.Markdown`). Toggle
-  thinking display with `/think`. `/self-edit` is CLI-only.
 
 - **Telegram** — per-`chat_id` short-term session. Replies are
   CommonMark converted to Telegram-flavoured HTML via `markdown-it-py`.
@@ -199,14 +191,15 @@ inline comments — every field is documented there. Highlights:
 - `vault_path` (required) — your Obsidian vault root.
 - `memory_subdir` — subdirectory inside the vault for `memory.md` and
   heartbeat scope files. Default: `Metalclaw/Memory`.
-- `provider` — `ollama`, `openai`, or `anthropic`.
+- `provider` — `ollama` or `litellm`.
 - `escalation_*` — opt-in cloud fallback.
 - `heartbeat_*` — schedule and active-hours window.
 
-Environment overrides: `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`,
-`FASTMAIL_API_TOKEN`, `OLLAMA_URL`, `TELEGRAM_BOT_TOKEN`,
-`DISCORD_BOT_TOKEN`. Each takes precedence over the matching
-`config.yaml` field.
+Environment overrides: `FASTMAIL_API_TOKEN`, `OLLAMA_URL`,
+`TELEGRAM_BOT_TOKEN`, `DISCORD_BOT_TOKEN`, `WILMA_*`. Each takes
+precedence over the matching `config.yaml` field. Cloud LLM credentials
+(`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, AWS for Bedrock, …) are read
+directly by litellm.
 
 ## Tools reference
 
@@ -217,5 +210,5 @@ file in your vault, this section will look empty.)
 ## Slash command reference
 
 (This section is filled in at read time with the live list of slash
-commands across all three frontends. If you're reading the raw template
+commands across both frontends. If you're reading the raw template
 file in your vault, this section will look empty.)

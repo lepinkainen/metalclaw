@@ -12,11 +12,12 @@ frontend handler (telegram.py / discord.py)
         │
         ├─ _parse_command(text) → None  (not a slash command)
         ├─ Debouncer: quiet period → _run_text_turn(scope, joined_text)
-        ├─ async with <per-chat lock>:
+        ├─ async with <per-chat lock>:   # the frontend's _run_text_turn is just lock + one call:
+        │   common.run_text_turn(frontend=, scope=, text=, send=, typing=, on_tool=):
         │     session = await asyncio.to_thread(Session.load, scope)
         │           ├─ history_db.turns_load(scope)      # rows after latest /new boundary → list[Message]
         │           └─ system = build_system_prompt(format_now()); _persisted = len(history)
-        │     run_turn(session, text, lambda: scoped_chat(scope, lambda: chat(session, on_tool_call=...))):
+        │     async with typing(): run_turn(session, text, lambda: scoped_chat(scope, lambda: chat(session, on_tool_call=on_tool))):
         │           session.append_user(text)           # in memory only
         ▼
 loop.run_in_executor(None, _work):   # _refresh_system_prompt(session); chat(...)
@@ -42,7 +43,9 @@ loop:
     work.append_exchange(am, [ToolResultMessage(...)])    # validates call ids; not yet persisted
     if memory_dirty: work.system = build_system_prompt(now)   # memory write visible next iter
         │
-        ├─ on exception anywhere above: nothing committed, run_turn pops the user msg, turns table unchanged
+        ├─ on exception anywhere above: nothing committed, run_turn pops the user msg, turns table unchanged;
+        │  run_text_turn sends "Error: <e>" via send() and returns
+        ├─ on success: run_text_turn awaits on_tool.drain() (status lands first), then send(clean_reply)
         ▼
 back to frontend: _split_thinking → clean reply → render → send; session object dropped (next turn re-loads)
 ```

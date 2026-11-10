@@ -29,6 +29,7 @@ class _SearchVaultArgs(BaseModel):
         "promising hit."
     ),
     args=_SearchVaultArgs,
+    parallel_safe=True,
 )
 def search_vault(
     query: str,
@@ -64,6 +65,7 @@ class _ReadNoteArgs(BaseModel):
         "outside the vault and non-markdown files."
     ),
     args=_ReadNoteArgs,
+    parallel_safe=True,
 )
 def read_note(path: str) -> dict[str, Any]:
     log.info("read_note path=%r", path)

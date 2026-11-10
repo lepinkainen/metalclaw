@@ -45,7 +45,10 @@ def test_inbox_rejects_empty_and_missing_vault(vault, tmp_path):
 
 
 def _legacy_row(session: str, role: str, content: str, ts: str) -> None:
-    """Seed the pre-``turns`` plain-text table (never written by the app now)."""
+    """Seed the pre-``turns`` plain-text table (never written by the app now).
+
+    Call before any ``turns`` rows exist: the backfill only runs on an empty index.
+    """
     with history._LOCK:
         db = history._conn()
         db.execute(
@@ -53,6 +56,10 @@ def _legacy_row(session: str, role: str, content: str, ts: str) -> None:
             (session, ts, role, content),
         )
         db.commit()
+        # The app never writes this table; legacy rows reach the FTS index only
+        # through the one-time backfill, so re-open to run it.
+        db.close()
+        history._shared = None
 
 
 def test_history_search_newest_first_across_surfaces_and_legacy_rows():
@@ -181,7 +188,7 @@ def test_telegram_debounces_messages_into_one_turn(cfg_file, write_config, monke
     async def fake_typing(*_):
         yield
 
-    monkeypatch.setattr(tg, "run_turn", fake_run_turn)
+    monkeypatch.setattr(common, "run_turn", fake_run_turn)
     monkeypatch.setattr(tg, "_tg_reply", fake_reply)
     monkeypatch.setattr(tg, "_typing", fake_typing)
     monkeypatch.setattr(tg, "_tool_status_for", lambda *_: None)

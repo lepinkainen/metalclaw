@@ -28,7 +28,7 @@ Tests import directly from the defining module — `chat_loop._chat_with_provide
 - `_persisted` counts leading history entries; `commit` assumes `work.history` is `self.history + new tail`. Anything that rewrites earlier history on the `work` copy (a future compaction, a truncation) must also reset `_persisted`/the table, or old rows are duplicated/orphaned.
 - `Session.snapshot()` (`chat_loop.py:207`) returns a `Session` with `scope=None`. That is what makes the loop's `work` copy, the `_active_session` ContextVar value and the escalation sub-session safe: calling `commit` on any of them is a no-op for the DB. If you ever give `snapshot()` the scope, nested `_chat_with_provider` calls will start persisting.
 - `Session.load` is one SQLite read + `build_system_prompt` (memory + ledger under `flock`) — call it via `asyncio.to_thread`, never on the event loop, and only under the chat's lock: two loads of the same scope followed by two commits interleave rows and the next load replays a history with mismatched tool-call/result pairs.
-- Scope strings are the DB key. Renaming the `telegram-`/`discord-` prefixes (`frontends/common.py:44-45`) orphans every existing conversation.
+- Scope strings are the DB key. Renaming the `telegram-`/`discord-` prefixes (`frontends/common.py:128-129`) orphans every existing conversation.
 - Only `history` is persisted. `system` is rebuilt on load; `Usage` is dropped by `message_to_dict`; `/tools` toggles and `_pending_self_change` are in-memory.
 
 ## Turns table growth
@@ -37,9 +37,21 @@ Tests import directly from the defining module — `chat_loop._chat_with_provide
 - `session.system` is **rebuilt** by `_refresh_system_prompt` before each turn AND mid-loop on memory writes — don't rely on it being stable across a turn. There is no system message inside `history`.
 - Never put a provider wire dict in `session.history`; go through `append_user` / `append_exchange` / `AssistantMessage`. `append_exchange` raises `ValueError` if result ids don't match the assistant's tool calls.
 
+## history.db is WAL
+
+`history._init` switches the database to `journal_mode=WAL` (persistent in the file) with `synchronous=NORMAL`, so a second process (another `bot.py`, a script, the `sqlite3` CLI) can read while the bot writes. Two extra files live next to it: `history.db-wal` and `history.db-shm`. A backup must copy all three together, or use `sqlite3 history.db ".backup out.db"`; copying `history.db` alone can miss recent commits still in the WAL. `NORMAL` survives application crashes; a power loss can drop the last commit but not corrupt the file. Filesystems that can't do WAL (some network mounts) keep the old journal and log a WARNING. The Docker named volume (`XDG_DATA_HOME=/data`) holds the whole directory, so no compose change is needed.
+
+## Conversation search: trigram FTS minimum length
+
+`history.search_messages` reads the `turns_fts` index (FTS5, `tokenize='trigram'`), not `turns`. Trigram can't match fewer than 3 characters, so shorter queries take the old `LIKE` full scan (slow on a big `turns`, but correct). If `CREATE VIRTUAL TABLE` fails (SQLite < 3.34 or no FTS5), `_fts_available` goes false with one WARNING and *every* FTS path is skipped: nothing is indexed and all queries scan. Consequences: (1) anything writing user/assistant rows into `turns` must go through `turns_append`, or the row is invisible to search; (2) the backfill only runs when `turns_fts` is empty — a DB first opened on a build without FTS5, written to, then opened with FTS5 backfills everything, but rows written by an old binary after the index exists are never indexed (rebuild by `DROP TABLE turns_fts` and restart); (3) tests seeding the legacy `messages` table must re-open (`history._shared = None`) before any `turns` row exists so the backfill picks them up; (4) a future compaction that removes `turns` rows must leave `turns_fts` alone (search keeps the originals).
+
 ## ContextVar `_active_session`
 
 Set by `_chat_with_provider` and republished before each provider call (a point-in-time `Session` copy of system + completed exchanges, never the in-flight assistant tool call), read by `escalate_to_big_model` to splice conversation context into the escalation. **Reset on exit via `try/finally`.** If you call `_chat_with_provider` recursively (e.g. escalation), the inner call sets and resets — outer's snapshot is preserved by `ContextVar.set`/`reset` token semantics. Don't replace with a global mutable.
+
+## ContextVars don't cross into tool worker threads
+
+Parallel tool rounds (`parallel_safe` tools, `chat-loop.md`) run in `chat_loop._TOOL_POOL` threads, which do **not** inherit `current_scope` / `_active_session`. Each call is submitted as `pool.submit(contextvars.copy_context().run, _run_tool, ...)` with a fresh copy per call (one `Context` cannot be entered by two threads at once). Any new thread hop that runs tool code needs the same treatment, or the tool silently sees `None`.
 
 ## Memory mutator detection is name-based
 

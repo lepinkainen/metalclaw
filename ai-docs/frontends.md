@@ -11,7 +11,7 @@ Per-conversation history (short-term context) is **persisted in SQLite**, not he
 | Telegram | `chat_id: int` | `telegram-<chat_id>` (`_telegram_scope_for`, `telegram.py:115`) | `_chat_lock(chat_id)` (`telegram.py:110`) |
 | Discord | `channel.id: int` | `discord-<channel_id>` (`_discord_scope_for`, `discord.py:82`) | `_session_lock(channel_id)` (`discord.py:69`) |
 
-Per turn (`_run_text_turn`, `telegram.py:399` / `discord.py:354`), under the lock: `messages = await asyncio.to_thread(Session.load, scope)` → `run_turn(messages, text, lambda: scoped_chat(scope, lambda: chat(messages, on_tool_call=...)))` → reply. `Session.load` reads the rows after the latest `/new` boundary — auto-resetting first if the chat has been idle longer than `session_idle_reset_seconds` (default 1h) and replaying at most `session_max_messages` (default 40) — and builds a fresh system prompt (with an archived-history note when it trimmed); `_chat_with_provider` → `Session.commit` appends the turn's new rows only on success. There is no `_telegram_sessions` / `_discord_sessions` dict any more and no `history.record_message` — the `turns` rows **are** the session, so a restart (or a second process on the same `history.db`) continues the same conversation. `/big` loads the same way (`telegram.py:314`, `discord.py:235`).
+Per turn (`_run_text_turn`, `telegram.py:399` / `discord.py:360`) the frontend takes its per-chat lock and makes one call to the shared `common.run_text_turn(frontend=, scope=, text=, send=, typing=, on_tool=)` (`common.py:362`): `session = await asyncio.to_thread(Session.load, scope)` → inside `typing()`, `run_turn(session, text, lambda: scoped_chat(scope, lambda: chat(session, on_tool_call=on_tool)))` → on error `send("Error: …")`; on success `on_tool.drain()` then `send(clean_reply)`. Telegram passes `send=_send_for(update)` (→ `_tg_reply`), `typing=lambda: _typing(chat_id, bot)`; Discord passes `send=_send_for(message.channel)` (→ `_discord_send`), `typing=message.channel.typing`. Tests that stub `chat` / `run_turn` for a text turn patch them on `frontends.common`. `Session.load` reads the rows after the latest `/new` boundary — auto-resetting first if the chat has been idle longer than `session_idle_reset_seconds` (default 1h) and replaying at most `session_max_messages` (default 40) — and builds a fresh system prompt (with an archived-history note when it trimmed); `_chat_with_provider` → `Session.commit` appends the turn's new rows only on success. There is no `_telegram_sessions` / `_discord_sessions` dict any more and no `history.record_message` — the `turns` rows **are** the session, so a restart (or a second process on the same `history.db`) continues the same conversation. `/big` loads the same way (`telegram.py:314`, `discord.py:235`).
 
 `/new` → `await asyncio.to_thread(Session.reset, scope)` (`telegram.py:300`, `discord.py:217`): inserts a `boundary` row; nothing is deleted and older rows stay reachable via `search_conversation_history`.
 
@@ -37,8 +37,8 @@ Each frontend registers a `Channel` with `channels.register(...)` on startup:
 
 ## Slash commands
 
-Command metadata: `frontends/common.py:74 COMMANDS` (`CommandSpec` rows; `ALL_FRONTENDS = {telegram, discord}`) drives `help_lines()`, `telegram_bot_commands()` and `canonicalize()` (aliases such as `add_tool`, `approve_force`).
-Tool commands: `frontends/common.py:462 TOOL_COMMANDS` for `/train /weather /mail /search /wilma`.
+Command metadata: `frontends/commands.py:39 COMMANDS` (re-exported as `common.COMMANDS`) (`CommandSpec` rows; `ALL_FRONTENDS = {telegram, discord}`) drives `help_lines()`, `telegram_bot_commands()` and `canonicalize()` (aliases such as `add_tool`, `approve_force`).
+Tool commands: `frontends/commands.py:401 TOOL_COMMANDS` for `/train /weather /mail /search /wilma`.
 Shared async runners: `run_remember`, `run_forget`, `run_memory`, `run_manual`, `run_heartbeat`, `run_big`, `run_status`, `run_usage`, `run_add_tool`, `run_approve`, `run_reject`, `run_diff`. Each takes a `SendFn = Callable[[str], Awaitable[None]]`. Both frontends delegate to them:
 - Telegram: `_telegram_dispatch_command` (`telegram.py:264`) → `_dispatch_command_locked` (`telegram.py:272`, under `_chat_lock`).
 - Discord: `_discord_dispatch_command` (`discord.py:190`, called under `_session_lock`, `discord.py:343`).
@@ -46,6 +46,8 @@ Shared async runners: `run_remember`, `run_forget`, `run_memory`, `run_manual`, 
 `/add-tool` runs `live_tool.run_add_tool_live` via `asyncio.to_thread` inside `run_add_tool` so the minutes-long `claude -p` run doesn't freeze polling (#33); the pending result is keyed by scope in `common._pending_self_change` until `/approve`, `/approve-force`, `/reject` or `/diff`. `/self-edit` and `/think` no longer exist (CLI-only, removed).
 
 ## Live tool status
+
+Lives in `frontends/tool_status.py` (re-exported through `common`).
 
 - `common.format_tool_status(name, args)` -> one plain-text line (emoji by name/prefix, args clipped to 40 chars, lists >2 shown as counts).
 - `common.ToolStatusReporter(loop, send, edit, limit)` is the `on_tool_call` callback. Called from the worker thread; schedules `_upsert` via `run_coroutine_threadsafe`. A single `asyncio.Lock` (FIFO) orders first `send(text)->handle` before later `edit(handle, text)`. Errors are logged and swallowed. Over `limit` (Telegram 4096 / Discord 2000) it keeps the last lines prefixed `…`.
@@ -58,7 +60,8 @@ Shared async runners: `run_remember`, `run_forget`, `run_memory`, `run_manual`, 
 - Non-command messages in Telegram/Discord go through `common.Debouncer` (`message_debounce_seconds`, 0 = off): each `add` restarts the per-chat timer; after quiet, buffered texts are joined with `\n` and ONE turn runs (`_run_text_turn`), replying to the latest message. The timer entry is dropped before the flush starts, so a message arriving mid-turn starts a new timer and its turn waits on the per-chat lock. Slash commands bypass it. Discord debounces only messages that passed `_discord_should_respond`.
 - Locks: Discord `_session_lock(channel_id)`; Telegram `_chat_lock(chat_id)` (needed because debounced turns run in timer tasks outside PTB's serialized update queue; it also wraps `_telegram_dispatch_command`). Both guard the whole `Session.load` → turn → `commit` span.
 - Persistence happens inside the chat loop (`Session.commit`), not in the frontend: every successful turn — `/big` included, since `run_big` goes through `run_turn` + `chat_via_escalation` on a loaded session — lands in `turns` as canonical messages (user text, assistant tool calls, full tool results, final reply). Nothing is written when the turn fails. The frontend only decides what to *send* (the `<think>`-stripped `clean_reply`).
-- `/status` (`common.format_status`): provider/model, escalation, uptime (since `common` import), registered channels + active scope counts, heartbeat actions with `heartbeat.next_due`, last 5 WARNING+ records from `common.recent_warnings` (ring buffer handler, `bot._setup_logging` installs it on root).
+- `/status` and `/usage` formatting lives in `frontends/status.py` (re-exported through `common`).
+- `/status` (`common.format_status`): provider/model, escalation, uptime (since `frontends.status` import), registered channels + active scope counts, heartbeat actions with `heartbeat.next_due`, last 5 WARNING+ records from `common.recent_warnings` (ring buffer handler, `bot._setup_logging` installs it on root).
 - `/usage` (`common.format_usage`): today (local midnight) and last 30 days from the `usage` table, grouped by provider/model; cost `n/a` when unknown, `(partial)` when some calls unpriced.
 
 ## Network errors
@@ -108,9 +111,9 @@ Removes `<@123>` and `<@!123>` (nickname form) from text before parsing. Necessa
 ## Adding a frontend
 
 1. New module `frontends/<name>.py`. Implement: start/stop coroutines, message handler, scope helper (`<name>_scope(id)` returning `"<name>-<id>"`).
-2. Per turn: take a per-conversation `asyncio.Lock`, `await asyncio.to_thread(Session.load, scope)`, `run_turn(...)` wrapped in `scoped_chat(scope, ...)`; `/new` → `asyncio.to_thread(Session.reset, scope)`. Do **not** cache `Session` objects in a module dict — the `turns` table is the store.
+2. Per turn: take a per-conversation `asyncio.Lock` and call `common.run_text_turn(...)` with the frontend's `send` / `typing` / tool-status reporter; `/new` → `asyncio.to_thread(Session.reset, scope)`. Do **not** cache `Session` objects in a module dict — the `turns` table is the store.
 3. Register a `Channel` subclass with `channels.register(...)` in start (`notify` must raise on non-delivery).
-4. Wire slash commands via `common.TOOL_COMMANDS` and `common.run_*` runners; add the frontend constant to `common.ALL_FRONTENDS` (or per-`CommandSpec` `frontends`).
+4. Wire slash commands via `common.TOOL_COMMANDS` and `common.run_*` runners; add the frontend constant to `ALL_FRONTENDS` in `frontends/commands.py` (or per-`CommandSpec` `frontends`).
 5. Add scope helpers in `common.py` (`<name>_scope`, `parse_<name>_scope`).
 6. Update `bot._async_main` to start/stop conditionally on a token (and the "at least one frontend" check).
 7. Keep the channel `name` equal to the scope prefix so `channels.for_scope`'s `prefix-before-"-"` rule works unchanged.

@@ -51,6 +51,7 @@
 | `heartbeat_interval_seconds` | `int` | `1800` | Clamped to `>=30` in `run()`. |
 | `heartbeat_active_hours` | `tuple[int,int]?` | None | `[start, end]` 24h local; wraparound supported. |
 | `heartbeat_failure_backoff_max_seconds` | `int` | `3600` | Cap for the per-action retry backoff after failed runs/deliveries (`heartbeat.backoff_seconds`). |
+| `heartbeat_action_timeout_seconds` | `int` | `300` | Upper bound on one action's / pipeline's run within a tick (`asyncio.wait_for` in `heartbeat._run_tick_locked`); a timeout is a normal failure (backoff). `0` disables. Model turns run in a thread that cannot be cancelled, so a timed-out turn finishes in the background with its result discarded. |
 | `heartbeat_default_channel` | `str?` | None | Fallback scope (`telegram-<id>` / `discord-<id>`) when an action has no `channel`. `cli` is no longer routable. |
 | `allow_self_modification` | `bool` | `False` | Opt-in gate for `/add-tool` (the only self-modification path). Enable only when the sender allowlists restrict the frontends to the operator; never in the Docker image (no `claude` CLI). |
 | `vault_search_excludes` | `tuple[str, ...]` | `()` | Glob patterns relative to vault. |

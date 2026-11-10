@@ -113,6 +113,7 @@ def forget_user_memory(matcher: str) -> dict[str, Any]:
         "Obsidian-flavoured markdown so you can reason about preferences, facts, "
         "and instructions stored across sessions."
     ),
+    parallel_safe=True,
 )
 def get_user_memory() -> dict[str, Any]:
     md = memory.render_full()

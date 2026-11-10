@@ -2,10 +2,14 @@
 
 ## Registration
 
-`@tool(description=..., args=PydanticModel | None)` decorator (`registry.py:38`):
+`@tool(description=..., args=PydanticModel | None, parallel_safe=False)` decorator (`registry.py`):
 1. `args=None` → `_EMPTY_PARAMETERS` (zero-arg).
 2. Else `_schema_from_model(args)` inlines every `$ref` into the referencing node (`_inline_refs`, so nested pydantic models become self-contained `object` specs — no `$defs`), then recursively (`_clean_spec`) strips `title`, collapses `Optional` `anyOf` to a single non-null type, and drops `default: None` keys.
-3. Stores `Tool(func, schema={"type":"function","function":{"name","description","parameters"}})` in `TOOLS[func.__name__]`.
+3. Stores `Tool(func, schema={"type":"function","function":{"name","description","parameters"}}, args_model, parallel_safe)` in `TOOLS[func.__name__]`.
+
+### `parallel_safe`
+
+Opt-in flag (default `False`, never part of the provider-facing schema). `True` means read-only with no ordering dependence: when every call in one model round is `parallel_safe`, `chat_loop._chat_with_provider` runs them concurrently (see `chat-loop.md`). Marked `True`: `weather`, `train_departures`, `list_emails`, `read_email`, `list_email_labels`, `search_vault`, `read_note`, `search_conversation_history`, `list_wilma_messages`, `read_wilma_message`, `find_wilma_message`, `list_wilma_news`, `read_wilma_news`, `get_user_memory`, `list_heartbeat_actions`, `read_manual`, `roll_die`. Everything else stays `False`: memory/heartbeat mutators, `append_to_inbox`, `add_email_label`, `remove_email_label`, `check_new_mail` (writes `_last_candidates`), `mark_emails_reported`, `escalate_to_big_model`, and all MCP tools. A parallel-safe tool must tolerate running in a `tool-N` worker thread alongside other parallel-safe tools (shared caches such as `_FM_SESSION` are idempotent fills; `wilma.get_client()` is locked).
 
 The function `__name__` is the registry key — also what providers see as the tool name. Don't shadow.
 
@@ -55,7 +59,7 @@ Ollama and litellm consume this directly (litellm normalises to per-backend form
 | `forget_user_memory` | `tools.py:678` | `matcher` | `dict` | → `memory.forget`. Returns `{status: removed/ambiguous/not_found, ...}`. |
 | `get_user_memory` | `tools.py:700` | none | `{markdown: str}` | Full memory file. |
 | `append_to_inbox` | `tools/inbox.py` | `text` | `dict` | Appends `- YYYY-MM-DD HH:MM — text` to `<vault_path>/INBOX.md` (fixed name, no path arg; created if missing; `fcntl.flock` on the append fd). Errors if `vault_path` is not a dir. |
-| `search_conversation_history` | `tools/conversation_history.py` | `query, limit=10` | `dict` | `history.search_messages`: case-insensitive LIKE over user text + assistant replies in the `turns` table (tool calls/results excluded) UNION the legacy `messages` table, newest first; content trimmed to 500 chars. `surface` = scope string, or `"cli"` for legacy bare-timestamp rows (`:44`). |
+| `search_conversation_history` | `tools/conversation_history.py` | `query, limit=10` | `dict` | `history.search_messages`: case-insensitive substring match (FTS5 trigram index `turns_fts`; LIKE scan for queries under 3 chars) over user text + assistant replies from the `turns` table (tool calls/results excluded) and the legacy `messages` table, newest first; content trimmed to 500 chars. `surface` = scope string, or `"cli"` for legacy bare-timestamp rows (`:44`). |
 | `search_vault` | `tools.py:725` | `query, max_results=20, context_lines=1` | `dict` | ripgrep wrapper via `vault_search.search`. |
 | `read_note` | `tools.py:748` | `path` | `dict` | Vault note read via `vault_search.read`. |
 | `escalate_to_big_model` | `tools.py:768` | `query, reason` | `dict` | Calls big model with current session snapshot. Returns `{status, model, reason, reply}`. Disabled if `cfg.escalation_enabled=False`. |
@@ -65,6 +69,7 @@ Ollama and litellm consume this directly (litellm normalises to per-backend form
 Not `@tool`-decorated: `mcp_client._register` writes `registry.Tool(func=<closure>, schema=<mapped>, args_model=None)` directly into `TOOLS` at startup (after `import tools`, so native names win on collision — skipped with a warning).
 - Name `<server>_<remote>` sanitised to `[A-Za-z0-9_-]`, clipped to 64. Description `[<server>] <desc>` (≤1024). `input_schema` passed through minus `$schema`/`title`; `$ref`/`x-mcp-header` etc. untouched.
 - `args_model=None` → no local validation; the server's `is_error` text comes back as `Error: ...`.
+- `parallel_safe` left at `False` (remote side effects unknown), so a round containing any MCP call runs sequentially.
 - Result: `{"source": "mcp:<server>", "untrusted": true, "result": structured_content (unwrapped if just {"result": x}) or joined text}`; image/audio/blob → `[... N bytes omitted]` placeholders. Over 20000 chars (`_RESULT_CHAR_LIMIT`) → clipped JSON/text string ending `…[truncated N chars]`.
 - Timeout (`call_timeout_seconds`) / transport failure → `Error: mcp <server>.<tool> ...` string; failure stored in `status()` `error`.
 - Listed automatically by `read_manual` / `/manual` (iterates `TOOLS`). `/status` shows per-server up/down + tool names.
@@ -93,22 +98,22 @@ Adding a new memory-mutating tool? Update this set, else mid-loop system rebuild
 
 `_chat_with_provider` then serializes via `json.dumps(result, ensure_ascii=False)` into a `ToolResultMessage(call_id, name, content)`; the provider's `_to_wire` turns that into its envelope on the next call. That same `content` string is what `Session.commit` persists to the `turns` table, **uncut** — keep tool outputs bounded (see `gotchas.md#turns-table-growth`).
 
-## Slash command wiring (`frontends/common.py`)
+## Slash command wiring (`frontends/commands.py`, re-exported via `frontends/common.py`)
 
 Each tool that wants a slash command needs:
 1. **Parser**: `parse_<name>_args(args: str) -> dict` (uses `argparse` via `_ArgParser` that raises `ValueError`, or manual parse for free-form).
 2. **Formatter**: `format_<name>_result(result: dict) -> str` — markdown-friendly for Discord; HTML conversion happens automatically for Telegram.
-3. **Registry entry**: `TOOL_COMMANDS["<slash>"] = ("<tool_registry_name>", parser, formatter)` (`frontends/common.py:462`).
-4. **Command spec**: a `CommandSpec` row in `common.COMMANDS` (`frontends/common.py:74`) so `/help`, Telegram's BotFather menu and `canonicalize()` know it.
+3. **Registry entry**: `TOOL_COMMANDS["<slash>"] = ("<tool_registry_name>", parser, formatter)` (`frontends/commands.py:401`).
+4. **Command spec**: a `CommandSpec` row in `common.COMMANDS` (`frontends/commands.py:39`) so `/help`, Telegram's BotFather menu and `canonicalize()` know it.
 
 Currently: `train`, `weather`, `mail`, `search`, `wilma`. Both frontends dispatch via the `canon in common.TOOL_COMMANDS` branch (`frontends/telegram.py:272 _dispatch_command_locked`, `frontends/discord.py:190 _discord_dispatch_command`), running the tool in an executor.
 
 ## Adding a new tool
 
 1. Define pydantic args model (or skip for zero-arg) in a new `tools/<domain>.py`; re-export from `tools/__init__.py` (or let `/add-tool` do both).
-2. Define function decorated with `@tool(description="...", args=Model)`. Keep description model-friendly — it's the prompt that decides when the tool fires. Keep results bounded: they are persisted verbatim in `turns`.
+2. Define function decorated with `@tool(description="...", args=Model)` (add `parallel_safe=True` only if it is read-only and thread-safe). Keep description model-friendly — it's the prompt that decides when the tool fires. Keep results bounded: they are persisted verbatim in `turns`.
 3. If memory-mutating: add name to `_MEMORY_MUTATORS` in `chat_loop.py`.
-4. Optional slash command: add parser + formatter + `TOOL_COMMANDS` entry + `CommandSpec` in `frontends/common.py`; the Telegram bot menu and `/help` derive from `COMMANDS` automatically.
+4. Optional slash command: add parser + formatter + `TOOL_COMMANDS` entry + `CommandSpec` in `frontends/commands.py`; the Telegram bot menu and `/help` derive from `COMMANDS` automatically.
 5. Test: `tests/test_tools_registration.py` already verifies registration.
 6. Test: `tests/test_routing.py` for slash dispatch.
 

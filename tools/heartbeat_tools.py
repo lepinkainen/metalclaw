@@ -173,6 +173,7 @@ class _ListHeartbeatActionsArgs(BaseModel):
         "include_completed=true to also see archived one-shots."
     ),
     args=_ListHeartbeatActionsArgs,
+    parallel_safe=True,
 )
 def list_heartbeat_actions(include_completed: bool = False) -> dict[str, Any]:
     ledger = heartbeat.load_ledger()

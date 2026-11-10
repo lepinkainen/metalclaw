@@ -1,4 +1,5 @@
 import json
+import logging
 import sqlite3
 import threading
 from collections.abc import Sequence
@@ -7,6 +8,12 @@ from pathlib import Path
 
 from config import xdg_data_dir
 from messages import Message, message_from_dict, message_to_dict
+
+log = logging.getLogger(__name__)
+
+# False when this SQLite build lacks FTS5 / the trigram tokenizer (< 3.34):
+# search_messages then falls back to the LIKE scan and nothing is indexed.
+_fts_available = True
 
 
 def _db_path() -> Path:
@@ -17,6 +24,13 @@ def _init(path: Path) -> sqlite3.Connection:
     # check_same_thread=False: tools run in executor threads; all access goes
     # through _LOCK below.
     conn = sqlite3.connect(path, check_same_thread=False)
+    # WAL: readers and one writer proceed concurrently, so a second process
+    # (another bot.py, a script, the sqlite3 CLI) doesn't hit "database is
+    # locked". Persistent in the file; NORMAL is the recommended WAL pairing.
+    mode = conn.execute("PRAGMA journal_mode=WAL").fetchone()[0]
+    if str(mode).lower() != "wal":
+        log.warning("history.db: WAL unavailable (journal_mode=%s) at %s", mode, path)
+    conn.execute("PRAGMA synchronous=NORMAL")
     # Legacy plain-text turn log (pre-``turns``); read by search only, never
     # written any more.
     conn.execute("""
@@ -104,7 +118,54 @@ def _init(path: Path) -> sqlite3.Connection:
         " ON pipeline_runs (pipeline, started_at)"
     )
     conn.commit()
+    _init_fts(conn)
     return conn
+
+
+def _init_fts(conn: sqlite3.Connection) -> None:
+    """Create the ``turns_fts`` search index and backfill it once when empty.
+
+    Trigram tokens keep ``search_messages`` a case-insensitive substring match
+    (Finnish inflections defeat word tokens); queries under 3 characters can't
+    use it and take the LIKE path.
+    """
+    global _fts_available
+    try:
+        conn.execute("""
+            CREATE VIRTUAL TABLE IF NOT EXISTS turns_fts USING fts5(
+                content, session UNINDEXED, ts UNINDEXED, role UNINDEXED,
+                tokenize = 'trigram'
+            )
+        """)
+    except sqlite3.OperationalError as exc:
+        if _fts_available:
+            log.warning("history.db: FTS5 trigram unavailable (%s); search scans", exc)
+        _fts_available = False
+        return
+    if conn.execute("SELECT 1 FROM turns_fts LIMIT 1").fetchone():
+        return
+    try:
+        conn.execute("""
+            INSERT INTO turns_fts (content, session, ts, role)
+            SELECT content, session, ts, role FROM (
+                SELECT session, ts, kind AS role,
+                       CASE kind
+                           WHEN 'user' THEN json_extract(payload, '$.content')
+                           ELSE json_extract(payload, '$.text')
+                       END AS content
+                FROM turns WHERE kind IN ('user', 'assistant') ORDER BY id
+            )
+            WHERE content IS NOT NULL AND content != ''
+        """)
+        conn.execute("""
+            INSERT INTO turns_fts (content, session, ts, role)
+            SELECT content, session, ts, role FROM messages
+            WHERE content != '' ORDER BY id
+        """)
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
 
 
 # One shared connection per db path (tests repoint XDG_DATA_HOME), serialised by a lock.
@@ -193,9 +254,10 @@ def turns_append(session: str, new: Sequence[Message]) -> None:
     if not new:
         return
     ts = _now()
-    rows = [
-        (session, ts, d["kind"], json.dumps(d, ensure_ascii=False))
-        for d in (message_to_dict(m) for m in new)
+    dicts = [message_to_dict(m) for m in new]
+    rows = [(session, ts, d["kind"], json.dumps(d, ensure_ascii=False)) for d in dicts]
+    fts_rows = [
+        (text, session, ts, d["kind"]) for d in dicts if (text := _searchable_text(d))
     ]
     with _LOCK:
         db = _conn()
@@ -204,10 +266,26 @@ def turns_append(session: str, new: Sequence[Message]) -> None:
                 "INSERT INTO turns (session, ts, kind, payload) VALUES (?, ?, ?, ?)",
                 rows,
             )
+            if _fts_available and fts_rows:
+                db.executemany(
+                    "INSERT INTO turns_fts (content, session, ts, role)"
+                    " VALUES (?, ?, ?, ?)",
+                    fts_rows,
+                )
             db.commit()
         except Exception:
             db.rollback()
             raise
+
+
+def _searchable_text(d: dict) -> str:
+    """Indexed text of a ``message_to_dict`` row; tool results aren't searchable."""
+    match d["kind"]:
+        case "user":
+            return d.get("content") or ""
+        case "assistant":
+            return d.get("text") or ""
+    return ""
 
 
 def turns_reset(session: str) -> None:
@@ -238,15 +316,21 @@ def search_messages(query: str, limit: int) -> list[tuple[str, str, str, str]]:
     newest first: ``(ts, session, role, content)``.
 
     Covers the ``turns`` table (tool calls / results excluded) and the legacy
-    ``messages`` table from before it existed.
+    ``messages`` table from before it existed. Uses the ``turns_fts`` trigram
+    index; queries under 3 characters (or no FTS5) scan with LIKE instead.
     """
-    like = query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
-    pattern = f"%{like}%"
     with _LOCK:
-        return (
-            _conn()
-            .execute(
-                """
+        db = _conn()  # initialises _fts_available on first use
+        if _fts_available and len(query) >= 3:
+            phrase = '"' + query.replace('"', '""') + '"'
+            return db.execute(
+                "SELECT ts, session, role, content FROM turns_fts"
+                " WHERE turns_fts MATCH ? ORDER BY ts DESC LIMIT ?",
+                (phrase, limit),
+            ).fetchall()
+        like = query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        return db.execute(
+            """
                 SELECT ts, session, role, content FROM (
                     SELECT ts, session, kind AS role,
                            CASE kind
@@ -260,10 +344,8 @@ def search_messages(query: str, limit: int) -> list[tuple[str, str, str, str]]:
                 WHERE content != '' AND content LIKE ? ESCAPE '\\'
                 ORDER BY ts DESC LIMIT ?
                 """,
-                (pattern, limit),
-            )
-            .fetchall()
-        )
+            (f"%{like}%", limit),
+        ).fetchall()
 
 
 def record_usage(
@@ -601,8 +683,8 @@ def pipeline_runs_latest() -> list[PipelineRunRow]:
             _conn()
             .execute(
                 "SELECT run_id, pipeline, action_id, started_at, finished_at, outcome,"
-                " error, steps FROM pipeline_runs WHERE started_at IN"
-                " (SELECT MAX(started_at) FROM pipeline_runs GROUP BY pipeline)"
+                " error, steps FROM pipeline_runs AS p WHERE started_at ="
+                " (SELECT MAX(started_at) FROM pipeline_runs WHERE pipeline = p.pipeline)"
                 " ORDER BY pipeline"
             )
             .fetchall()

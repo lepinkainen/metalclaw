@@ -11,9 +11,10 @@ tests/
   test_discord.py             _split_for_discord, _strip_bot_mention, _discord_should_respond
   test_escalation.py          chat_via_escalation, escalate_to_big_model tool
   test_event_loop_offload.py  run_turn / run_tick keep flock + SQLite work off the loop thread
-  test_frontends_common.py    parsers, formatters, run_remember/forget/memory
+  test_frontends_common.py    parsers, formatters, run_remember/forget/memory, run_big, run_text_turn
   test_inbox_history_usage.py inbox tool, search_messages over turns + legacy messages rows, usage, /status, Debouncer, Telegram debounce
   test_heartbeat.py           ledger, is_due, run_tick, sentinel, backoff, state rows, prompt clock/cache boundary
+  test_history_db.py          WAL journal mode, turns_fts search (substring, case, quoting, <3-char fallback, no-FTS fallback, backfill, order/limit)
   test_known_chats.py         known_chats rows + legacy json import
   test_live_tool.py           /add-tool: delta validation, gates, approve/reject, __init__ merge, busy slot
   test_logging_setup.py       bot._setup_logging() writes the XDG state log

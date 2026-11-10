@@ -8,7 +8,7 @@
         ┌──────────────┼───────────────┐
         ▼              ▼               ▼
     frontends/      heartbeat.py   mcp_client.py
-    telegram            │
+    telegram            │ ──▶ heartbeat_schedule.py (stdlib-only leaf)
     discord common      │
         │   │           │
         ▼   ▼           ▼
@@ -24,6 +24,7 @@
                    config.py (leaf — only stdlib + pydantic + yaml)
 
     frontends/common ── live_tool.py ── self_change.py (busy slot + git helpers)
+    frontends/common ──▶ frontends/commands, frontends/status, frontends/tool_status
 ```
 
 Rules:
@@ -31,8 +32,10 @@ Rules:
 - `history.py` imports `messages` (for `message_to_dict`/`message_from_dict`) and `config`; never `chat_loop`, `heartbeat` or a frontend.
 - `mcp_client.py` imports only `registry` + `config` at module level; `mcp`/`httpx2` are imported lazily (~0.4 s import).
 - `tools/escalation.py` lazy-imports `chat_loop` + `providers` inside `escalate_to_big_model` (`tools/escalation.py:30`) to avoid the `chat_loop → registry → tools` cycle at module load.
-- `heartbeat.py` lazy-imports `chat_loop` inside `run_tick` (`heartbeat.py:241`) for the same reason.
+- `heartbeat.py` lazy-imports `chat_loop` inside `_run_tick_locked` for the same reason.
+- `heartbeat_schedule.py` (action model, input validation, due logic) imports **only the standard library** — no `config`, `history`, `channels` or `heartbeat`. `heartbeat.py` imports and re-exports it.
 - Frontends know nothing of each other — they coordinate via `channels.py` registry.
+- `frontends/commands.py`, `frontends/status.py` and `frontends/tool_status.py` never import `frontends.common`; `common` imports and re-exports them.
 
 ## Lifecycle
 
