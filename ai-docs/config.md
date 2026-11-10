@@ -30,6 +30,7 @@
 | `provider` | `"ollama"\|"litellm"` | `"ollama"` | Active LLM provider. |
 | `ollama_url` | `str` | `"http://localhost:11434/api/chat"` | `OLLAMA_URL` env. |
 | `model` | `str` | `"gemma4:latest"` | Ollama model. |
+| `ollama_num_ctx` | `int?` | None | Sent as `options.num_ctx`. None = model default (logged once at INFO). WARNING when `prompt_eval_count >= 0.9 * num_ctx` (Ollama truncates silently). |
 | `litellm_model` | `str` | `"bedrock/anthropic.claude-haiku-4-5"` | litellm-prefixed model id. |
 | `aws_region` | `str?` | None | Threaded to litellm as `aws_region_name`. |
 | `aws_profile` | `str?` | None | Threaded to litellm as `aws_profile_name`. |
@@ -37,12 +38,15 @@
 | `show_tool_calls` | `bool` | `True` | Live tool-call status messages (Telegram/Discord). Per-chat `/tools on\|off` overrides in memory (not persisted). |
 | `message_debounce_seconds` | `float` | `1.0` | Telegram/Discord: quiet period before buffered non-command messages become ONE turn. `0` disables. Slash commands never debounced. |
 | `session_idle_reset_seconds` | `int` | `3600` | `Session.load`: a persisted chat whose newest row is older than this gets an automatic `/new` (boundary row) before the turn. `0` disables. |
-| `session_max_messages` | `int` | `40` | `Session.load`: replay at most this many recent live messages, cut at a `user` row so tool rounds stay intact (`history.turns_window`). `0` disables. Either trim sets `Session.history_trimmed` → archived-history note in the system prompt tail. |
+| `session_max_messages` | `int` | `40` | `Session.load`: replay at most this many recent live messages, cut at a `user` row so tool rounds stay intact (`history.turns_window`). `0` disables. Any trim (idle, window, char budget) sets `Session.history_trimmed` → archived-history note in the system prompt tail. |
+| `session_tool_result_replay_chars` | `int` | `2000` | `Session.load`: `ToolResultMessage.content` from earlier turns longer than this is cut + marker (`_elide_tool_results`); list length unchanged, DB rows untouched, does **not** set `history_trimmed`. `0` disables. |
+| `session_max_chars` | `int` | `60000` | `Session.load`, after elision: drop oldest whole turns (cut at `user` rows) until the replay fits (`_trim_to_char_budget`); newest turn always kept. Sets `history_trimmed`. `0` disables. |
 | `max_tool_iterations` | `int` | `25` | Chat loop: max tool-call rounds per turn; then one tool-less call forces a text answer. See `chat-loop.md`. |
 | `max_repeated_tool_calls` | `int` | `3` | Chat loop: identical consecutive tool-call sets at this count are refused with an `Error:` result instead of re-run. |
 | `escalation_enabled` | `bool` | `False` | Gates `escalate_to_big_model` + `/big`. |
 | `escalation_provider` | provider literal | `"litellm"` | |
 | `escalation_model` | `str?` | None | Defaults to per-provider model in `_resolve_and_check`. |
+| `escalation_tool_result_max_chars` | `int` | `2000` | `cap_escalation_provider`: tool results in the pre-escalation history older than the latest tool round are cut to this before reaching the escalation provider. Escalation's own rounds and stored history untouched. `0` disables. |
 | `heartbeat_enabled` | `bool` | `True` | |
 | `heartbeat_interval_seconds` | `int` | `1800` | Clamped to `>=30` in `run()`. |
 | `heartbeat_active_hours` | `tuple[int,int]?` | None | `[start, end]` 24h local; wraparound supported. |

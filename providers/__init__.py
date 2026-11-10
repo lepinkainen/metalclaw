@@ -24,6 +24,7 @@ def get_provider(name: str, *, model_override: str | None = None) -> Provider:
             temperature=cfg.ollama_temperature,
             top_p=cfg.ollama_top_p,
             top_k=cfg.ollama_top_k,
+            num_ctx=cfg.ollama_num_ctx,
         )
     if name == "litellm":
         from providers.litellm_provider import LiteLLMProvider

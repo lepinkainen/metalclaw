@@ -134,6 +134,8 @@ class Config(BaseModel):
     ollama_temperature: float | None = None
     ollama_top_p: float | None = None
     ollama_top_k: int | None = None
+    # Ollama context window (tokens). None keeps the model's own default.
+    ollama_num_ctx: int | None = None
     provider: Provider = "ollama"
     litellm_model: str = "bedrock/anthropic.claude-haiku-4-5"
     aws_region: str | None = None
@@ -142,6 +144,9 @@ class Config(BaseModel):
     escalation_enabled: bool = False
     escalation_provider: Provider = "litellm"
     escalation_model: str | None = None
+    # Older tool results forwarded to an escalation are cut to this many
+    # chars; the latest tool round stays whole. 0 disables.
+    escalation_tool_result_max_chars: int = 2000
     heartbeat_enabled: bool = True
     heartbeat_interval_seconds: int = 1800
     heartbeat_active_hours: tuple[int, int] | None = None
@@ -153,9 +158,13 @@ class Config(BaseModel):
     message_debounce_seconds: float = 1.0
     max_tool_iterations: int = 25
     max_repeated_tool_calls: int = 3
-    # Conversation trimming (see chat_loop.Session.load). 0 disables either.
+    # Conversation trimming (see chat_loop.Session.load). 0 disables each.
     session_idle_reset_seconds: int = 3600
     session_max_messages: int = 40
+    # Replayed tool results from earlier turns are cut to this many chars.
+    session_tool_result_replay_chars: int = 2000
+    # Oldest whole turns are dropped until the replay fits this many chars.
+    session_max_chars: int = 60000
     mcp_servers: tuple[McpServer, ...] = ()
     # Watcher pipelines (ai-docs/mail-pipeline-plan.md): Fastmail labels whose
     # mail the code-first mail check drops before the model sees anything, the

@@ -5,7 +5,7 @@
 ## Entry points
 
 - `chat(messages, on_tool_call=None) -> str` — uses configured provider.
-- `chat_via_escalation(session) -> str` — uses `cfg.escalation_provider` + `cfg.escalation_model`. Excludes `escalate_to_big_model` from tool list to prevent recursion. History is canonical, so the escalation provider gets the full session (tool rounds included) and its turn is committed like any other; no cross-provider special case.
+- `chat_via_escalation(session) -> str` — uses `cfg.escalation_provider` + `cfg.escalation_model`. Excludes `escalate_to_big_model` from tool list to prevent recursion. History is canonical, so the escalation provider gets the session (tool rounds included; older results capped, see below) and its turn is committed like any other; no cross-provider special case.
 
 Both take a `Session` and append the provider-native tool-call/result entries plus the final assistant text to `session.history`.
 
@@ -20,9 +20,9 @@ class Session:                            # chat_loop.py:146
     _persisted: int = 0                   # leading history entries already in the turns table (repr/compare excluded)
 
     @classmethod
-    history_trimmed: bool = False         # set by load when idle-expired or windowed → archived-history note in system prompt
+    history_trimmed: bool = False         # set by load when idle-expired, windowed or char-trimmed → archived-history note in system prompt; snapshot() copies it
     @classmethod
-    def load(cls, scope) -> Session       # idle expiry (turns_last_ts vs session_idle_reset_seconds → turns_reset) then turns_window(scope, session_max_messages); fresh build_system_prompt(format_now(), history_trimmed=…); _persisted=len(history)
+    def load(cls, scope) -> Session       # idle expiry (turns_last_ts vs session_idle_reset_seconds → turns_reset) then turns_window(scope, session_max_messages) → _elide_tool_results(session_tool_result_replay_chars; length-preserving, no flag) → _trim_to_char_budget(session_max_chars; whole turns, newest kept); fresh build_system_prompt(format_now(), history_trimmed=…); _persisted=len(history)
     @staticmethod
     def reset(scope) -> None              # :180 /new → history_db.turns_reset(scope) (boundary row; old rows stay searchable)
     def commit(self, work) -> None        # :185 persist work.history[_persisted:] (if scope) THEN adopt work.system/history
@@ -71,7 +71,7 @@ Loop body:
          if tc.name in _MEMORY_MUTATORS: memory_dirty = True
      work.append_exchange(am, [ToolResultMessage(tc.id, tc.name, result_json) ...])  # validates ids
      if memory_dirty:
-         work.system = build_system_prompt(now)   # rebuild so model sees its own writes
+         work.system = build_system_prompt(now, history_trimmed=session.history_trimmed)   # rebuild so model sees its own writes; keeps the archived-history note (#50)
 ```
 
 `commit` adopts `work.system` too, so a mid-loop rebuilt system prompt is what the next turn starts from (until `_refresh_system_prompt` replaces it).
@@ -123,10 +123,10 @@ Strips `<think>...</think>` blocks (Gemma/QwQ-style). Returns `(thinking, clean)
 ## Escalation
 
 `chat_via_escalation` raises `RuntimeError("escalation is disabled in config")` if `cfg.escalation_enabled` is False. Otherwise:
-1. `big = get_provider(cfg.escalation_provider, model_override=cfg.escalation_model)`.
+1. `big = cap_escalation_provider(get_provider(cfg.escalation_provider, model_override=cfg.escalation_model), len(session.history))`. The `_EscalationProvider` wrapper caps, on every `chat_once`, tool results in the first `prefix_len` messages that precede the latest tool round to `escalation_tool_result_max_chars` (`_cap_escalation_history`); the escalation's own rounds pass through whole and `session.history` is never modified. Logs chars removed once at INFO.
 2. `_chat_with_provider(big, session, exclude_tools={"escalate_to_big_model"})`.
 
-The `escalate_to_big_model` tool itself (in `tools/escalation.py`) does **not** call `chat_via_escalation` — it directly calls `chat_loop._chat_with_provider(big, sub, exclude_tools=...)` on a `snapshot()` of the active session plus the `[escalation: reason] query` user turn. The sub-session is discarded afterwards; the local model gets the answer back as a tool result. Wire-format conversion is the provider's job, so the snapshot is passed as-is whatever `cfg.provider` is.
+The `escalate_to_big_model` tool itself (in `tools/escalation.py`) does **not** call `chat_via_escalation` — it directly calls `chat_loop._chat_with_provider(big, sub, exclude_tools=...)` (with `big` wrapped by `cap_escalation_provider(..., len(sub.history))`) on a `snapshot()` of the active session plus the `[escalation: reason] query` user turn. The sub-session is discarded afterwards; the local model gets the answer back as a tool result. Wire-format conversion is the provider's job, so the snapshot is passed as-is whatever `cfg.provider` is.
 
 ## Tool-result formatting per provider
 

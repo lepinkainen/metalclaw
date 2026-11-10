@@ -61,7 +61,7 @@ def test_fetch_model_defaults_parses_parameters(monkeypatch):
         return SimpleNamespace(
             raise_for_status=lambda: None,
             json=lambda: {
-                "parameters": "temperature                    1\ntop_k                          64\ntop_p                          0.95\n"
+                "parameters": "temperature                    1\ntop_k                          64\ntop_p                          0.95\nnum_ctx                        8192\n"
             },
         )
 
@@ -69,7 +69,7 @@ def test_fetch_model_defaults_parses_parameters(monkeypatch):
 
     monkeypatch.setattr(op._CLIENT, "post", _stub_post)
     out = fetch_model_defaults("http://x/api/chat", "gemma4:e4b")
-    assert out == {"temperature": 1.0, "top_k": 64, "top_p": 0.95}
+    assert out == {"temperature": 1.0, "top_k": 64, "top_p": 0.95, "num_ctx": 8192}
     assert captured["url"] == "http://x/api/show"
     assert captured["json"] == {"name": "gemma4:e4b"}
 
@@ -126,3 +126,37 @@ def test_chat_once_sends_wire_history_after_system(patched_post):
         {"role": "system", "content": "be terse"},
         {"role": "user", "content": "hi"},
     ]
+
+
+def test_num_ctx_passed_in_options(patched_post):
+    p = OllamaProvider(url="http://x/api/chat", model="gemma4:e4b", num_ctx=8192)
+    p.chat_once(history=[UserMessage("hi")], tools=[], system="")
+    assert patched_post["json"]["options"]["num_ctx"] == 8192
+
+
+def test_num_ctx_omitted_when_none(patched_post):
+    p = OllamaProvider(url="http://x/api/chat", model="gemma4:e4b")
+    p.chat_once(history=[UserMessage("hi")], tools=[], system="")
+    assert "num_ctx" not in patched_post["json"].get("options", {})
+
+
+@pytest.mark.parametrize(("prompt_tokens", "warned"), [(950, True), (500, False)])
+def test_warns_when_prompt_nears_num_ctx(monkeypatch, caplog, prompt_tokens, warned):
+    import providers.ollama as op
+
+    monkeypatch.setattr(
+        op._CLIENT,
+        "post",
+        lambda url, json: SimpleNamespace(
+            raise_for_status=lambda: None,
+            json=lambda: {
+                "message": {"content": "ok"},
+                "prompt_eval_count": prompt_tokens,
+            },
+        ),
+    )
+    p = OllamaProvider(url="http://x/api/chat", model="gemma4:e4b", num_ctx=1000)
+    with caplog.at_level("WARNING", logger="providers.ollama"):
+        p.chat_once(history=[UserMessage("hi")], tools=[], system="")
+    hits = [r for r in caplog.records if "num_ctx" in r.getMessage()]
+    assert len(hits) == (1 if warned else 0)

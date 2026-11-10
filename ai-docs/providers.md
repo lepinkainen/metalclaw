@@ -71,7 +71,7 @@ get_provider(name, *, model_override=None) -> Provider
 
 Two branches:
 
-- `"ollama"` → `OllamaProvider(url=cfg.ollama_url, model=model_override or cfg.model)`.
+- `"ollama"` → `OllamaProvider(url=cfg.ollama_url, model=model_override or cfg.model, temperature/top_p/top_k=cfg.ollama_*, num_ctx=cfg.ollama_num_ctx)`.
 - `"litellm"` → `LiteLLMProvider(model=model_override or cfg.litellm_model, aws_region=cfg.aws_region, aws_profile=cfg.aws_profile, prompt_caching=cfg.litellm_prompt_caching)`.
 
 Raises `ValueError` on unknown name.
@@ -82,6 +82,7 @@ Raises `ValueError` on unknown name.
 - httpx client: module-level `_CLIENT = httpx.Client(timeout=120.0)`.
 - Request: `{"model", "messages": [system?, *_to_wire(history)], "tools": tools or None, "stream": False}`.
 - `_to_wire`: `UserMessage` → `{"role":"user","content"}`; `AssistantMessage` → `{"role":"assistant","content": text, "tool_calls": [{"function": {"name", "arguments": dict}}]?}` (no ids: Ollama does not echo them); `ToolResultMessage` → `{"role":"tool", "name", "content"}`.
+- `options`: `temperature`/`top_p`/`top_k`/`num_ctx`, each only when not None. Without `num_ctx` Ollama uses the model's default window and **silently drops the oldest tokens** of a longer prompt; `_warn_if_near_num_ctx` logs a WARNING (→ `/status`) when `prompt_eval_count >= 0.9 * num_ctx`. Unset `num_ctx` is logged once per process at INFO. `fetch_model_defaults` also parses `num_ctx` from `/api/show`.
 - Response: `response.json()["message"]`. If tool-call `arguments` arrives as a JSON string (some Ollama builds), `json.loads` it. Missing tool-call ids get `ollama-<uuid12>` so results can be paired.
 
 ## LiteLLMProvider (`providers/litellm_provider.py`)

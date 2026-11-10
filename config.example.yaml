@@ -68,6 +68,11 @@ model: gemma4:latest
 ollama_temperature: 0.2
 ollama_top_p: 0.9
 ollama_top_k: 40
+# Context window in tokens. Unset = the model's own (small) default, and Ollama
+# silently drops the oldest tokens once a prompt outgrows it. A larger window
+# costs more VRAM; 16384 is a reasonable start. A WARNING is logged (and shown
+# in /status) when a prompt reaches 90% of it.
+# ollama_num_ctx: 16384
 
 # --- litellm (cloud, multi-provider) ---
 # Used when provider == litellm or as the escalation target. Model strings
@@ -101,6 +106,10 @@ litellm_prompt_caching: true
 escalation_enabled: false
 escalation_provider: litellm
 escalation_model: bedrock/anthropic.claude-opus-4-7
+# Tool results older than the latest tool round are cut to this many chars
+# before being forwarded to the escalation model (stored history is never
+# changed). 0 forwards everything.
+escalation_tool_result_max_chars: 2000
 
 # Heartbeat — proactive scheduled checks driven by tool calls. Actions are
 # stored in <vault_path>/<memory_subdir>/heartbeat.yaml and managed by the
@@ -172,9 +181,15 @@ max_repeated_tool_calls: 3
 # session_max_messages recent messages are sent (cut at a user message so tool
 # calls stay paired with their results). Older turns are never deleted and stay
 # reachable through the search_conversation_history tool; the model is told
-# when history was trimmed. 0 disables either rule.
+# when history was trimmed. session_max_chars additionally drops the oldest
+# whole turns until the replay fits that many characters (the newest turn is
+# always kept). Tool results from earlier turns are replayed cut to
+# session_tool_result_replay_chars (stored rows stay complete; the model can
+# call the tool again). 0 disables each rule.
 session_idle_reset_seconds: 3600
 session_max_messages: 40
+session_max_chars: 60000
+session_tool_result_replay_chars: 2000
 
 # Glob patterns (relative to vault_path) excluded from /search and the
 # search_vault tool. Defaults to empty — full vault is searched. ripgrep

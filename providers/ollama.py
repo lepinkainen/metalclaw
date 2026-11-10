@@ -21,6 +21,10 @@ log = logging.getLogger(__name__)
 
 _CLIENT = httpx.Client(timeout=120.0)
 
+# Share of num_ctx above which a prompt is reported as being truncated.
+_NUM_CTX_WARN_RATIO = 0.9
+_num_ctx_unset_logged = False
+
 
 class OllamaProvider:
     name = "ollama"
@@ -32,12 +36,27 @@ class OllamaProvider:
         temperature: float | None = None,
         top_p: float | None = None,
         top_k: int | None = None,
+        num_ctx: int | None = None,
     ) -> None:
         self.url = url
         self.model = model
         self.temperature = temperature
         self.top_p = top_p
         self.top_k = top_k
+        self.num_ctx = num_ctx
+
+    def _warn_if_near_num_ctx(self, prompt_tokens: object) -> None:
+        # Ollama drops the oldest tokens without an error once the prompt
+        # outgrows num_ctx; a WARNING here is the only visible trace (/status).
+        if self.num_ctx is None or not isinstance(prompt_tokens, int):
+            return
+        if prompt_tokens >= _NUM_CTX_WARN_RATIO * self.num_ctx:
+            log.warning(
+                "ollama: prompt used %d of num_ctx=%d tokens; "
+                "older context is being truncated",
+                prompt_tokens,
+                self.num_ctx,
+            )
 
     @staticmethod
     def _to_wire(history: Sequence[Message]) -> list[dict[str, Any]]:
@@ -86,6 +105,10 @@ class OllamaProvider:
             options["top_p"] = self.top_p
         if self.top_k is not None:
             options["top_k"] = self.top_k
+        if self.num_ctx is not None:
+            options["num_ctx"] = self.num_ctx
+        else:
+            _log_num_ctx_unset_once()
         if options:
             payload["options"] = options
 
@@ -119,6 +142,7 @@ class OllamaProvider:
             body.get("eval_count"),
         )
         log.debug("ollama raw response: %.500s", body)
+        self._warn_if_near_num_ctx(body.get("prompt_eval_count"))
 
         tool_calls: list[ToolCall] = []
         for tc in msg.get("tool_calls") or []:
@@ -150,10 +174,18 @@ class OllamaProvider:
         )
 
 
+def _log_num_ctx_unset_once() -> None:
+    global _num_ctx_unset_logged
+    if not _num_ctx_unset_logged:
+        _num_ctx_unset_logged = True
+        log.info("ollama: ollama_num_ctx is unset; Ollama's default context applies")
+
+
 def fetch_model_defaults(chat_url: str, model: str) -> dict[str, Any]:
     """Query Ollama /api/show and parse PARAMETER lines from the modelfile.
 
-    Returns a dict possibly containing keys "temperature", "top_p", "top_k".
+    Returns a dict possibly containing keys "temperature", "top_p", "top_k",
+    "num_ctx".
     On any error, returns {}.
     """
     show_url = chat_url.replace("/api/chat", "/api/show")
@@ -177,7 +209,7 @@ def fetch_model_defaults(chat_url: str, model: str) -> dict[str, Any]:
                 out[key] = float(val)
             except ValueError:
                 pass
-        elif key == "top_k":
+        elif key in ("top_k", "num_ctx"):
             try:
                 out[key] = int(val)
             except ValueError:

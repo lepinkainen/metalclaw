@@ -5,6 +5,7 @@ and by tests directly.
 """
 
 import asyncio
+import dataclasses
 import json
 import logging
 import re
@@ -45,6 +46,7 @@ __all__ = [
     "_run_tool",
     "_split_thinking",
     "build_system_prompt",
+    "cap_escalation_provider",
     "chat",
     "chat_via_escalation",
     "current_scope",
@@ -153,6 +155,133 @@ def build_system_prompt(now: str, *, history_trimmed: bool = False) -> str:
     return base + SYSTEM_CACHE_BOUNDARY + tail
 
 
+def _shorten_result(
+    m: ToolResultMessage, max_chars: int, why: str
+) -> ToolResultMessage:
+    cut = len(m.content) - max_chars
+    return dataclasses.replace(
+        m,
+        content=m.content[:max_chars]
+        + f"\n…[truncated {cut} chars {why}; call {m.name} again if you need "
+        "the full result]",
+    )
+
+
+def _elide_tool_results(
+    msgs: list[Message], max_chars: int
+) -> tuple[list[Message], int]:
+    """Shorten ToolResultMessage.content longer than max_chars. Returns (messages, chars_removed).
+
+    The list length never changes: ``Session._persisted`` counts these
+    messages and ``commit`` slices by it.
+    """
+    if max_chars <= 0:
+        return msgs, 0
+    out: list[Message] = []
+    removed = 0
+    for m in msgs:
+        if isinstance(m, ToolResultMessage) and len(m.content) > max_chars:
+            removed += len(m.content) - max_chars
+            m = _shorten_result(m, max_chars, "from an earlier turn")
+        out.append(m)
+    return out, removed
+
+
+def _message_chars(m: Message) -> int:
+    if isinstance(m, AssistantMessage):
+        return len(m.text) + sum(len(json.dumps(tc.arguments)) for tc in m.tool_calls)
+    return len(m.content)
+
+
+def _trim_to_char_budget(
+    msgs: list[Message], max_chars: int
+) -> tuple[list[Message], int]:
+    """Drop the oldest whole turns until the rest fits. Returns (kept, dropped_count).
+
+    Cuts only where a ``UserMessage`` starts a turn, so a tool call is never
+    separated from its results. The newest turn is always kept.
+    """
+    if max_chars <= 0 or sum(_message_chars(m) for m in msgs) <= max_chars:
+        return msgs, 0
+    starts = [i for i, m in enumerate(msgs) if isinstance(m, UserMessage)]
+    if not starts or starts[0] != 0:
+        starts.insert(0, 0)  # leading non-user messages form one turn
+    keep_from = starts[-1]
+    total = sum(_message_chars(m) for m in msgs[keep_from:])
+    for start, end in zip(reversed(starts[:-1]), reversed(starts[1:]), strict=True):
+        size = sum(_message_chars(m) for m in msgs[start:end])
+        if total + size > max_chars:
+            break
+        total += size
+        keep_from = start
+    return msgs[keep_from:], keep_from
+
+
+def _cap_escalation_history(
+    msgs: Sequence[Message], max_chars: int
+) -> tuple[list[Message], int]:
+    """Cut tool results older than the latest tool round. Returns (messages, chars_removed)."""
+    if max_chars <= 0:
+        return list(msgs), 0
+    last_round = max(
+        (
+            i
+            for i, m in enumerate(msgs)
+            if isinstance(m, AssistantMessage) and m.tool_calls
+        ),
+        default=len(msgs),
+    )
+    out: list[Message] = []
+    removed = 0
+    for i, m in enumerate(msgs):
+        if (
+            i < last_round
+            and isinstance(m, ToolResultMessage)
+            and len(m.content) > max_chars
+        ):
+            removed += len(m.content) - max_chars
+            m = _shorten_result(m, max_chars, "before this escalation")
+        out.append(m)
+    return out, removed
+
+
+class _EscalationProvider:
+    """Wraps the escalation provider so older tool results reach it capped.
+
+    Only the first ``prefix_len`` messages (the conversation as it stood when
+    the escalation began) are capped; the escalation's own tool rounds pass
+    through whole. Session history itself is never touched.
+    """
+
+    def __init__(self, inner: Provider, prefix_len: int, max_chars: int) -> None:
+        self.inner = inner
+        self.name = getattr(inner, "name", type(inner).__name__)
+        self.model = getattr(inner, "model", None)
+        self.prefix_len = prefix_len
+        self.max_chars = max_chars
+        self._logged = False
+
+    def chat_once(
+        self, history: Sequence[Message], tools: list[dict], system: str
+    ) -> AssistantMessage:
+        head, removed = _cap_escalation_history(
+            history[: self.prefix_len], self.max_chars
+        )
+        if removed and not self._logged:
+            self._logged = True
+            log.info(
+                "escalation: capped older tool results, %d chars not sent", removed
+            )
+        return self.inner.chat_once([*head, *history[self.prefix_len :]], tools, system)
+
+
+def cap_escalation_provider(big: Provider, prefix_len: int) -> Provider:
+    """Wrap ``big`` so tool results in the first ``prefix_len`` messages reach it capped."""
+    return _EscalationProvider(
+        big, prefix_len, get_config().escalation_tool_result_max_chars
+    )
+
+
 @dataclass
 class Session:
     """One conversation: the system prompt plus canonical message history.
@@ -170,9 +299,13 @@ class Session:
 
     Because nothing else ever shortens a persisted conversation, ``load``
     trims: a chat idle for ``session_idle_reset_seconds`` restarts from a new
-    boundary, and at most ``session_max_messages`` recent messages are
-    replayed. Either case sets ``history_trimmed`` so the system prompt tells
-    the model to search history rather than guess.
+    boundary, at most ``session_max_messages`` recent messages are replayed,
+    and the oldest whole turns are dropped until the replay fits
+    ``session_max_chars``. Each of these sets ``history_trimmed`` so the
+    system prompt tells the model to search history rather than guess. Tool
+    results from earlier turns are also cut to
+    ``session_tool_result_replay_chars`` (stored rows stay complete); that
+    alone does not set the flag.
     """
 
     system: str = ""
@@ -203,6 +336,21 @@ class Session:
                 scope,
                 skipped,
                 len(msgs),
+            )
+            trimmed = True
+        msgs, elided = _elide_tool_results(msgs, cfg.session_tool_result_replay_chars)
+        if elided:
+            log.debug(
+                "session tool results elided scope=%s chars_removed=%d", scope, elided
+            )
+        msgs, dropped = _trim_to_char_budget(msgs, cfg.session_max_chars)
+        if dropped:
+            log.info(
+                "session char-trimmed scope=%s dropped=%d kept=%d budget=%d",
+                scope,
+                dropped,
+                len(msgs),
+                cfg.session_max_chars,
             )
             trimmed = True
         log.debug(
@@ -246,7 +394,11 @@ class Session:
 
     def snapshot(self) -> Session:
         """Point-in-time copy for tools; entries are frozen so they are shared."""
-        return Session(system=self.system, history=list(self.history))
+        return Session(
+            system=self.system,
+            history=list(self.history),
+            history_trimmed=self.history_trimmed,
+        )
 
 
 def new_session() -> Session:
@@ -519,7 +671,9 @@ def _chat_with_provider(
 
             if memory_dirty:
                 now = format_now()
-                work.system = build_system_prompt(now)
+                work.system = build_system_prompt(
+                    now, history_trimmed=session.history_trimmed
+                )
                 log.info(
                     "system prompt rebuilt mid-loop after memory/heartbeat mutator (%d chars)",
                     len(work.system),
@@ -552,13 +706,18 @@ def chat_via_escalation(
 ) -> str:
     """Run a chat turn through the escalation provider, no recursion into itself.
 
-    The escalation provider sees the full canonical history, tool rounds
-    included, and its own turn is committed to ``session`` like any other.
+    The escalation provider sees the canonical history, tool rounds included
+    (results older than the latest round are capped, see
+    ``cap_escalation_provider``), and its own turn is committed to ``session``
+    like any other.
     """
     cfg = get_config()
     if not cfg.escalation_enabled:
         raise RuntimeError("escalation is disabled in config")
-    big = get_provider(cfg.escalation_provider, model_override=cfg.escalation_model)
+    big = cap_escalation_provider(
+        get_provider(cfg.escalation_provider, model_override=cfg.escalation_model),
+        len(session.history),
+    )
     log.info(
         "escalation start provider=%s model=%s messages=%d",
         cfg.escalation_provider,

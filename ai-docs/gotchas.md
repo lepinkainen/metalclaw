@@ -101,6 +101,10 @@ Never call `asyncio.create_task(heartbeat.run_tick())` directly — use `heartbe
 
 Sessions survive a provider switch *and* a restart: history is `messages.Message` values, each provider serialises them itself, and the `turns` table stores the same canonical shape (`message_to_dict`). One caveat: Ollama-era tool-call ids look like `ollama-<hex>`; the OpenAI envelope accepts any string, so this is fine, but don't assume ids follow a provider's own format. Changing a `messages.py` dataclass means old `payload` JSON must still parse in `message_from_dict` (defaults for new fields; never rename `kind` tags).
 
+## Ollama truncates silently
+
+Without `ollama_num_ctx`, Ollama uses the model's default context window and drops the oldest prompt tokens with no error: the model loses its system prompt or early history. Set `ollama_num_ctx`; the provider warns at 90% use. Replay is also bounded by `session_max_chars` and `session_tool_result_replay_chars` (`Session.load`). Those two must keep `len(history) == _persisted` consistent: elision is length-preserving, the char trim runs before `_persisted=len(msgs)`.
+
 ## MCP tools are dynamic
 
 `mcp_client` registers into `registry.TOOLS` at startup (after `import tools`) and pops its keys on `stop()`. Tests using it must `mcp_client.stop()` in teardown. A native tool with the same `<server>_<tool>` name wins (MCP entry skipped). MCP tool funcs block their calling thread up to `call_timeout_seconds`; never call `client.call_tool` directly — the SDK `Client` lives on the `mcp` thread's loop. `mcp.Client` must be entered/exited in one task (anyio cancel scopes) → one owner task per server, stopped via its `stop` Event.

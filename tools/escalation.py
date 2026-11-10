@@ -45,7 +45,12 @@ def escalate_to_big_model(query: str, reason: str) -> dict[str, Any]:
         sub = snapshot.snapshot()
         sub.append_user(f"[escalation: {reason}] {query}")
 
-    big = get_provider(cfg.escalation_provider, model_override=cfg.escalation_model)
+    # Older tool results are capped on the way out; the latest round (the
+    # one that likely prompted the escalation) is forwarded whole.
+    big = chat_loop.cap_escalation_provider(
+        get_provider(cfg.escalation_provider, model_override=cfg.escalation_model),
+        len(sub.history),
+    )
     log.info(
         "escalate_to_big_model -> %s:%s (snapshot=%s, %d messages)",
         cfg.escalation_provider,

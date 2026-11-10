@@ -285,3 +285,17 @@ def test_allowed_users_reject_bad_values(tmp_path, cfg_file, write_config, field
 def test_allow_self_modification_defaults_false(tmp_path, cfg_file, write_config):
     write_config(cfg_file, vault_path=str(tmp_path / "vault"))
     assert config.get_config().allow_self_modification is False
+
+
+def test_context_budget_defaults(tmp_path, cfg_file, write_config):
+    write_config(cfg_file, vault_path=str(tmp_path / "vault"))
+    cfg = config.get_config()
+    assert cfg.ollama_num_ctx is None
+    assert cfg.session_tool_result_replay_chars == 2000
+    assert cfg.session_max_chars == 60000
+    assert cfg.escalation_tool_result_max_chars == 2000
+
+
+def test_ollama_num_ctx_accepts_int(tmp_path, cfg_file, write_config):
+    write_config(cfg_file, vault_path=str(tmp_path / "vault"), ollama_num_ctx=16384)
+    assert config.get_config().ollama_num_ctx == 16384
