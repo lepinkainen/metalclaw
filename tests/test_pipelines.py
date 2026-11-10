@@ -58,6 +58,21 @@ def test_pipeline_run_record_and_latest():
     assert [r[0] for r in history.pipeline_runs_recent("mail")] == ["r2", "r1"]
 
 
+def test_pipeline_runs_latest_is_per_pipeline():
+    # b's only run shares a's older timestamp; a's old run must not leak in.
+    t1, t2 = "2026-01-01T00:00:00+00:00", "2026-01-02T00:00:00+00:00"
+    for run_id, pipeline, started in (
+        ("a1", "a", t1),
+        ("a2", "a", t2),
+        ("b1", "b", t1),
+    ):
+        history.pipeline_run_record(
+            run_id, pipeline, "p", started, started, "suppressed", None, []
+        )
+    latest = history.pipeline_runs_latest()
+    assert [(r[1], r[3]) for r in latest] == [("a", t2), ("b", t1)]
+
+
 # --- tools.mail: legacy ledger migration, head fetch, label filter ---
 
 

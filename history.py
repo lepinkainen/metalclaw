@@ -601,8 +601,8 @@ def pipeline_runs_latest() -> list[PipelineRunRow]:
             _conn()
             .execute(
                 "SELECT run_id, pipeline, action_id, started_at, finished_at, outcome,"
-                " error, steps FROM pipeline_runs WHERE started_at IN"
-                " (SELECT MAX(started_at) FROM pipeline_runs GROUP BY pipeline)"
+                " error, steps FROM pipeline_runs AS p WHERE started_at ="
+                " (SELECT MAX(started_at) FROM pipeline_runs WHERE pipeline = p.pipeline)"
                 " ORDER BY pipeline"
             )
             .fetchall()
